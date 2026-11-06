@@ -1,0 +1,50 @@
+/* CodeMirror 浅色主题：与控制台浅色风格一致，语法着色参考常用编辑器配色 */
+.cm-s-default.CodeMirror,
+.CodeMirror {
+  font-family: Consolas, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #24292f;
+  background: #ffffff;
+}
+.CodeMirror { height: 100%; }
+.CodeMirror-gutters { background: #f7f9fd; border-right: 1px solid #e2e8f1; }
+.CodeMirror-linenumber { color: #9aa7b8; padding: 0 10px 0 8px; }
+.CodeMirror-lines { padding: 10px 0; }
+.CodeMirror pre.CodeMirror-line,
+.CodeMirror pre.CodeMirror-line-like { padding: 0 12px; }
+.CodeMirror-cursor { border-left: 2px solid #2563eb; }
+.CodeMirror-selected { background: #dbeafe !important; }
+.CodeMirror-focused .CodeMirror-selected { background: #cfe0ff !important; }
+.CodeMirror-activeline-background { background: #f4f8ff; }
+.CodeMirror-matchingbracket { color: #1d4ed8 !important; border-bottom: 1px solid #2563eb; }
+.CodeMirror-foldmarker { color: #2563eb; text-shadow: none; }
+.CodeMirror-dialog { background: #fff; border-bottom: 1px solid #e2e8f1; padding: 8px 12px; }
+.CodeMirror-dialog input { border: 1px solid #cbd5e6; border-radius: 6px; padding: 4px 8px; outline: none; }
+.CodeMirror-dialog input:focus { border-color: #2563eb; }
+
+/* 语法 token */
+.cm-s-default .cm-keyword { color: #a626a4; }
+.cm-s-default .cm-atom { color: #986801; }
+.cm-s-default .cm-number { color: #986801; }
+.cm-s-default .cm-def { color: #4078f2; }
+.cm-s-default .cm-variable { color: #e45649; }
+.cm-s-default .cm-variable-2 { color: #0184bc; }
+.cm-s-default .cm-variable-3, .cm-s-default .cm-type { color: #c18401; }
+.cm-s-default .cm-property { color: #4078f2; }
+.cm-s-default .cm-operator { color: #0184bc; }
+.cm-s-default .cm-comment { color: #98a0ad; font-style: italic; }
+.cm-s-default .cm-string, .cm-s-default .cm-string-2 { color: #50a14f; }
+.cm-s-default .cm-meta { color: #4078f2; }
+.cm-s-default .cm-qualifier { color: #c18401; }
+.cm-s-default .cm-builtin { color: #c18401; }
+.cm-s-default .cm-bracket { color: #52606d; }
+.cm-s-default .cm-tag { color: #e45649; }
+.cm-s-default .cm-attribute { color: #986801; }
+.cm-s-default .cm-header { color: #1d4ed8; font-weight: 600; }
+.cm-s-default .cm-quote { color: #50a14f; }
+.cm-s-default .cm-hr { color: #98a0ad; }
+.cm-s-default .cm-link { color: #2563eb; text-decoration: underline; }
+.cm-s-default .cm-error { color: #dc2626; background: #fef2f2; }
+.cm-s-default .cm-special { color: #a626a4; }
+.CodeMirror .cm-search-match { background: #fff3bf; outline: 1px solid #f0c36d; }

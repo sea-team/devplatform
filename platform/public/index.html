@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DevPlatform · 统一 Web 开发管理平台</title>
+  <link rel="stylesheet" href="/style.css?v=20261106b" />
+  <link rel="stylesheet" href="/vendor/xterm.min.css" />
+  <link rel="stylesheet" href="/vendor/codemirror.css" />
+  <link rel="stylesheet" href="/cm-theme.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">DP</div>
+        <div>
+          <div class="brand-name">DevPlatform</div>
+          <div class="brand-sub">统一开发管理平台</div>
+        </div>
+      </div>
+      <nav class="nav" id="nav">
+        <button class="nav-item active" data-view="overview"><span class="ico">◈</span>总览</button>
+        <button class="nav-item" data-view="repos"><span class="ico">⑂</span>Git 仓库</button>
+        <button class="nav-item" data-view="ide"><span class="ico">⌘</span>在线 IDE</button>
+        <button class="nav-item" data-view="storage"><span class="ico">▤</span>存储 / 文件</button>
+        <button class="nav-item" data-view="builds"><span class="ico">⚙</span>构建 · 部署</button>
+        <button class="nav-item" data-view="servers"><span class="ico">▣</span>服务器</button>
+        <button class="nav-item" data-view="ai"><span class="ico">✦</span>AI 服务配置</button>
+        <button class="nav-item" data-view="ops"><span class="ico">◎</span>AI 运维</button>
+      </nav>
+      <div class="sidebar-foot">
+        <span class="dot" id="health-dot"></span>
+        <span id="health-text">连接中…</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- 标签本身即标题，不再重复占用顶部一行；模块说明放在标签悬停浮层 / ⓘ 中 -->
+      <div class="tabbar-wrap">
+        <button class="tab-scroll" id="tab-scroll-prev" aria-label="向左滚动标签" hidden>‹</button>
+        <div class="tabbar" id="tabbar"></div>
+        <button class="tab-scroll" id="tab-scroll-next" aria-label="向右滚动标签" hidden>›</button>
+        <div class="tabbar-tools">
+          <span class="pill live pill-mini" id="demo-pill">正常模式</span>
+          <button class="tab-tool" id="tab-info" title="当前标签说明" aria-label="查看当前标签说明">ⓘ</button>
+          <button class="tab-tool" id="refresh-btn" title="刷新当前页" aria-label="刷新当前页">⟳</button>
+          <button class="tab-tool" id="tab-new" title="新建文件管理器 / 终端">＋</button>
+          <button class="tab-tool" id="tab-menu-btn" title="标签页操作">⋯</button>
+        </div>
+        <div class="tab-menu" id="tab-menu" hidden>
+          <button data-tab-menu="close-others">关闭其他标签</button>
+          <button data-tab-menu="close-all">关闭所有可关闭标签</button>
+          <button data-tab-menu="open-modules">打开全部模块页</button>
+          <button data-tab-menu="refresh">刷新当前页</button>
+        </div>
+        <div class="tab-tip" id="tab-tip" hidden></div>
+      </div>
+
+      <div class="content" id="content">
+        <!-- 总览 -->
+        <section class="page" id="view-overview">
+          <div class="stat-grid" id="stat-grid"></div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2>集成服务</h2><span class="muted">各组件连通性</span></div>
+              <div id="service-list" class="list"></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>平台架构</h2><span class="muted">一期落地范围</span></div>
+              <div class="arch">
+                <div class="arch-row"><b>Git</b><span>Gitea API · 仓库创建 / 克隆 / 分支</span></div>
+                <div class="arch-row"><b>IDE</b><span>code-server · 按项目目录打开工作区</span></div>
+                <div class="arch-row"><b>存储</b><span>OpenList API + WebDAV · 多存储挂载与文件管理</span></div>
+                <div class="arch-row"><b>构建</b><span>前端 / Go / Rust / PHP / Python · 本地或容器执行</span></div>
+                <div class="arch-row"><b>部署</b><span>SSH + SFTP · 产物打包上传与远端命令</span></div>
+                <div class="arch-row"><b>AI</b><span>API 网关 + 宿主机/WSL 本地程序 · 代理配置 · 只读运维 Agent</span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 仓库 -->
+        <section class="page" id="view-repos">
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2>新建仓库</h2><span class="muted">创建后自动初始化</span></div>
+              <form id="repo-form" class="form">
+                <label>仓库名称<input name="name" placeholder="my-project" required /></label>
+                <label>描述<input name="description" placeholder="项目简介" /></label>
+                <label class="check"><input type="checkbox" name="private" /> 设为私有仓库</label>
+                <div class="form-actions"><button class="btn btn-primary btn-block" type="submit">创建仓库</button></div>
+              </form>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>克隆到工作区</h2><span class="muted">克隆后可直接用在线 IDE 打开</span></div>
+              <form id="clone-form" class="form">
+                <label>仓库地址<input name="cloneUrl" placeholder="http://localhost:3000/admin/my-project.git" required /></label>
+                <label>本地目录名（可选）<input name="name" placeholder="留空则用仓库名" /></label>
+                <div class="form-actions"><button class="btn btn-block" type="submit">克隆到工作区</button></div>
+              </form>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>仓库列表</h2><button class="btn btn-ghost btn-sm" data-reload="repos">刷新</button></div>
+            <div id="repo-list" class="table-wrap"></div>
+          </div>
+        </section>
+
+        <!-- IDE -->
+        <section class="page" id="view-ide">
+          <div class="card">
+            <div class="card-head"><h2>在线 VSCode</h2><span class="muted">code-server，工作区与构建流水线共享同一目录</span></div>
+            <div class="form">
+              <label>项目目录（相对工作区）<input id="ide-path" placeholder="my-project" /></label>
+              <div class="row">
+                <button class="btn btn-primary" id="ide-open">打开 IDE</button>
+                <a class="btn" id="ide-home" href="#" target="_blank" rel="noopener">打开 IDE 首页</a>
+              </div>
+              <div class="hint" id="ide-url"></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>嵌入式预览</h2><span class="muted">如被浏览器拦截，请用上方按钮新窗口打开</span></div>
+            <iframe id="ide-frame" class="ide-frame" title="code-server"></iframe>
+          </div>
+        </section>
+
+        <!-- 存储 -->
+        <section class="page" id="view-storage">
+          <div class="card">
+            <div class="card-head"><h2>文件浏览</h2><span class="muted" id="storage-provider"></span></div>
+            <form id="storage-path-form" class="row">
+              <input id="storage-path" value="/" placeholder="/" />
+              <button class="btn" type="submit">浏览</button>
+              <button class="btn btn-ghost" type="button" id="storage-up">上一级</button>
+            </form>
+            <div id="file-list" class="table-wrap"></div>
+            <div class="row gap">
+              <form id="mkdir-form" class="row">
+                <input name="name" placeholder="新目录名" required />
+                <button class="btn btn-sm" type="submit">新建目录</button>
+              </form>
+              <label class="file-btn">上传文件<input type="file" id="upload-input" /></label>
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2>已挂载存储</h2><span class="muted">来自 OpenList</span></div>
+              <div id="mount-list" class="list"></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>WebDAV</h2><span class="muted">可直接挂载到本机 / rclone</span></div>
+              <div class="hint" id="webdav-url">-</div>
+              <p class="muted small">rclone 配置示例：<code>rclone config → webdav → url: http://localhost:5244/dav/</code></p>
+            </div>
+          </div>
+        </section>
+
+        <!-- 构建部署 -->
+        <section class="page" id="view-builds">
+          <div class="card">
+            <div class="card-head"><h2>启动构建</h2><span class="muted" id="executor-label"></span></div>
+            <form id="build-form" class="form">
+              <div class="grid-2">
+                <label>项目目录（相对工作区）<input name="repoPath" placeholder="my-project" required /></label>
+                <label>构建类型<select name="profile" id="profile-select"></select></label>
+              </div>
+              <label class="check"><input type="checkbox" name="runTests" checked /> 构建后运行测试</label>
+              <label class="check"><input type="checkbox" name="autoDeploy" id="auto-deploy" /> 构建成功后自动部署</label>
+              <div class="grid-3" id="deploy-fields" hidden>
+                <label>目标服务器<select name="serverId" id="deploy-server"></select></label>
+                <label>部署目录<input name="targetDir" placeholder="留空则使用服务器默认目录 /data/platform" /></label>
+                <label>部署后命令（可选）<input name="command" placeholder="systemctl restart myapp" /></label>
+              </div>
+              <button class="btn btn-primary" type="submit">开始构建</button>
+            </form>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2>构建记录</h2><button class="btn btn-ghost btn-sm" data-reload="builds">刷新</button></div>
+              <div id="build-list" class="list"></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>构建日志</h2><span class="muted" id="log-target">选择一条构建记录</span></div>
+              <pre class="log" id="build-log">—</pre>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>部署记录</h2></div>
+            <div id="deploy-list" class="table-wrap"></div>
+          </div>
+        </section>
+
+        <!-- 服务器 -->
+        <section class="page" id="view-servers">
+          <div class="card">
+            <div class="card-head"><h2>添加服务器</h2><span class="muted">通过 SSH 连接，凭据保存在本机 data/state.json</span></div>
+            <form id="server-form" class="form">
+              <div class="grid-3">
+                <label>名称<input name="name" placeholder="生产服务器" required /></label>
+                <label>主机<input name="host" placeholder="10.0.0.11" required /></label>
+                <label>端口<input name="port" type="number" value="22" /></label>
+                <label>用户名<input name="username" value="root" required /></label>
+                <label>登录密码<input name="password" type="password" placeholder="密码登录时填写" autocomplete="new-password" /></label>
+                <label>私钥密码 / Passphrase<input name="passphrase" type="password" placeholder="加密私钥的口令" autocomplete="new-password" /></label>
+                <label>默认部署目录<input name="deployDir" placeholder="/data/platform" value="/data/platform" /></label>
+              </div>
+              <label>私钥 PEM 内容（可选）<textarea name="privateKey" rows="2" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
+              <label>或私钥文件路径（可选）<input name="privateKeyPath" placeholder="C:/Users/you/.ssh/id_rsa （容器内请填挂载后的路径）" /></label>
+              <div class="notice">私钥带口令时务必填写「私钥密码」，否则 SSH 会报解密失败。凭据只保存在本机 <code>data/state.json</code>，接口不会回传明文。</div>
+              <div class="form-actions"><button class="btn btn-primary" type="submit">保存服务器</button></div>
+            </form>
+          </div>
+          <div id="server-list" class="server-grid"></div>
+        </section>
+
+        <!-- AI 服务 -->
+        <section class="page" id="view-ai">
+          <div class="card">
+            <div class="card-head"><h2>配置 AI 服务</h2><span class="muted">API 服务 / 宿主机本地程序 / WSL 程序，统一支持代理</span></div>
+            <div class="seg" id="kind-seg">
+              <button type="button" class="seg-btn active" data-kind="api">云端 API（OpenAI 兼容）</button>
+              <button type="button" class="seg-btn" data-kind="cli">本地 AI 程序（Codex / Claude）</button>
+            </div>
+            <form id="provider-form" class="form">
+              <input type="hidden" name="id" />
+              <input type="hidden" name="kind" id="provider-kind" value="api" />
+              <div class="grid-3">
+                <label>服务名称<input name="name" placeholder="DeepSeek / 本机 Codex" required /></label>
+                <label>代理地址（可选）<input name="proxy" placeholder="http://127.0.0.1:7890" /></label>
+                <label class="check"><input type="checkbox" name="enabled" checked /> 启用该服务</label>
+              </div>
+
+              <div id="api-fields">
+                <div class="grid-3">
+                  <label>Base URL<input name="baseURL" placeholder="https://api.deepseek.com/v1" /></label>
+                  <label>模型<input name="model" placeholder="deepseek-chat" /></label>
+                  <label>API Key<input name="apiKey" type="password" placeholder="sk-..." autocomplete="new-password" /></label>
+                  <label class="full">自定义 Headers（JSON，可选）<input name="headers" placeholder='{"X-Custom":"value"}' /></label>
+                </div>
+                <label class="check"><input type="checkbox" name="noKey" /> 本地免密服务（Ollama / vLLM 等无需 Key）</label>
+              </div>
+
+              <div id="cli-fields" hidden>
+                <div class="row">
+                  <button type="button" class="btn" id="detect-btn">检测本机 / WSL 已安装的 AI 程序</button>
+                  <span class="muted" id="detect-status">尚未检测</span>
+                </div>
+                <div id="detected-list" class="chip-row"></div>
+                <div class="grid-3">
+                  <label>运行位置<select name="runner" id="cli-runner"><option value="host">宿主机（本机直接执行）</option><option value="wsl">WSL 子系统（Windows）</option></select></label>
+                  <label>WSL 发行版<select name="distro" id="cli-distro"><option value="">默认发行版</option></select></label>
+                  <label>AI 程序<select name="command" id="cli-command"><option value="codex">codex</option><option value="claude">claude</option><option value="gemini">gemini</option><option value="qwen">qwen</option><option value="custom">自定义命令</option></select></label>
+                  <label>自定义命令名<input name="customCommand" placeholder="选「自定义命令」时填写" /></label>
+                  <label>附加参数（可选）<input name="extraArgs" placeholder="例如 --model gpt-5 --sandbox read-only" /></label>
+                  <label>超时（毫秒）<input name="timeoutMs" type="number" value="180000" /></label>
+                </div>
+                <div class="notice">代理对两种类型都生效：API 服务走 HTTP 代理转发；本地程序注入 <code>HTTP_PROXY / HTTPS_PROXY / ALL_PROXY</code>，WSL 下还会在 bash 内自动 <code>export</code>。本地 CLI 不支持 function calling，AI 运维会自动改为「先采集平台上下文再提问」。</div>
+              </div>
+
+              <div class="form-actions">
+                <button class="btn btn-primary" type="submit">保存配置</button>
+                <button class="btn btn-ghost" type="button" id="provider-reset">清空表单</button>
+                <button class="btn" type="button" id="provider-test">测试当前配置</button>
+              </div>
+              <pre class="log short" id="provider-test-result" hidden>—</pre>
+            </form>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>已配置服务</h2></div>
+            <div id="provider-list" class="list"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>连通性测试</h2></div>
+            <form id="chat-form" class="form">
+              <label>选择服务<select id="chat-provider"></select></label>
+              <label>测试提示词<input id="chat-prompt" value="用一句话介绍你自己" /></label>
+              <button class="btn" type="submit">发送测试请求</button>
+              <pre class="log short" id="chat-result">—</pre>
+            </form>
+          </div>
+        </section>
+
+        <!-- AI 运维 -->
+        <section class="page" id="view-ops">
+          <div class="card">
+            <div class="card-head"><h2>AI 服务器运维</h2><span class="muted">默认只读：状态查询、日志、白名单诊断命令</span></div>
+            <form id="ops-form" class="form">
+              <label>问题 / 指令<textarea id="ops-prompt" rows="3" placeholder="检查所有服务器负载，找出最近失败的构建并分析原因"></textarea></label>
+              <div class="row">
+                <select id="ops-provider"></select>
+                <label class="check"><input type="checkbox" id="ops-write" /> 授权写操作（允许触发部署）</label>
+                <button class="btn btn-primary" type="submit">执行分析</button>
+              </div>
+            </form>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2>AI 结论</h2></div>
+              <div class="answer" id="ops-answer">—</div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>工具调用轨迹</h2></div>
+              <pre class="log" id="ops-trace">—</pre>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script src="/vendor/xterm.min.js"></script>
+  <script src="/vendor/addon-fit.min.js"></script>
+  <script src="/vendor/codemirror.js"></script>
+  <script src="/vendor/cm-modes.js"></script>
+  <script src="/vendor/cm-addons.js"></script>
+  <script src="/app.js?v=20261106b"></script>
+</body>
+</html>

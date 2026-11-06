@@ -1,0 +1,27 @@
+# 凭据与运行时状态（严禁提交）
+.env
+.env.*
+!.env.example
+data/
+state.json
+state.json.tmp
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+*.log
+
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+*.tar.gz
+*.tgz
+*.tmp
+.DS_Store
+Thumbs.db
+
+# 工作区：克隆的仓库、构建产物、部署测试目录
+workspace/*
+!workspace/.gitkeep

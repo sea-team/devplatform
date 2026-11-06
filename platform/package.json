@@ -1,0 +1,21 @@
+{
+  "name": "devplatform-console",
+  "version": "0.1.0",
+  "private": true,
+  "description": "统一 Web 开发管理平台控制台与 API 网关",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "check": "node --check src/server.js && node --check src/core.js && node --check src/integrations.js && node --check src/engine.js && node --check src/fileTypes.js && node --check src/remoteOps.js && node --check src/dockerApi.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ssh2": "^1.16.0",
+    "undici": "^6.21.1",
+    "iconv-lite": "^0.6.3"
+  }
+}

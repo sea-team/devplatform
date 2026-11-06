@@ -1,0 +1,97 @@
+name: devplatform
+
+# 统一 Web 开发管理平台 · 一期基础编排
+# 启动：docker compose up -d
+# 控制台：http://localhost:9000  |  Gitea: ${GITEA_PORT:-3002}  |  code-server: 8080  |  OpenList: 5244
+# 注意 1：Gitea 对外端口默认 3002（3000 常被 grafana、3001 常被其他服务占用），可用 GITEA_PORT 覆盖。
+# 注意 2：若要调用「宿主机 / WSL 里已安装的 codex、claude」等本地 AI 程序，
+#         需在宿主机直接运行平台（node platform/src/server.js），Linux 容器内访问不到 wsl.exe 与宿主 CLI。
+# 注意 3：完整编排需要可访问 Docker Hub；若镜像源不可达，可用
+#         node scripts/remote.js deploy <host> /data/platform 仅部署平台服务（复用目标机已有 node 镜像）。
+services:
+  gitea:
+    image: ${GITEA_IMAGE:-gitea/gitea:1.23}
+    container_name: dp-gitea
+    restart: unless-stopped
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__server__ROOT_URL=http://localhost:${GITEA_PORT:-3002}/
+      - GITEA__server__SSH_PORT=222
+      - GITEA__security__INSTALL_LOCK=true
+      - GITEA__service__DISABLE_REGISTRATION=false
+    volumes:
+      - ./data/gitea:/data
+      - ./workspace:/workspace:rw
+    ports:
+      - "${GITEA_PORT:-3002}:3000"
+      - "222:22"
+
+  code-server:
+    image: ${CODE_SERVER_IMAGE:-codercom/code-server:4.96.4}
+    container_name: dp-code-server
+    restart: unless-stopped
+    # 老内核(4.x) + Docker 19.03 的默认 seccomp 会拦截 Node 20 创建 worker 线程，
+    # 导致 code-server 以 134 退出（uv_thread_create assertion failed）。
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      - PASSWORD=${CODE_SERVER_PASSWORD:-devplatform}
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./workspace:/home/coder/project
+      - ./data/code-server:/home/coder/.config/code-server
+    ports:
+      - "8080:8080"
+
+  openlist:
+    image: ${OPENLIST_IMAGE:-openlistteam/openlist:latest}
+    container_name: dp-openlist
+    restart: unless-stopped
+    user: "0:0"
+    environment:
+      - UMASK=022
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data/openlist:/opt/openlist/data
+      - ./workspace:/workspace:rw
+    ports:
+      - "5244:5244"
+      - "5245:5245"
+
+  platform:
+    # 已用 remote.js 部署平台容器（占用 9000）时，本服务默认不启动，避免端口冲突。
+    # 需要完整编排时用：docker-compose --profile full up -d（先执行 remote.js stop <host>）。
+    profiles: ["full"]
+    build:
+      context: ./platform
+      args:
+        NODE_BASE: ${PLATFORM_NODE_IMAGE:-node:22-bookworm-slim}
+    container_name: dp-platform
+    restart: unless-stopped
+    depends_on:
+      - gitea
+      - openlist
+    environment:
+      PORT: 9000
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      GITEA_URL: http://gitea:3000
+      GITEA_TOKEN: ${GITEA_TOKEN:-}
+      CODE_SERVER_URL: ${CODE_SERVER_URL:-http://localhost:8080}
+      OPENLIST_URL: http://openlist:5244
+      OPENLIST_TOKEN: ${OPENLIST_TOKEN:-}
+      OPENLIST_USER: ${OPENLIST_USER:-admin}
+      OPENLIST_PASSWORD: ${OPENLIST_PASSWORD:-}
+      WORKSPACE_DIR: /workspace
+      DATA_DIR: /app/data
+      # 正常模式：不提供演示数据，外部服务不可达时会直接显示真实错误。
+      BUILD_EXECUTOR: ${BUILD_EXECUTOR:-local}
+      BUILD_TIMEOUT_MS: ${BUILD_TIMEOUT_MS:-900000}
+    volumes:
+      - ./workspace:/workspace
+      - ./data/platform:/app/data
+      # 启用容器化构建 (BUILD_EXECUTOR=docker) 时再打开下一行。
+      # 注意：挂载 docker.sock 等于把宿主机 root 权限交给该容器，仅限可信内网环境。
+      # - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "9000:9000"
