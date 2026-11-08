@@ -28,7 +28,7 @@
 | 15 | 故障排查 |
 | 16 | 目录结构、Git 与已知限制 |
 | 17 | 单文件可执行程序、热更新与本机集成服务配置（本机免 Node） |
-| 18 | Windows 一键安装（含三个集成服务）、服务管理与排错 |
+| 18 | Windows 一键安装：Docker / 无 Docker 原生 / 复用服务器三种模式、服务管理与排错 |
 
 ---
 
@@ -92,7 +92,7 @@
 
 ## 3. 快速开始
 
-> **Windows 用户推荐直接看第 18 章**：准备好 `platform/dist/devplatform.exe` 后双击 `windows\install.bat`，即可一键装好平台与 Gitea / OpenList / code-server 三个集成服务、初始化凭据并配置开机自启。下面 3.2–3.4 是各运行方式的手动步骤，用于理解原理或排错。
+> **Windows 用户推荐直接看第 18 章**：准备好 `platform/dist/devplatform.exe` 后双击 `windows\install.bat` 即可一键装好平台与集成服务、初始化凭据并配置开机自启。**没有 Docker 也能装**——安装器会自动改用 Windows 原生 exe（Gitea / OpenList）+ VS Code 内置 Web IDE，详见 §18.10。下面 3.2–3.4 是各运行方式的手动步骤，用于理解原理或排错。
 
 ### 3.1 前置条件
 
@@ -443,7 +443,8 @@ node scripts/verify.js http://<host>:9000
 | `node scripts/sync-integrations.js --from <IP>` | 从服务器同步集成服务地址与 Token 到 `platform/dist/.env`（§17.8） |
 | `node scripts/sync-integrations.js --check\|--probe\|--local` | 查看配置 / 探测连通性 / 生成本机模板 |
 | `windows\install.bat` | Windows 一键安装（自动装/连集成服务、写配置、注册自启），§18.3 |
-| `powershell -File windows\install.ps1 -Mode local\|remote -DryRun` | 指定模式安装 / 预演不改动系统 |
+| `powershell -File windows\install.ps1 -Mode local\|native\|remote -DryRun` | 指定模式安装 / 预演不改动系统（§18.5） |
+| `powershell -File windows\native-services.ps1 -Action setup\|start\|stop\|status` | 无 Docker 原生服务的安装、启停与状态（§18.10） |
 | `windows\start.bat` / `stop.bat` / `uninstall.ps1` | 启动 / 停止 / 卸载（§18.6） |
 | `node scripts/verify.js [URL]` | 端到端回归（默认 `http://10.0.0.246:9000`，可用 `PLATFORM_URL` 覆盖） |
 | `node scripts/check-frontend.js` | 无浏览器 DOM 模拟：静态一致性 + 多标签交互自检 |
@@ -527,7 +528,10 @@ devplatform/
 ├── scripts/                # remote.js、setup-integrations.sh、verify.js、
 │                           # check-frontend.js、sync-integrations.js（本机配置同步）
 ├── windows/                # Windows 一键安装：install.bat / install.ps1 /
+│                           # native-services.ps1（无 Docker 原生服务）/
 │                           # start.bat / stop.bat / uninstall.ps1（§18）
+│   └── runtime/            # 运行时（不入库）：bin/ 下载的 exe、gitea/ 仓库、
+│                           # openlist/ 数据、ide/、logs/、services.json、pids.txt
 ├── data/                   # 运行时状态（不入库，600/700）
 └── workspace/              # 克隆与构建工作区（不入库）
 ```
@@ -721,17 +725,30 @@ node scripts/sync-integrations.js --probe
 
 本章面向「拿到项目后在 Windows 上直接部署使用」。平台本体是免 Node 的 `devplatform.exe`，但 **Gitea / OpenList / code-server 是三个独立服务，不会打进 exe**，所以安装器把它们一起装好、初始化好凭据、写好配置，并配置开机自启。
 
-### 18.1 两种安装模式
+### 18.1 三种模式（没有 Docker 也能装）
+
+平台本体是单个 `devplatform.exe`，**不依赖 Docker**。Docker 只是集成服务的一种可选载体；Windows 上没有 Docker 时，安装器会走 `native` 模式，用官方 Windows 原生程序把服务跑起来。
 
 | 模式 | 集成服务在哪 | 前置条件 | 适用 |
 |---|---|---|---|
-| `local`（本机完整安装） | 本机 Docker Desktop 里跑三个 Linux 容器 | Docker Desktop（WSL2 后端）、能拉镜像 | 想完全本地、离线也能用三个服务 |
-| `remote`（复用已部署服务器） | 已部署服务器上的 3002 / 5244 / 8080 | 该服务器已按第 3 章部署并初始化；本机需有 Node 与 `data/state.json` | 已有测试/生产服务器，本机只想开控制台 |
-| `auto`（默认） | 自动选择 | — | 检测到可用 Docker → `local`；否则若有 Node 且已登记服务器 → `remote`；都没有 → 提示安装 Docker |
+| `native`（**无 Docker 推荐**） | 本机 Windows 原生 exe：Gitea、OpenList 单文件程序；在线 IDE 用 VS Code 内置 `serve-web` | 无需 Docker / WSL / Node / bash；只需能下载两个 exe（或提前放到 `windows\bin\` 离线安装） | 普通 Windows 机器、内网机器、不想装 Docker Desktop |
+| `local` | 本机 Docker Desktop 里跑三个 Linux 容器 | Docker Desktop 正在运行、能拉镜像 | 想与线上环境完全一致、已有 Docker |
+| `remote` | 已部署服务器上的 3002 / 5244 / 8080 | 服务器已按第 3 章部署并初始化；本机需 Node 与 `data/state.json` | 已有测试/生产服务器，本机只开控制台 |
+| `auto`（默认） | 按下面决策树自动选 | — | 直接双击 `install.bat` |
 
-> **为什么本机模式需要 Docker Desktop**：code-server 官方只提供 Linux 版本，Windows 下没有原生可跑的等价物；Gitea / OpenList 虽有 Windows 二进制，但用同一套 compose 编排能保证三个服务与线上环境完全一致。Docker Desktop 用 Linux 容器即可，不需要在 Windows 上装 Node、Python 或 WSL 里的发行版（WSL2 只是 Docker 的后端）。
+`auto` 决策树：
 
-安装器**只启动 compose 里的 `gitea / openlist / code-server`**；`platform` 服务带 `profiles: ["full"]` 不会启动，9000 端口由 exe 占用，不会冲突。
+```text
+有可用 Docker (docker info 成功)          -> local
+无 Docker + 指定了 -RemoteHost 或已登记服务器 -> remote（提示可改用 -Mode native）
+无 Docker + 无服务器                      -> native（零依赖，自动装原生服务）
+```
+
+> **为什么需要 `native` 单独处理**：code-server 官方只提供 Linux 版本，Windows 下没有原生等价物；`local` 模式因此依赖 Docker Desktop 的 Linux 容器。`native` 模式改用 VS Code 自带的 `code-tunnel.exe serve-web`（Windows 原生 Web IDE，`/healthz` 与平台探测兼容），Gitea / OpenList 则直接用官方 Windows amd64 二进制（都是 Go 单文件，无运行时依赖）。
+>
+> `local` 模式只启动 compose 里的 `gitea / openlist / code-server`；`platform` 服务带 `profiles: ["full"]` 不会启动，9000 端口归 exe，不冲突。`native` 模式完全不用 compose。
+>
+> **逐组件降级**：某个组件下载失败时不会中断安装——脚本会先尝试保留 `dist/.env` 中已有的远程地址（混合模式），实在没有才留 localhost 占位并给出中文提示；平台其余模块始终可用。用 `-ForceEnv` 可强制三项全部指向本机。
 
 ### 18.2 前置要求
 
@@ -740,22 +757,31 @@ node scripts/sync-integrations.js --probe
 | 系统 | Windows 10 1809+ / Windows 11，PowerShell 5.1+ | `$PSVersionTable.PSVersion` |
 | 平台程序 | `platform/dist/devplatform.exe` 已存在 | 没有则先在有 Node 的机器执行 `cd platform; npm run build`，或拷贝构建好的整个 `dist/` |
 | 端口 | 9000 / 3002 / 5244 / 8080 未被占用（Gitea SSH 222、OpenList 5245 也需空闲） | `netstat -ano \| findstr ":9000 :3002 :5244 :8080"` |
+| `native` 模式 | **无需 Docker / WSL / Node / bash**；需联网下载 Gitea（约 112 MB）与 OpenList（完整包约 48 MB / lite 包约 31 MB）二进制，或提前放到 `windows\bin\` 走离线安装；在线 IDE 需要本机装有 VS Code（可选，缺失会自动降级） | `Get-Command code.cmd`、`Test-Path windows\bin` |
 | `local` 模式 | Docker Desktop 已安装并**正在运行**（托盘图标为 Running） | `docker info` |
 | `remote` 模式 | 本机有 Node、`data/state.json` 已登记服务器、服务器 `/data/platform/.env` 已有 Token | `node -v`、`node scripts/sync-integrations.js --probe` |
 | 权限 | 注册计划任务不强制管理员；失败会自动降级为「启动」文件夹快捷方式 | 安装器输出会说明 |
 
-> 安装器不会自动安装 Docker Desktop（这通常需要重启 / 重新登录）；需要时用 `-InstallDocker` 显式触发 winget，装完重启后再跑一次脚本。
+> 安装器不会主动安装 Docker Desktop（这通常需要重启 / 重新登录）；`local` 模式缺 Docker 时可用 `-InstallDocker` 显式触发 winget，**但更推荐直接改用 `-Mode native`**，无需重启、无需虚拟化。
+>
+> 内网 / 无外网机器：把 `gitea.exe` 和 `openlist.exe` 放进 `windows\bin\`，再运行 `install.ps1 -Mode native -BinDir windows\bin -NoDownload`（详见 §18.10.3）。
 
 ### 18.3 一键安装
 
-**最简单**：双击 `windows\install.bat`，等它跑完，浏览器会自动打开 `http://localhost:9000`。
+**最简单**：双击 `windows\install.bat`，等它跑完，浏览器会自动打开 `http://localhost:9000`。**没有 Docker 的机器会全自动走 `native` 模式**，不需要任何额外参数。
 
 等价命令行（可加参数）：
 
 ```powershell
 cd devplatform
 
-# 完整本机安装（三个集成服务都跑在本机）
+# 无 Docker：Windows 原生服务（推荐普通 Windows 机器）
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode native
+
+# 无 Docker + 内网离线：用提前放好的原生二进制，不联网
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode native -BinDir windows\bin -NoDownload
+
+# 有 Docker：三个 Linux 容器（与线上环境一致）
 powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode local
 
 # 复用已部署服务器
@@ -764,7 +790,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode re
 # 先看会做什么、不改动任何东西
 powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -DryRun
 
-# 尝试自动安装 Docker Desktop（winget 可用时）
+# 尝试自动安装 Docker Desktop（winget 可用时，需重启；一般改用 -Mode native 更省事）
 powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -InstallDocker
 ```
 
@@ -772,25 +798,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Install
 
 ### 18.4 安装器做了什么
 
-| 步骤 | `local` 模式 | `remote` 模式 |
-|---|---|---|
-| 1 | 校验 `devplatform.exe` 存在 | 同左 |
-| 2 | 生成根 `.env`：随机 Gitea/OpenList 管理员密码、code-server 密码、镜像加速器前缀；**已存在则原样保留** | 调用 `scripts/sync-integrations.js` 从服务器读取地址与 Token |
-| 3 | `docker compose up -d gitea openlist code-server` | — |
-| 4 | 轮询 `3002/api/v1/version`、`5244/api/public/settings`、`8080/healthz` 直到就绪 | `sync-integrations.js --probe` 预检三个端点 |
-| 5 | 创建 Gitea 管理员、生成 Access Token；设置 OpenList 管理员密码并取 Admin Token；写回根 `.env` | — |
-| 6 | 生成 `platform/dist/.env`：`PORT`、三个 URL、两个 Token、`OPENLIST_USER`、`NO_PROXY` | 由同步脚本生成 `platform/dist/.env` |
-| 7 | 生成 `platform/dist/autostart.vbs`（无窗口启动） | 同左 |
-| 8 | 注册登录计划任务 `DevPlatform`；失败降级为启动文件夹快捷方式 | 同左 |
-| 9 | 后台启动 exe、健康检查、打开浏览器 | 同左 |
+| 步骤 | `local` 模式 | `native` 模式（无 Docker） | `remote` 模式 |
+|---|---|---|---|
+| 1 | 校验 `devplatform.exe` 存在 | 同左 | 同左 |
+| 2 | 生成根 `.env`：随机管理员密码、镜像加速器前缀；已存在则保留 | 读取/生成根 `.env` 的管理员密码；创建 `windows\runtime\` 运行目录 | 调用 `scripts/sync-integrations.js` 从服务器读取地址与 Token |
+| 3 | `docker compose up -d gitea openlist code-server` | 下载（或复制离线）`gitea.exe`、`openlist.exe` 到 `runtime\bin\`；生成 Gitea `custom/conf/app.ini`（SQLite + INSTALL_LOCK） | — |
+| 4 | 轮询三个健康端点 | 初始化 Gitea 数据库与 admin；隐藏窗口启动三个原生进程并记录 PID | `sync-integrations.js --probe` 预检三个端点 |
+| 5 | 创建 Gitea 管理员、生成 Token；设置 OpenList 密码并取 Admin Token | 同样通过 HTTP / CLI 生成两个 Token；OpenList 缺失 Token 时回退密码登录 | — |
+| 6 | 生成 `platform/dist/.env`（三个 localhost + 两个 Token） | 生成 `dist/.env`：**逐组件**决定 localhost / 保留远程地址 / 占位；写 `WORKSPACE_DIR` 指向 `dist\workspace` | 由同步脚本生成 `dist/.env` |
+| 7 | 生成 `autostart.vbs`（无窗口启动） | 同左，且 VBS 会先调用 `native-services.ps1 -Action start` 拉起原生服务 | 同左 |
+| 8 | 注册登录计划任务 `DevPlatform`；失败降级启动文件夹 | 同左 | 同左 |
+| 9 | 后台启动 exe、健康检查、打开浏览器 | 同左 | 同左 |
 
-所有凭据只落在本机 `.env`（根目录与 `dist/`），不打印到日志、不进 Git。安装器用 PowerShell 原生实现（HTTP、docker、计划任务、随机密码），**不依赖 Node / bash / curl**；只有 `remote` 模式复用 `sync-integrations.js` 的 SSH 逻辑才需要 Node。
+所有凭据只落在本机 `.env`（根目录与 `dist/`），不打印到日志、不进 Git。安装器用 PowerShell 原生实现（HTTP、docker、计划任务、随机密码、zip 解压），**平台本体不依赖 Node / bash / curl**；只有 `remote` 模式复用 `sync-integrations.js` 的 SSH 逻辑才需要 Node。`native` 模式下载大文件时优先调用系统自带 `curl.exe`（自动读 `http_proxy` / `https_proxy`），也可用 `-ProxyUrl` 指定代理。
 
 ### 18.5 参数表
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `-Mode` | `auto` | `auto` / `local` / `remote` |
+| `-Mode` | `auto` | `auto` / `local` / `native` / `remote`；无 Docker 时用 `native` |
 | `-RemoteHost` | 空 | remote 模式指定服务器 IP；留空取 `data/state.json` 第一台 |
 | `-InstallDocker` | 关 | 无 Docker 时尝试 `winget install Docker.DockerDesktop`，之后需重启 |
 | `-NoService` | 关 | 跳过开机自启注册 |
@@ -798,18 +824,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Install
 | `-DryRun` | 关 | 只打印计划，不写文件、不启容器、不注册任务 |
 | `-Port` | 9000 | 平台监听端口，写入 `dist/.env` 与浏览器地址 |
 | `-ImagePrefix` | `docker.m.daocloud.io` | 镜像加速器前缀；能直连 Docker Hub 时用 `-ImagePrefix ''` |
+| `-BinDir` | 空 | `native`：提前放置 `gitea.exe` / `openlist.exe`（或官方 zip）的离线目录 |
+| `-NoDownload` | 关 | `native`：禁止联网下载，只用 `-BinDir` 或 `runtime\bin\` 里已有的二进制 |
+| `-ForceEnv` | 关 | `native`：强制 `dist/.env` 三项全部指向本机，不保留已有远程地址 |
+| `-IdeMode` | `auto` | `auto`（找 VS Code）/ `code`（必须 VS Code）/ `wsl`（自行在 WSL 装 code-server）/ `none`（不启用在线 IDE） |
+| `-GiteaVersion` | `1.23.8` | Gitea Windows exe 版本，决定 `dl.gitea.com` 下载路径 |
+| `-OpenListVersion` | `v4.2.6` | OpenList release tag |
+| `-DownloadProxy` | `https://ghproxy.net/` | GitHub release 的加速前缀；脚本还会依次尝试多个备用源与体积更小的 lite 包，直连可用时可填 `''` |
+| `-ProxyUrl` | 空 | 供 `curl.exe` 使用的 HTTP 代理（`http_proxy` 环境变量通常已够用） |
+
+> `-DryRun` 对 `native` 模式同样有效：只打印「下载哪些文件、启动哪些进程、写入哪些配置」，不下载、不启动、不写文件、不注册任务。
 
 ### 18.6 服务管理
 
 | 操作 | 命令 |
 |---|---|
-| 启动平台 | 双击 `windows\start.bat`（最小化窗口） |
-| 停止平台 | 双击 `windows\stop.bat`（结束所有 `devplatform.exe`） |
+| 启动平台 | 双击 `windows\start.bat`（最小化窗口）；`native` 模式会先拉起原生服务 |
+| 停止平台 | 双击 `windows\stop.bat`（结束 `devplatform.exe`；`native` 模式随后停掉三个原生服务） |
+| 原生服务状态 | `powershell -ExecutionPolicy Bypass -File windows\native-services.ps1 -Action status` |
+| 只启 / 只停原生服务 | 同上，把 `-Action` 换成 `start` / `stop` |
+| 重装 / 补装原生服务 | `powershell -ExecutionPolicy Bypass -File windows\install.ps1 -Mode native`（幂等，已有二进制不重复下载） |
 | 开机自启 | 登录后由计划任务 `DevPlatform` 无窗口拉起；非管理员时是「启动」文件夹的 `DevPlatform.lnk` |
 | 查看自启 | `Get-ScheduledTask -TaskName DevPlatform` |
 | 关闭自启 | `Unregister-ScheduledTask -TaskName DevPlatform -Confirm:$false` |
 | 卸载 | `powershell -ExecutionPolicy Bypass -File windows\uninstall.ps1` |
 | 连容器一起停 | 加 `-RemoveContainers`（`docker compose down`，**数据卷保留**） |
+| 连原生服务数据一起删 | 加 `-RemoveNative -Force`（删除 `windows\runtime\`，含 Gitea 仓库与 OpenList 数据）；默认只停进程、保留数据 |
 | 连配置一起删 | 加 `-RemoveConfig -Force`（删根 `.env`、`dist/.env`、`autostart.vbs`） |
 
 卸载默认保留 `workspace/`、`data/`、`data/state.json` 与 Docker 卷，重装不会丢仓库和构建记录。
@@ -820,7 +860,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Install
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 提示「本机模式需要 Docker Desktop」 | 未安装或 Docker 没在运行 | 启动 Docker Desktop 等托盘变绿；或加 `-InstallDocker`；或改 `-Mode remote` |
+| 提示「本机 local 模式需要 Docker Desktop」 | 显式指定了 `-Mode local` 但没装 Docker | 直接改用 `-Mode native`（无需 Docker）；或启动 Docker Desktop 后重跑 |
+| OpenList / Gitea 下载失败（504 / 超时 / 内网） | GitHub release 或代理不可达 | 脚本会自动尝试多个源；仍失败则把 `gitea.exe` / `openlist.exe` 放到 `windows\bin\`，用 `-BinDir windows\bin -NoDownload` 重跑（§18.10.3）。期间平台本体照常装好，该组件显示「离线/未配置」 |
+| 在线 IDE 显示离线或首次打开很慢 | 本机没装 VS Code，或 `serve-web` 首次需从微软 CDN 拉取 server 组件 | `-IdeMode none` 明确不启用；或装 VS Code 后重跑；`runtime\logs\ide.out.log` 看进度 |
+| 原生服务起不来 | 端口被占、配置生成失败、exe 不匹配 | `-Action status` 看端口/PID；查 `windows\runtime\logs\*.err.log`；确认 3002 / 5244 / 8080 空闲 |
+| 安装日志出现「已添加项，字典中的关键字…」或进程一个都起不来 | 本机代理工具同时注入了 `HTTPS_PROXY` 与 `https_proxy`，PowerShell 5.1 的 `Start-Process` 构造环境变量字典时大小写冲突 | 脚本已在启动子进程前自动去重并在结束后恢复，无需手工处理；若仍失败，临时执行 `Remove-Item Env:https_proxy,Env:http_proxy` 后重跑 |
+| 重复安装时提示 `user already exists` | Gitea 管理员已创建，属幂等重跑的正常现象 | 脚本已把原生 CLI 的 stderr 降级为提示，不会中断安装；Token 会重新生成并写回 `.env` |
+| `stop.bat` 没停掉服务 | 端口被非本平台进程占用，脚本为避免误杀主动跳过 | 输出会有 `[WARN] 被非本平台进程占用`；手工处理该进程，或改端口 |
 | Docker Desktop 装完仍报未就绪 | WSL2 / 虚拟化未启用，或安装后需注销重登 | 重启一次再跑脚本；确认 `docker info` 成功 |
 | 镜像拉取超时 | Docker Hub 不可达 | 保持默认 `-ImagePrefix docker.m.daocloud.io`；或换可达加速器后重跑（脚本会保留已有 `.env`，需手工改 `*_IMAGE`） |
 | `docker compose` 不存在 | 老版 Docker | 安装器自动回退到 `docker-compose` v1 |
@@ -857,6 +903,24 @@ bash scripts/setup-integrations.sh
 curl http://localhost:9000/api/overview
 ```
 
+**无 Docker 的手动对照**（等价于 `-Mode native`，排错时可逐步执行）：
+
+```powershell
+# 1. 准备目录与二进制
+New-Item -ItemType Directory -Force windows\runtime\bin, windows\bin
+#    把 gitea.exe、openlist.exe 放进 windows\bin（见 §18.10.3 的下载地址）
+
+# 2. 一键完成配置生成、进程启动、Token 初始化、写 dist/.env
+powershell -ExecutionPolicy Bypass -File windows\native-services.ps1 -Action setup -BinDir windows\bin -NoDownload
+
+# 3. 查看三个服务端口与 PID
+powershell -ExecutionPolicy Bypass -File windows\native-services.ps1 -Action status
+
+# 4. 完全重启 exe 让 dist/.env 生效，再验证
+.\windows\stop.bat; .\windows\start.bat
+curl http://localhost:9000/api/overview
+```
+
 ### 18.9 安装后验证清单
 
 ```powershell
@@ -866,10 +930,131 @@ curl http://localhost:9000/api/health
 curl http://localhost:9000/api/overview
 # 容器状态（local 模式）
 docker compose ps
+# 原生服务状态（native 模式，应全为 LISTENING）
+powershell -ExecutionPolicy Bypass -File windows\native-services.ps1 -Action status
 # 配置检查（不显示 Token）
 node scripts/sync-integrations.js --check
 node scripts/sync-integrations.js --probe
 ```
 
-浏览器打开 `http://localhost:9000`，总览「集成服务」三项应为绿色「在线」；Gitea `http://localhost:3002`、OpenList `http://localhost:5244`、code-server `http://localhost:8080` 均可访问。Gitea/OpenList 管理员账号为 `admin`，密码在根 `.env` 的 `OPENLIST_PASSWORD`；code-server 密码在 `CODE_SERVER_PASSWORD`。
+浏览器打开 `http://localhost:9000`，总览「集成服务」三项应为绿色「在线」。`local` / `remote` 模式下 Gitea `http://localhost:3002`、OpenList `http://localhost:5244`、code-server `http://localhost:8080` 均可访问；`native` 模式下 8080 打开的是 VS Code Web。Gitea/OpenList 管理员账号为 `admin`，密码在根 `.env` 的 `OPENLIST_PASSWORD`；code-server 密码在 `CODE_SERVER_PASSWORD`（`native` 模式的 VS Code Web 不需要密码，仅监听 127.0.0.1）。
+
+---
+
+### 18.10 无 Docker 环境（native 模式）详解
+
+这一节专门说明「Windows 上没有 Docker Desktop、也不想装」时，集成服务是怎么跑起来的、文件放在哪、离线怎么办、以及和 Docker 模式的差异。
+
+#### 18.10.1 三个组件换成什么
+
+| 组件 | `native` 模式 | 来源 | 体积 |
+|---|---|---|---|
+| Git 仓库 | `gitea.exe web --config <app.ini>`，SQLite 单库、内置 SSH 关闭 | Gitea 官方 Windows amd64 exe（Go 单文件，无运行时依赖） | ≈ 112 MB |
+| 存储挂载 | `openlist.exe server` | OpenList 官方 `openlist-windows-amd64.zip` 里的 `openlist.exe` | ≈ 48 MB |
+| 在线 IDE | `code-tunnel.exe serve-web --port 8080 ...` | 本机已安装的 VS Code（Windows 原生 Web IDE） | 0（复用） |
+| 平台本体 | `platform/dist/devplatform.exe` | 已构建好的单文件程序 | ≈ 84 MB |
+
+`code-server` 官方没有 Windows 版，所以 `native` 模式用 VS Code 自带的 `serve-web` 代替。实测它的 `/healthz` 返回 2xx，平台现有的 `/api/overview` 探测逻辑**无需改动**即可判定在线；浏览器打开 `CODE_SERVER_URL` 就是完整的 VS Code Web UI。
+
+下载源按可达性依次尝试，任一成功即停：
+
+- Gitea：`https://dl.gitea.com/gitea/<版本>/gitea-<版本>-windows-4.0-amd64.exe`（官方 CDN，国内通常可达）→ `-DownloadProxy` 转发 GitHub → GitHub 直连；单文件超时 420 秒。
+- OpenList：完整版 `openlist-windows-amd64.zip` 与体积更小的 `openlist-windows-amd64-lite.zip` 各试一轮；每轮按 `-DownloadProxy`（默认 `https://ghproxy.net/`）→ `gh-proxy.com` → `ghfast.top` → `hub.gitmirror.com` → `gh.llkk.cc` → `ghproxy.cc` → GitHub 直连依次尝试。任一成功即停，单个源超时 120 秒，**总下载预算 8 分钟**，超时后不再空转，直接走「逐组件降级」（§18.10.5）。
+- 下载用系统自带 `curl.exe`（自动读 `http_proxy` / `https_proxy`），失败自动回退 `Invoke-WebRequest`；可用 `-ProxyUrl` 显式指定代理。
+
+#### 18.10.2 目录与端口
+
+```
+windows/runtime/              # 整个目录不入库（.gitignore 已排除）
+├── bin/                      # gitea.exe / openlist.exe（下载或离线复制）
+├── gitea/
+│   ├── custom/conf/app.ini   # 自动生成：SQLite、INSTALL_LOCK、127.0.0.1:3002
+│   ├── data/gitea.db         # Gitea 数据库
+│   ├── repositories/         # Git 仓库实体
+│   └── logs/
+├── openlist/data/            # config.json、data.db、日志（首次启动自动生成）
+├── ide/                      # VS Code serve-web 的 server-data-dir
+├── logs/                     # gitea/openlist/ide 各自的 out/err 日志
+├── services.json             # 服务清单（存在即表示已装原生模式）
+└── pids.txt                  # 三个进程的 PID
+```
+
+| 端口 | 用途 | 绑定 |
+|---|---|---|
+| 9000 | 平台控制台（exe） | 0.0.0.0 |
+| 3002 | Gitea HTTP | 127.0.0.1（内置 SSH 已关闭，不占 222） |
+| 5244 | OpenList | 默认（其 `data/config.json` 中 `scheme.http_port`） |
+| 8080 | VS Code Web IDE | 127.0.0.1，`--without-connection-token` |
+
+> `native` 模式把 `WORKSPACE_DIR` 显式写成 `platform/dist/workspace`——这是 exe 的实际工作区（`DP_ROOT/workspace`）。IDE 的 `--default-folder` 也指向它，因此**在线 IDE 与平台的文件管理器看到的是同一份文件**，这一点比 `remote` 模式更一致。
+
+#### 18.10.3 内网 / 离线安装（不联网）
+
+在有网的机器上下载两个文件，放到项目 `windows\bin\` 目录：
+
+| 文件名 | 下载地址 |
+|---|---|
+| `gitea.exe` | `https://dl.gitea.com/gitea/1.23.8/gitea-1.23.8-windows-4.0-amd64.exe` |
+| `openlist.exe` / `openlist-windows-amd64.zip` / `openlist-windows-amd64-lite.zip` | `https://github.com/OpenListTeam/OpenList/releases/download/v4.2.6/openlist-windows-amd64.zip`（解压取 `openlist.exe`；直接放任一官方 zip 也行，脚本会自动解压。lite 版约 31 MB，慢网更省时间） |
+
+然后在目标机器执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode native -BinDir windows\bin -NoDownload
+```
+
+`-BinDir` 里可以放 `gitea.exe`、`openlist.exe`、`openlist-windows-amd64.zip`、`openlist-windows-amd64-lite.zip` 任意组合（zip 会自动解压取出 exe）；`-NoDownload` 保证完全不联网。另一种分发方式是：在一台联网机器跑完 `-Mode native`，把整个 `windows\runtime\` 连同 `platform\dist\` 一起拷到目标机，脚本检测到 `runtime\bin\` 里已有二进制就不会重复下载。
+
+#### 18.10.4 在线 IDE 的四种选择
+
+| `-IdeMode` | 行为 |
+|---|---|
+| `auto`（默认） | 自动找 `code.cmd` 同目录的 `code-tunnel.exe`（含 `%LOCALAPPDATA%`、`%ProgramFiles%` 常见安装位置）；找到就启用，找不到则该项保持「未配置」，其余模块照常 |
+| `code` | 强制要求 VS Code；找不到时明确警告 |
+| `wsl` | 不接管 IDE 生命周期，提示你在 WSL 发行版内自行安装并监听 8080 的 code-server |
+| `none` | 完全不启用在线 IDE |
+
+`serve-web` 的实际参数：`--host 127.0.0.1 --port 8080 --without-connection-token --accept-server-license-terms --disable-telemetry --server-data-dir runtime/ide --default-folder platform/dist/workspace`。首次启动可能从微软 CDN 拉取对应 commit 的 server 组件（日志在 `runtime/logs/ide.out.log`），内网机器若拉不到，IDE 会显示离线但不会拖垮安装。
+
+#### 18.10.5 逐组件降级与混合模式
+
+`native` 模式不会因某一个组件装不上而失败：
+
+| 情况 | `dist/.env` 里这一项 | 结果 |
+|---|---|---|
+| 本机二进制成功启动 | `http://localhost:<端口>` + 新 Token | 在线 |
+| 二进制下载失败，但已有可用的远程地址 | 保留原远程 URL 与 Token | **混合模式**：本机 Gitea/IDE + 远程 OpenList（或反之），仍在线 |
+| 两者都没有 | `http://localhost:<端口>`，Token 留空 | 该项显示「未配置/离线」并给出中文提示，平台与其他模块正常 |
+
+加 `-ForceEnv` 会强制三项全部写成本机地址，用于验证或彻底脱离服务器。改完 `dist/.env` 记得**完全重启 exe**（`reload` 不重读配置）。
+
+#### 18.10.6 生命周期与安全
+
+- 三个服务以**隐藏窗口**方式启动，PID 写入 `pids.txt`，标准输出/错误分别落到 `runtime/logs/*.out.log` / `*.err.log`。
+- 开机自启：`platform/dist/autostart.vbs` 先调用 `native-services.ps1 -Action start` 拉起原生服务，再启动 exe；两者互不阻塞。`start.bat` / `stop.bat` 同样联动。
+- 停止时先按 PID 结束；端口兜底只停「可执行文件位于 `windows/runtime/` 或命令行包含该路径」的进程，端口被别的程序占用时会**警告并跳过，绝不误杀**。
+- 卸载默认停掉原生进程但**保留** `runtime\`（Gitea 仓库、OpenList 数据）；只有 `-RemoveNative -Force` 才会删除。
+- 三个服务都只监听本机回环或默认本机端口；若要对局域网开放，需要自行改 Gitea `app.ini` / OpenList `config.json` / `serve-web --host`，并在 `dist/.env` 设置 `ADMIN_TOKEN`（§14）。
+
+#### 18.10.7 与另外两种模式的差异
+
+| 维度 | `native` | `local` | `remote` |
+|---|---|---|---|
+| 需要 Docker | 否 | 是 | 否 |
+| 需要 Node / bash | 否 | 否 | 是（同步脚本） |
+| 集成服务进程 | Windows 原生 exe + VS Code | Linux 容器 | 远端服务器 |
+| Git 克隆方式 | HTTP（内置 SSH 关闭） | HTTP / SSH（compose 映射 222） | 远端配置 |
+| IDE | VS Code Web（扩展随本机 VS Code） | code-server（独立扩展目录） | 远端 code-server |
+| 工作区 | `platform/dist/workspace`，IDE 与文件管理一致 | compose 映射的 `workspace/` | 远端 `/home/coder/project`，与本机文件管理**不是同一份** |
+| 离线可用 | 可以（`-BinDir -NoDownload`） | 需先拉好镜像 | 需服务器在线 |
+| 升级 | 替换 `runtime/bin/*.exe` 后重跑 setup | `docker compose pull && up -d` | 远端 deploy |
+
+#### 18.10.8 已知限制
+
+- `serve-web` 不是 code-server：扩展、设置、登录态都跟随本机 VS Code 安装，不共享 code-server 的扩展目录。
+- Gitea Windows 版关闭了内置 SSH（`DISABLE_SSH = true`），请用 HTTP 地址克隆；若需要 SSH，编辑 `windows/runtime/gitea/custom/conf/app.ini` 自行开启并放行端口。
+- 三个原生进程是「登录时由计划任务拉起」，不是 Windows 服务；注销后停止，重新登录自动恢复。
+- OpenList 若未来调整 `admin token` 输出格式，脚本取不到 Token 时会回退到 `OPENLIST_PASSWORD` 登录（平台已支持），不会中断安装。
+- 二进制版本默认固定为 Gitea `1.23.8` / OpenList `v4.2.6`；升级用 `-GiteaVersion` / `-OpenListVersion`，或手动替换 `runtime/bin/` 下的 exe。
+- 下载大文件受网络影响较大（Gitea 约 112 MB）；国内建议优先用官方 `dl.gitea.com`，OpenList 走 `-DownloadProxy` 或离线放置。
 

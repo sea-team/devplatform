@@ -1,24 +1,41 @@
 ﻿<#
-  DevPlatform Windows 一键安装器（PowerShell 5.1+ 兼容，无需 Node / bash）
+  DevPlatform Windows 一键安装器（PowerShell 5.1+ 兼容，平台本体无需 Node / bash / Docker）
   用法：双击 windows\install.bat，或在 PowerShell 中：
     powershell -ExecutionPolicy Bypass -File windows\install.ps1
     powershell -ExecutionPolicy Bypass -File windows\install.ps1 -Mode local
+    powershell -ExecutionPolicy Bypass -File windows\install.ps1 -Mode native
     powershell -ExecutionPolicy Bypass -File windows\install.ps1 -Mode remote -RemoteHost 10.0.0.246
     powershell -ExecutionPolicy Bypass -File windows\install.ps1 -DryRun
+
+  三种集成服务模式：
+    local  = Docker 容器（需 Docker Desktop）
+    native = Windows 原生 exe（无 Docker，推荐普通 Windows 机器）
+    remote = 复用已部署服务器（无需本机服务）
+    auto   = 有 Docker 用 local；无 Docker 且已登记服务器用 remote；否则自动用 native
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('auto', 'local', 'remote')][string]$Mode = 'auto',
+  [ValidateSet('auto', 'local', 'remote', 'native')][string]$Mode = 'auto',
   [string]$RemoteHost = '',
   [switch]$InstallDocker,
   [switch]$NoService,
   [switch]$NoLaunch,
   [switch]$DryRun,
   [int]$Port = 9000,
-  [string]$ImagePrefix = 'docker.m.daocloud.io'
+  [string]$ImagePrefix = 'docker.m.daocloud.io',
+  # ---- 仅 native 模式使用 ----
+  [string]$BinDir = '',
+  [switch]$NoDownload,
+  [switch]$ForceEnv,
+  [ValidateSet('auto', 'code', 'wsl', 'none')][string]$IdeMode = 'auto',
+  [string]$GiteaVersion = '1.23.8',
+  [string]$OpenListVersion = 'v4.2.6',
+  [string]$DownloadProxy = 'https://ghproxy.net/',
+  [string]$ProxyUrl = ''
 )
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $Root = Split-Path -Parent $PSScriptRoot
 $Dist = Join-Path $Root 'platform\dist'
 $Exe = Join-Path $Dist 'devplatform.exe'
@@ -263,6 +280,29 @@ function Start-RemoteServices {
   Good "已指向 $($cfg.GITEA_URL) / $($cfg.OPENLIST_URL) / $($cfg.CODE_SERVER_URL)"
 }
 
+function Start-NativeSetup {
+  Step '安装 Windows 原生集成服务（无需 Docker / WSL）'
+  $script = Join-Path $PSScriptRoot 'native-services.ps1'
+  if (-not (Test-Path -LiteralPath $script)) { Die "缺少 $script" }
+  # PowerShell 5.1 对带 CmdletBinding 的脚本用「数组 splatting」会把 -Action 误当成参数值，
+  # 这里统一用 hashtable splatting，参数绑定稳定。
+  $h = @{
+    Action = 'setup'; Root = $Root; Port = $Port; IdeMode = $IdeMode
+    GiteaVersion = $GiteaVersion; OpenListVersion = $OpenListVersion
+  }
+  if ($BinDir) { $h.BinDir = $BinDir }
+  if ($NoDownload) { $h.NoDownload = $true }
+  if ($ForceEnv) { $h.ForceEnv = $true }
+  if ($DryRun) { $h.DryRun = $true }
+  if ($DownloadProxy) { $h.DownloadProxy = $DownloadProxy }
+  if ($ProxyUrl) { $h.ProxyUrl = $ProxyUrl }
+  & $script @h
+  $cfg = Read-EnvFile $DistEnv
+  if (-not $DryRun -and -not $cfg.GITEA_URL -and -not $cfg.OPENLIST_URL) {
+    Warn 'dist/.env 未包含集成服务地址，请检查上方输出'
+  }
+}
+
 function Assert-Exe {
   if (Test-Path -LiteralPath $Exe) { Good "找到 $Exe"; return }
   Die "缺少 $Exe；请先在有 Node 的机器上执行 cd platform; npm run build，或拷贝已构建好的 dist/ 目录"
@@ -275,6 +315,12 @@ function New-AutoStartVbs {
     'Set sh = CreateObject("WScript.Shell")',
     'd = fso.GetParentFolderName(WScript.ScriptFullName)',
     'sh.CurrentDirectory = d',
+    'r = fso.GetParentFolderName(fso.GetParentFolderName(d))',
+    'svc = fso.BuildPath(r, "windows\native-services.ps1")',
+    'mark = fso.BuildPath(r, "windows\runtime\services.json")',
+    'If fso.FileExists(mark) And fso.FileExists(svc) Then',
+    '  sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & svc & """ -Action start", 0, False',
+    'End If',
     'p = fso.BuildPath(d, "devplatform.exe")',
     'sh.Run Chr(34) & p & Chr(34), 0, False'
   ) -join "`r`n"
@@ -330,13 +376,18 @@ function Show-Summary([string]$ActualMode) {
   $gitea = if ($cfg.GITEA_URL) { $cfg.GITEA_URL } else { "http://localhost:$GiteaPort" }
   $openlist = if ($cfg.OPENLIST_URL) { $cfg.OPENLIST_URL } else { 'http://localhost:5244' }
   $ide = if ($cfg.CODE_SERVER_URL) { $cfg.CODE_SERVER_URL } else { 'http://localhost:8080' }
-  if ($DryRun -and $ActualMode -eq 'local') {
+  if ($DryRun -and ($ActualMode -eq 'local' -or $ActualMode -eq 'native')) {
     $gitea = "http://localhost:$GiteaPort"
     $openlist = 'http://localhost:5244'
     $ide = 'http://localhost:8080'
   }
   Write-Host "    模式        : $ActualMode" -ForegroundColor White
   Write-Host "    控制台      : http://localhost:$Port" -ForegroundColor White
+  if ($ActualMode -eq 'remote') { Write-Host '    集成服务    : 复用已部署服务器（本机无服务进程）' -ForegroundColor DarkGray }
+  elseif ($ActualMode -eq 'native') {
+    Write-Host '    集成服务    : Windows 原生 exe（windows\runtime，无需 Docker）' -ForegroundColor DarkGray
+    Write-Host "    在线 IDE    : $(if ($IdeMode -eq 'none') { '未启用' } elseif ($IdeMode -eq 'wsl') { 'WSL code-server（自行安装）' } else { 'VS Code serve-web' })" -ForegroundColor DarkGray
+  } else { Write-Host '    集成服务    : Docker 容器（gitea / openlist / code-server）' -ForegroundColor DarkGray }
   Write-Host "    Gitea       : $gitea" -ForegroundColor White
   Write-Host "    OpenList    : $openlist" -ForegroundColor White
   Write-Host "    code-server : $ide" -ForegroundColor White
@@ -357,13 +408,14 @@ if ($Mode -eq 'auto') {
   if (Test-Docker) {
     $Mode = 'local'
     Good '检测到可用的 Docker，采用本机完整安装模式'
-  } elseif ((Get-Command node -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $StateFile)) {
+  } elseif ($RemoteHost -or ((Get-Command node -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $StateFile))) {
     $Mode = 'remote'
     Warn '本机没有可用的 Docker，自动切换为「复用已部署服务器」模式'
-    Warn '如需三个服务都跑在本机，请安装 Docker Desktop 后加 -Mode local 重跑'
+    Warn '若希望三个服务完全跑在本机且不需要 Docker，请加 -Mode native 重跑'
   } else {
-    $Mode = 'local'
-    Warn '本机没有 Docker，也没有已登记的服务器；将按本机模式继续并给出安装指引'
+    $Mode = 'native'
+    Warn '本机没有 Docker，也没有已登记的服务器'
+    Good '自动切换为「Windows 原生服务」模式：Gitea/OpenList 用官方 Windows exe，IDE 用 VS Code serve-web'
   }
 }
 
@@ -379,7 +431,7 @@ if ($Mode -eq 'local' -and -not (Test-Docker) -and -not $DryRun) {
       return
     }
   } else {
-    Die '本机模式需要 Docker Desktop。可加 -InstallDocker 尝试自动安装，或加 -Mode remote 复用已有服务器'
+    Die '本机 local 模式需要 Docker Desktop。可加 -InstallDocker 尝试自动安装、加 -Mode remote 复用已有服务器，或改用 -Mode native（无需 Docker）'
   }
 }
 
@@ -387,6 +439,8 @@ if ($Mode -eq 'local') {
   $cfg = New-RootEnv
   $tokens = Start-LocalServices $cfg
   Write-LocalDistEnv $tokens
+} elseif ($Mode -eq 'native') {
+  Start-NativeSetup
 } else {
   Start-RemoteServices
   $cfg = Read-EnvFile $DistEnv

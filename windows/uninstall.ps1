@@ -3,12 +3,15 @@
     powershell -ExecutionPolicy Bypass -File windows\uninstall.ps1
     powershell -ExecutionPolicy Bypass -File windows\uninstall.ps1 -RemoveContainers
     powershell -ExecutionPolicy Bypass -File windows\uninstall.ps1 -RemoveConfig -Force
-  默认保留数据：workspace/、data/、Docker 卷均不删除。
+    powershell -ExecutionPolicy Bypass -File windows\uninstall.ps1 -RemoveNative -Force
+  默认保留数据：workspace/、data/、Docker 卷、windows/runtime（Gitea 仓库与 OpenList 数据）均不删除。
+  无论哪种模式，都会停止原生服务进程。
 #>
 [CmdletBinding()]
 param(
   [switch]$RemoveContainers,
   [switch]$RemoveConfig,
+  [switch]$RemoveNative,
   [switch]$Force
 )
 
@@ -39,6 +42,22 @@ try {
 $lnk = Join-Path ([Environment]::GetFolderPath('Startup')) "$TaskName.lnk"
 if (Test-Path -LiteralPath $lnk) { Remove-Item -LiteralPath $lnk -Force; Good '已删除启动项' }
 
+$runtime = Join-Path $Root 'windows\runtime'
+$services = Join-Path $runtime 'services.json'
+$nativeScript = Join-Path $Root 'windows\native-services.ps1'
+if ((Test-Path -LiteralPath $services) -and (Test-Path -LiteralPath $nativeScript)) {
+  & $nativeScript -Action stop -Root $Root
+  Good '已停止 Windows 原生集成服务'
+} elseif (Test-Path -LiteralPath $services) { Warn '找到原生服务清单但缺少 native-services.ps1，请手动结束 gitea.exe / openlist.exe' }
+
+if ($RemoveNative) {
+  if (-not $Force) { Warn '删除原生服务数据需显式 -Force（含 Gitea 仓库与 OpenList 数据），本次已跳过' }
+  elseif (Test-Path -LiteralPath $runtime) {
+    Remove-Item -LiteralPath $runtime -Recurse -Force
+    Good "已删除 $runtime（含下载的二进制、仓库与配置）"
+  }
+}
+
 if ($RemoveContainers) {
   if (Get-Command docker -ErrorAction SilentlyContinue) {
     Push-Location $Root
@@ -60,5 +79,5 @@ if ($RemoveConfig) {
 }
 
 Write-Host ''
-Write-Host '  数据保留：workspace/、data/、Docker 卷。如需彻底清理请手动删除。' -ForegroundColor DarkGray
+Write-Host '  数据保留：workspace/、data/、windows/runtime（除非 -RemoveNative -Force）、Docker 卷。' -ForegroundColor DarkGray
 Write-Host '  重新安装：双击 windows\install.bat' -ForegroundColor DarkGray

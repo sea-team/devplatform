@@ -1,10 +1,14 @@
 @echo off
 setlocal
-set "DIST=%~dp0..\platform\dist"
+set "ROOT=%~dp0.."
+set "DIST=%ROOT%\platform\dist"
 if not exist "%DIST%\devplatform.exe" (
   echo   ERROR: devplatform.exe not found in %DIST%
   echo   Run windows\install.bat first, or build with: cd platform then npm run build
   exit /b 1
+)
+if exist "%ROOT%\windows\runtime\services.json" (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%ROOT%\windows\native-services.ps1" -Action start >nul 2>&1
 )
 cd /d "%DIST%"
 start "DevPlatform" /min devplatform.exe

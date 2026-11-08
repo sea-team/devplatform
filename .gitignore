@@ -25,3 +25,8 @@ Thumbs.db
 # 工作区：克隆的仓库、构建产物、部署测试目录
 workspace/*
 !workspace/.gitkeep
+
+# Windows 原生集成服务：下载的二进制、Gitea 仓库、OpenList 数据、日志与 PID
+windows/runtime/
+windows/bin/
+.native-probe/
