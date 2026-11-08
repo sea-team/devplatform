@@ -30,7 +30,7 @@ param(
   [ValidateSet('auto', 'code', 'wsl', 'none')][string]$IdeMode = 'auto',
   [string]$GiteaVersion = '1.23.8',
   [string]$OpenListVersion = 'v4.2.6',
-  [string]$DownloadProxy = 'https://ghproxy.net/',
+  [string]$DownloadProxy = 'https://ghfast.top/',
   [string]$ProxyUrl = ''
 )
 

@@ -830,7 +830,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Install
 | `-IdeMode` | `auto` | `auto`（找 VS Code）/ `code`（必须 VS Code）/ `wsl`（自行在 WSL 装 code-server）/ `none`（不启用在线 IDE） |
 | `-GiteaVersion` | `1.23.8` | Gitea Windows exe 版本，决定 `dl.gitea.com` 下载路径 |
 | `-OpenListVersion` | `v4.2.6` | OpenList release tag |
-| `-DownloadProxy` | `https://ghproxy.net/` | GitHub release 的加速前缀；脚本还会依次尝试多个备用源与体积更小的 lite 包，直连可用时可填 `''` |
+| `-DownloadProxy` | `https://ghfast.top/` | GitHub release 的加速前缀（实测该源最稳）；脚本还会依次尝试多个备用源与体积更小的 lite 包，直连可用时可填 `''` |
 | `-ProxyUrl` | 空 | 供 `curl.exe` 使用的 HTTP 代理（`http_proxy` 环境变量通常已够用） |
 
 > `-DryRun` 对 `native` 模式同样有效：只打印「下载哪些文件、启动哪些进程、写入哪些配置」，不下载、不启动、不写文件、不注册任务。
@@ -861,7 +861,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Install
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 提示「本机 local 模式需要 Docker Desktop」 | 显式指定了 `-Mode local` 但没装 Docker | 直接改用 `-Mode native`（无需 Docker）；或启动 Docker Desktop 后重跑 |
-| OpenList / Gitea 下载失败（504 / 超时 / 内网） | GitHub release 或代理不可达 | 脚本会自动尝试多个源；仍失败则把 `gitea.exe` / `openlist.exe` 放到 `windows\bin\`，用 `-BinDir windows\bin -NoDownload` 重跑（§18.10.3）。期间平台本体照常装好，该组件显示「离线/未配置」 |
+| OpenList / Gitea 下载失败（504 / 超时 / 内网） | GitHub release 或代理不可达 | 默认已改用实测最稳的 `ghfast.top`，并会自动尝试多个源与 lite 包；仍失败则把 `gitea.exe` / `openlist.exe` 放到 `windows\bin\`，用 `-BinDir windows\bin -NoDownload` 重跑（§18.10.3）。期间平台本体照常装好，该组件显示「离线/未配置」 |
 | 在线 IDE 显示离线或首次打开很慢 | 本机没装 VS Code，或 `serve-web` 首次需从微软 CDN 拉取 server 组件 | `-IdeMode none` 明确不启用；或装 VS Code 后重跑；`runtime\logs\ide.out.log` 看进度 |
 | 原生服务起不来 | 端口被占、配置生成失败、exe 不匹配 | `-Action status` 看端口/PID；查 `windows\runtime\logs\*.err.log`；确认 3002 / 5244 / 8080 空闲 |
 | 安装日志出现「已添加项，字典中的关键字…」或进程一个都起不来 | 本机代理工具同时注入了 `HTTPS_PROXY` 与 `https_proxy`，PowerShell 5.1 的 `Start-Process` 构造环境变量字典时大小写冲突 | 脚本已在启动子进程前自动去重并在结束后恢复，无需手工处理；若仍失败，临时执行 `Remove-Item Env:https_proxy,Env:http_proxy` 后重跑 |
@@ -959,7 +959,7 @@ node scripts/sync-integrations.js --probe
 下载源按可达性依次尝试，任一成功即停：
 
 - Gitea：`https://dl.gitea.com/gitea/<版本>/gitea-<版本>-windows-4.0-amd64.exe`（官方 CDN，国内通常可达）→ `-DownloadProxy` 转发 GitHub → GitHub 直连；单文件超时 420 秒。
-- OpenList：完整版 `openlist-windows-amd64.zip` 与体积更小的 `openlist-windows-amd64-lite.zip` 各试一轮；每轮按 `-DownloadProxy`（默认 `https://ghproxy.net/`）→ `gh-proxy.com` → `ghfast.top` → `hub.gitmirror.com` → `gh.llkk.cc` → `ghproxy.cc` → GitHub 直连依次尝试。任一成功即停，单个源超时 120 秒，**总下载预算 8 分钟**，超时后不再空转，直接走「逐组件降级」（§18.10.5）。
+- OpenList：完整版 `openlist-windows-amd64.zip` 与体积更小的 `openlist-windows-amd64-lite.zip` 各试一轮；每轮按 `-DownloadProxy`（默认 `https://ghfast.top/`，实测最稳）→ `ghproxy.net` → `gh-proxy.com` → `hub.gitmirror.com` → `gh.llkk.cc` → `ghproxy.cc` → GitHub 直连依次尝试。任一成功即停，单个源超时 120 秒，**总下载预算 8 分钟**，超时后不再空转，直接走「逐组件降级」（§18.10.5）。
 - 下载用系统自带 `curl.exe`（自动读 `http_proxy` / `https_proxy`），失败自动回退 `Invoke-WebRequest`；可用 `-ProxyUrl` 显式指定代理。
 
 #### 18.10.2 目录与端口
@@ -1056,5 +1056,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode na
 - 三个原生进程是「登录时由计划任务拉起」，不是 Windows 服务；注销后停止，重新登录自动恢复。
 - OpenList 若未来调整 `admin token` 输出格式，脚本取不到 Token 时会回退到 `OPENLIST_PASSWORD` 登录（平台已支持），不会中断安装。
 - 二进制版本默认固定为 Gitea `1.23.8` / OpenList `v4.2.6`；升级用 `-GiteaVersion` / `-OpenListVersion`，或手动替换 `runtime/bin/` 下的 exe。
-- 下载大文件受网络影响较大（Gitea 约 112 MB）；国内建议优先用官方 `dl.gitea.com`，OpenList 走 `-DownloadProxy` 或离线放置。
+- 下载大文件受网络影响较大（Gitea 约 112 MB）；Gitea 优先用官方 `dl.gitea.com`，OpenList 默认走 `ghfast.top`（2026-11 实测：GitHub 直连大文件会被代理截断到 2 MB，其它加速源多超时，仅该源可完整下载 48 MB 包并校验通过）；仍不通就用 `-BinDir -NoDownload` 离线放置。
 

@@ -27,7 +27,7 @@ param(
   [ValidateSet('auto', 'code', 'wsl', 'none')][string]$IdeMode = 'auto',
   [string]$GiteaVersion = '1.23.8',
   [string]$OpenListVersion = 'v4.2.6',
-  [string]$DownloadProxy = 'https://ghproxy.net/',
+  [string]$DownloadProxy = 'https://ghfast.top/',
   [string]$ProxyUrl = '',
   [int]$Port = 9000,
   [int]$GiteaPort = 3002,
@@ -521,14 +521,14 @@ function Invoke-Setup {
   foreach ($d in @($Runtime, $Bin, $GiteaHome, $OlHome, $IdeHome, $LogDir, $Workspace)) {
     if ($DryRun) { } else { Ensure-Dir $d }
   }
-  Good "运行目录 $Runtime"
+  if ($DryRun) { Skip "运行目录 $Runtime（将创建）" } else { Good "运行目录 $Runtime" }
 
   $rootCfg = Read-EnvFile $RootEnv
   $pw = $rootCfg.OPENLIST_PASSWORD
   if (-not $pw) {
     $pw = New-Secret 20
-    if (-not $DryRun) { Set-EnvValue $RootEnv 'OPENLIST_PASSWORD' $pw }
-    Good '已生成随机管理员密码并写入根 .env'
+    if ($DryRun) { Skip '生成随机管理员密码并写入根 .env' }
+    else { Set-EnvValue $RootEnv 'OPENLIST_PASSWORD' $pw; Good '已生成随机管理员密码并写入根 .env' }
   }
 
   $giteaFile = "gitea-$GiteaVersion-windows-4.0-amd64.exe"
@@ -544,8 +544,12 @@ function Invoke-Setup {
   $olSources = @()
   $mirrors = @()
   if ($DownloadProxy) { $mirrors += $DownloadProxy.TrimEnd('/') + '/' }
-  $mirrors += @('https://gh-proxy.com/', 'https://ghfast.top/', 'https://hub.gitmirror.com/',
-                'https://gh.llkk.cc/', 'https://ghproxy.cc/', '')
+  # 实测 ghfast.top 对 GitHub release 最稳（其余源常见超时 / 截断），故排在最前。
+  foreach ($m in @('https://ghfast.top/', 'https://ghproxy.net/', 'https://gh-proxy.com/',
+                   'https://hub.gitmirror.com/', 'https://gh.llkk.cc/', 'https://ghproxy.cc/')) {
+    if ($mirrors -notcontains $m) { $mirrors += $m }
+  }
+  $mirrors += ''
   foreach ($asset in @($olZip, $olLite)) {
     $direct = $olBase + $asset
     foreach ($p in $mirrors) { $olSources += ($(if ($p) { $p + $direct } else { $direct })) }
