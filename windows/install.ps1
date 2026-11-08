@@ -6,6 +6,12 @@
     powershell -ExecutionPolicy Bypass -File windows\install.ps1 -Mode native
     powershell -ExecutionPolicy Bypass -File windows\install.ps1 -Mode remote -RemoteHost 10.0.0.246
     powershell -ExecutionPolicy Bypass -File windows\install.ps1 -DryRun
+    powershell -ExecutionPolicy Bypass -File windows\install.ps1 -DistZip D:\share\devplatform-dist.zip
+
+  git clone 后 platform\dist\ 为空是正常现象（构建产物不入库）：
+    安装器会自动从 GitHub Release 下载 CI 发布的 devplatform-dist.zip 并解压，
+    也可用 -DistZip（本地 zip / 已构建好的 dist 目录）、-DistUrl（内网 HTTP）离线安装，
+    或把 zip 放进 windows\bootstrap\ 目录。-SkipDistDownload 可禁用自动下载。
 
   三种集成服务模式：
     local  = Docker 容器（需 Docker Desktop）
@@ -31,7 +37,13 @@ param(
   [string]$GiteaVersion = '1.23.8',
   [string]$OpenListVersion = 'v4.2.6',
   [string]$DownloadProxy = 'https://ghfast.top/',
-  [string]$ProxyUrl = ''
+  [string]$ProxyUrl = '',
+  # ---- 首次安装：获取 platform/dist 预构建包 ----
+  [string]$DistZip = '',
+  [string]$DistUrl = '',
+  [string]$Repo = 'sea-team/devplatform',
+  [string]$ReleaseTag = 'latest',
+  [switch]$SkipDistDownload
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,6 +57,9 @@ $ScriptsDir = Join-Path $Root 'scripts'
 $StateFile = Join-Path $Root 'data\state.json'
 $TaskName = 'DevPlatform'
 $GiteaPort = 3002
+
+# 预构建包获取模块（只定义 Dp-* / Get-DistPackage 函数，不产生副作用）
+. (Join-Path $PSScriptRoot 'dist-package.ps1')
 
 function Step($msg) { Write-Host ''; Write-Host "==> $msg" -ForegroundColor Cyan }
 function Good($msg) { Write-Host "    [OK]   $msg" -ForegroundColor Green }
@@ -303,9 +318,37 @@ function Start-NativeSetup {
   }
 }
 
-function Assert-Exe {
+function Ensure-Dist {
   if (Test-Path -LiteralPath $Exe) { Good "找到 $Exe"; return }
-  Die "缺少 $Exe；请先在有 Node 的机器上执行 cd platform; npm run build，或拷贝已构建好的 dist/ 目录"
+  Step '首次安装：获取 platform\dist 预构建程序包'
+  $opt = @{
+    Root          = $Root
+    Dist          = $Dist
+    Exe           = $Exe
+    ZipPath       = $DistZip
+    Url           = $DistUrl
+    Repo          = $Repo
+    Tag           = $ReleaseTag
+    ProxyUrl      = $ProxyUrl
+    Bootstrap     = (Join-Path $PSScriptRoot 'bootstrap\devplatform-dist.zip')
+    DryRun        = [bool]$DryRun
+    AllowDownload = (-not $SkipDistDownload)
+  }
+  if (Get-DistPackage -Opt $opt) {
+    if (-not $DryRun -and -not (Test-Path -LiteralPath $Exe)) {
+      Die "预构建包已处理，但仍未找到 $Exe；请检查包内是否含 devplatform.exe / bundle.cjs / public/"
+    }
+    return
+  }
+  $hints = @(
+    "未能获取 $Exe。请任选一种方式后重跑：",
+    '  1) 仓库维护者发布预构建包：git tag v0.2.0; git push origin v0.2.0（GitHub Actions 自动构建并发布 Release）',
+    '  2) 内网/离线：在已有 dist 的机器执行 windows\pack-dist.ps1，把 zip 拷来后用 -DistZip <路径> 指定，或放入 windows\bootstrap\',
+    '  3) 内网 HTTP 服务：-DistUrl http://<内网地址>/devplatform-dist.zip',
+    '  4) 临时用 Node 构建：cd platform; npm ci; npm run build',
+    '  5) 直接拷贝另一台机器的整个 platform\dist\ 目录（已有的 .env / data 会被自动保留）'
+  ) -join "`n"
+  Die $hints
 }
 
 function New-AutoStartVbs {
@@ -402,7 +445,7 @@ Write-Host 'DevPlatform · Windows 一键安装' -ForegroundColor Cyan
 Write-Host "安装目录: $Root" -ForegroundColor DarkGray
 if ($DryRun) { Write-Host '模式: DRY-RUN（不修改任何系统状态）' -ForegroundColor Yellow }
 
-Assert-Exe
+Ensure-Dist
 
 if ($Mode -eq 'auto') {
   if (Test-Docker) {

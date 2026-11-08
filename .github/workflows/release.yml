@@ -1,0 +1,95 @@
+name: 构建 Windows 预构建包并发布 Release
+
+# git clone 后安装器会自动下载本 workflow 发布的 devplatform-dist.zip。
+# 触发：推送 v* tag（推荐），或在 Actions 页面手动运行（可指定 tag）。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布用的 tag（如 v0.2.0）；留空则取 platform/package.json 版本'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: platform/package-lock.json
+
+      - name: 安装构建依赖
+        working-directory: platform
+        run: npm ci
+
+      # build.mjs 会从当前 node.exe 动态提取 SEA sentinel，换 Node 小版本不会失败
+      - name: 构建 dist（SEA 单文件 + 外置业务包）
+        working-directory: platform
+        run: npm run build
+
+      - name: 打包可分发 zip（排除 .env / data / workspace）
+        shell: pwsh
+        run: |
+          ./windows/pack-dist.ps1 -Root (Get-Location).Path -Output (Join-Path (Get-Location).Path 'devplatform-dist.zip')
+
+      - name: 计算发布 tag
+        id: meta
+        shell: pwsh
+        run: |
+          $t = '${{ inputs.tag }}'
+          if (-not $t) { $t = '${{ github.ref_name }}' }
+          if (-not $t -or $t -eq 'main' -or $t -eq 'master') {
+            $t = 'v' + (Get-Content platform/package.json -Raw | ConvertFrom-Json).version
+          }
+          "tag=$t" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: 发布 / 更新 Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ steps.meta.outputs.tag }}'
+          $zip = 'devplatform-dist.zip'
+          $sums = 'SHA256SUMS.txt'
+          $size = [Math]::Round((Get-Item -LiteralPath $zip).Length / 1MB, 1)
+          $notes = @(
+            "DevPlatform Windows 预构建包（$size MB）",
+            '',
+            '由 GitHub Actions 在 windows-latest 上执行 npm ci + npm run build 自动构建。',
+            'git clone 后直接运行 windows\install.bat，安装器会自动下载本包并解压到 platform\dist\。',
+            '也可手动下载后用 -DistZip 指定，或放入 windows\bootstrap\ 离线安装。',
+            '',
+            "Commit: $env:GITHUB_SHA"
+          ) -join "`n"
+          $notes | Out-File -FilePath release-notes.md -Encoding utf8
+          gh release view $tag | Out-Null
+          $exists = ($LASTEXITCODE -eq 0)
+          if ($exists) {
+            gh release upload $tag $zip $sums --clobber
+          } else {
+            $extra = @()
+            if ('${{ github.event_name }}' -ne 'push') { $extra += @('--target', $env:GITHUB_SHA) }
+            gh release create $tag $zip $sums --title "DevPlatform $tag" --notes-file release-notes.md @extra
+          }
+          if ($LASTEXITCODE -ne 0) { throw '发布 Release 失败' }
+
+      - name: 留存构建产物（便于排查）
+        uses: actions/upload-artifact@v4
+        with:
+          name: devplatform-dist
+          path: |
+            devplatform-dist.zip
+            SHA256SUMS.txt

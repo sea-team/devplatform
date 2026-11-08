@@ -22,9 +22,22 @@ const EXE = path.join(DIST, process.platform === 'win32' ? 'devplatform.exe' : '
 const args = process.argv.slice(2);
 const bundleOnly = args.includes('--bundle-only');
 const noSea = args.includes('--no-sea');
-// 与 Node 二进制内 node_sea.cc 的字面量保持一致（可由
-// node -e "fs.readFileSync(process.execPath).indexOf('NODE_SEA_FUSE_')" 核对）。
-const SEA_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
+// Node 二进制内的 SEA sentinel 字面量随 Node 版本 / 发行构建而变化，硬编码会让 CI
+// （不同 Node 22 小版本）构建失败。这里直接从当前 node 可执行文件里提取。
+// 回退值来自本机 Node 22.22.2，仅在提取失败时使用。
+const SEA_FUSE_FALLBACK = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
+function detectSeaFuse() {
+  try {
+    const buf = fs.readFileSync(process.execPath);
+    const i = buf.indexOf(Buffer.from('NODE_SEA_FUSE_'));
+    if (i < 0) return SEA_FUSE_FALLBACK;
+    const tail = buf.toString('latin1', i, Math.min(i + 64, buf.length));
+    const m = tail.match(/^NODE_SEA_FUSE_[0-9a-f]{32}/);
+    return m ? m[0] : SEA_FUSE_FALLBACK;
+  } catch {
+    return SEA_FUSE_FALLBACK;
+  }
+}
 
 const log = (...a) => console.log('[build]', ...a);
 const sha256 = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -146,8 +159,10 @@ async function buildSea(tarFile) {
 
   fs.copyFileSync(process.execPath, EXE);
   const { inject } = require('postject');
+  const fuse = detectSeaFuse();
+  log(`SEA sentinel  ${fuse}`);
   await inject(EXE, 'NODE_SEA_BLOB', fs.readFileSync(blobPath), {
-    sentinelFuse: SEA_FUSE,
+    sentinelFuse: fuse,
     machoSegmentName: process.platform === 'darwin' ? 'NODE_SEA' : undefined,
   });
   log(`exe          ${path.basename(EXE)}  ${(fs.statSync(EXE).size / 1024 / 1024).toFixed(1)} MB`);

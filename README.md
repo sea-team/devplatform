@@ -84,7 +84,7 @@
 | A. 宿主机直接跑 `node platform/src/server.js` | 本机开发、要用宿主机/WSL 里的 codex、claude | 能调用本机 CLI 与 WSL；改代码即时生效 | 需要 Node ≥ 20；集成服务要另行启动 |
 | B. `docker compose --profile full up -d` | 一台机器上完整拉起全部组件 | 一条命令、组件网络互通 | 镜像需可拉取；容器内**无法**使用 WSL / 宿主机 CLI |
 | C. `scripts/remote.js deploy <host>` | 部署到远程服务器（当前线上采用） | 自动选运行时（宿主机 Node ≥ 20 用 systemd，否则复用已有 node 镜像跑容器）；不依赖 Docker Hub | 需要先在本机 `data/state.json` 登记目标机凭据 |
-| **D. 单文件程序 `platform/dist/devplatform.exe`** | **本机 / 内网机器免装 Node 直接运行** | 双击即跑；业务与前端可在线热更，支持回滚；详见 [§17](#17-单文件可执行程序与热更新) | 需要先用 Node 构建一次；exe 壳本身升级需手动替换 |
+| **D. 单文件程序 `platform/dist/devplatform.exe`** | **本机 / 内网机器免装 Node 直接运行** | 双击即跑；业务与前端可在线热更，支持回滚；详见 [§17](#17-单文件可执行程序与热更新) | 构建产物不入库；`git clone` 后由安装器自动下载 CI 发布的预构建包（[§18.11](#1811-从-github-clone-后首次安装无-node无-dist)），或自行 `npm run build`；exe 壳升级需手动替换 |
 
 **当前线上是方式 C + 三个配套组件用 compose 单独启动**：`devplatform` 容器占用 9000，compose 的 `platform` 服务带 `profiles: ["full"]`，默认不启动，避免抢端口。方式 D 只影响本机运行，不改变线上部署方式。
 
@@ -92,7 +92,7 @@
 
 ## 3. 快速开始
 
-> **Windows 用户推荐直接看第 18 章**：准备好 `platform/dist/devplatform.exe` 后双击 `windows\install.bat` 即可一键装好平台与集成服务、初始化凭据并配置开机自启。**没有 Docker 也能装**——安装器会自动改用 Windows 原生 exe（Gitea / OpenList）+ VS Code 内置 Web IDE，详见 §18.10。下面 3.2–3.4 是各运行方式的手动步骤，用于理解原理或排错。
+> **Windows 用户推荐直接看第 18 章**：`git clone` 后**不必先准备 `platform/dist/devplatform.exe`**——双击 `windows\install.bat`，安装器会自动下载 CI 发布的预构建包（或读取 `windows\bootstrap\` 里的离线 zip，见 [§18.11](#1811-从-github-clone-后首次安装无-node无-dist)），一键装好平台与集成服务、初始化凭据并配置开机自启。**没有 Docker 也能装**——安装器会自动改用 Windows 原生 exe（Gitea / OpenList）+ VS Code 内置 Web IDE，详见 §18.10。下面 3.2–3.4 是各运行方式的手动步骤，用于理解原理或排错。
 
 ### 3.1 前置条件
 
@@ -512,8 +512,10 @@ node scripts/verify.js http://<host>:9000
 ```
 devplatform/
 ├── .env.example            # 配置模板（已入库）
-├── .gitignore              # 排除凭据 / 依赖 / 运行时数据
+├── .gitignore              # 排除凭据 / 依赖 / 运行时数据 / 构建产物
 ├── README.md               # 本文
+├── .github/workflows/
+│   └── release.yml         # CI：构建 Windows dist 并发布 Release 预构建包（§18.11）
 ├── docker-compose.yml      # gitea / code-server / openlist / platform(full profile)
 ├── platform/
 │   ├── Dockerfile
@@ -529,7 +531,10 @@ devplatform/
 │                           # check-frontend.js、sync-integrations.js（本机配置同步）
 ├── windows/                # Windows 一键安装：install.bat / install.ps1 /
 │                           # native-services.ps1（无 Docker 原生服务）/
+│                           # dist-package.ps1（获取/校验/解压预构建包）/
+│                           # pack-dist.ps1（生成离线 zip）/
 │                           # start.bat / stop.bat / uninstall.ps1（§18）
+│   ├── bootstrap/          # 离线预构建包放置处（zip 不入库，§18.11）
 │   └── runtime/            # 运行时（不入库）：bin/ 下载的 exe、gitea/ 仓库、
 │                           # openlist/ 数据、ide/、logs/、services.json、pids.txt
 ├── data/                   # 运行时状态（不入库，600/700）
@@ -755,7 +760,7 @@ node scripts/sync-integrations.js --probe
 | 项 | 要求 | 检查方式 |
 |---|---|---|
 | 系统 | Windows 10 1809+ / Windows 11，PowerShell 5.1+ | `$PSVersionTable.PSVersion` |
-| 平台程序 | `platform/dist/devplatform.exe` 已存在 | 没有则先在有 Node 的机器执行 `cd platform; npm run build`，或拷贝构建好的整个 `dist/` |
+| 平台程序 | **无需预先准备**：`platform/dist/devplatform.exe` 缺失时安装器自动获取（§18.11） | 已存在则直接用；没有也能装，只需能访问 GitHub Release，或备好离线 zip / 内网 URL |
 | 端口 | 9000 / 3002 / 5244 / 8080 未被占用（Gitea SSH 222、OpenList 5245 也需空闲） | `netstat -ano \| findstr ":9000 :3002 :5244 :8080"` |
 | `native` 模式 | **无需 Docker / WSL / Node / bash**；需联网下载 Gitea（约 112 MB）与 OpenList（完整包约 48 MB / lite 包约 31 MB）二进制，或提前放到 `windows\bin\` 走离线安装；在线 IDE 需要本机装有 VS Code（可选，缺失会自动降级） | `Get-Command code.cmd`、`Test-Path windows\bin` |
 | `local` 模式 | Docker Desktop 已安装并**正在运行**（托盘图标为 Running） | `docker info` |
@@ -768,7 +773,9 @@ node scripts/sync-integrations.js --probe
 
 ### 18.3 一键安装
 
-**最简单**：双击 `windows\install.bat`，等它跑完，浏览器会自动打开 `http://localhost:9000`。**没有 Docker 的机器会全自动走 `native` 模式**，不需要任何额外参数。
+**最简单**：`git clone` 后直接双击 `windows\install.bat`，等它跑完，浏览器会自动打开 `http://localhost:9000`。**没有 Docker 的机器会全自动走 `native` 模式**；**没有 `platform\dist\` 也会自动下载预构建包**（§18.11），两者都不需要额外参数。
+
+> 从 GitHub 拉代码第一次安装时，安装器开头会多一步「获取 platform\dist 预构建程序包」。若机器不通外网，把 `devplatform-dist.zip` 放进 `windows\bootstrap\` 即可完全离线，详见 §18.11.2。
 
 等价命令行（可加参数）：
 
@@ -787,6 +794,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode lo
 # 复用已部署服务器
 powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode remote -RemoteHost 10.0.0.246
 
+# clone 后无外网：用离线预构建包（zip 放进 windows\bootstrap\ 时连参数都不用）
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -DistZip D:\share\devplatform-dist.zip
+
 # 先看会做什么、不改动任何东西
 powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -DryRun
 
@@ -800,7 +810,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Install
 
 | 步骤 | `local` 模式 | `native` 模式（无 Docker） | `remote` 模式 |
 |---|---|---|---|
-| 1 | 校验 `devplatform.exe` 存在 | 同左 | 同左 |
+| 1 | 校验 `devplatform.exe`；缺失则自动下载 / 解压预构建包（§18.11） | 同左 | 同左 |
 | 2 | 生成根 `.env`：随机管理员密码、镜像加速器前缀；已存在则保留 | 读取/生成根 `.env` 的管理员密码；创建 `windows\runtime\` 运行目录 | 调用 `scripts/sync-integrations.js` 从服务器读取地址与 Token |
 | 3 | `docker compose up -d gitea openlist code-server` | 下载（或复制离线）`gitea.exe`、`openlist.exe` 到 `runtime\bin\`；生成 Gitea `custom/conf/app.ini`（SQLite + INSTALL_LOCK） | — |
 | 4 | 轮询三个健康端点 | 初始化 Gitea 数据库与 admin；隐藏窗口启动三个原生进程并记录 PID | `sync-integrations.js --probe` 预检三个端点 |
@@ -832,6 +842,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Install
 | `-OpenListVersion` | `v4.2.6` | OpenList release tag |
 | `-DownloadProxy` | `https://ghfast.top/` | GitHub release 的加速前缀（实测该源最稳）；脚本还会依次尝试多个备用源与体积更小的 lite 包，直连可用时可填 `''` |
 | `-ProxyUrl` | 空 | 供 `curl.exe` 使用的 HTTP 代理（`http_proxy` 环境变量通常已够用） |
+| `-DistZip` | 空 | **首次安装**：本地 `devplatform-dist.zip` 或已构建好的 `platform\dist\` 目录；指定后不再尝试其它来源 |
+| `-DistUrl` | 空 | **首次安装**：自定义下载地址（内网 HTTP 常用），优先于 GitHub Release |
+| `-Repo` | `sea-team/devplatform` | **首次安装**：Release 所在仓库；fork 后改成自己的 `owner/repo` |
+| `-ReleaseTag` | `latest` | **首次安装**：指定 Release tag，如 `v0.2.0` |
+| `-SkipDistDownload` | 关 | **首次安装**：禁用联网下载，只用本地已有文件 / `-DistZip` / `-DistUrl` |
+
+> `-NoDownload` 只管 `native` 模式的 Gitea / OpenList 二进制；禁用平台预构建包的自动下载要用 `-SkipDistDownload`，两者互不影响。
 
 > `-DryRun` 对 `native` 模式同样有效：只打印「下载哪些文件、启动哪些进程、写入哪些配置」，不下载、不启动、不写文件、不注册任务。
 
@@ -860,6 +877,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Install
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
+| `git clone` 后报「缺少 devplatform.exe」 | `dist/` 按设计不入库，旧版安装器只做了校验 | 更新到含 §18.11 的版本后重跑 `install.bat`：会自动下载 Release 预构建包；无外网就把 `devplatform-dist.zip` 放进 `windows\bootstrap\` |
 | 提示「本机 local 模式需要 Docker Desktop」 | 显式指定了 `-Mode local` 但没装 Docker | 直接改用 `-Mode native`（无需 Docker）；或启动 Docker Desktop 后重跑 |
 | OpenList / Gitea 下载失败（504 / 超时 / 内网） | GitHub release 或代理不可达 | 默认已改用实测最稳的 `ghfast.top`，并会自动尝试多个源与 lite 包；仍失败则把 `gitea.exe` / `openlist.exe` 放到 `windows\bin\`，用 `-BinDir windows\bin -NoDownload` 重跑（§18.10.3）。期间平台本体照常装好，该组件显示「离线/未配置」 |
 | 在线 IDE 显示离线或首次打开很慢 | 本机没装 VS Code，或 `serve-web` 首次需从微软 CDN 拉取 server 组件 | `-IdeMode none` 明确不启用；或装 VS Code 后重跑；`runtime\logs\ide.out.log` 看进度 |
@@ -1058,3 +1076,60 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode na
 - 二进制版本默认固定为 Gitea `1.23.8` / OpenList `v4.2.6`；升级用 `-GiteaVersion` / `-OpenListVersion`，或手动替换 `runtime/bin/` 下的 exe。
 - 下载大文件受网络影响较大（Gitea 约 112 MB）；Gitea 优先用官方 `dl.gitea.com`，OpenList 默认走 `ghfast.top`（2026-11 实测：GitHub 直连大文件会被代理截断到 2 MB，其它加速源多超时，仅该源可完整下载 48 MB 包并校验通过）；仍不通就用 `-BinDir -NoDownload` 离线放置。
 
+### 18.11 从 GitHub clone 后首次安装（无 Node、无 dist）
+
+**问题**：`git clone` 出来的仓库里没有 `platform/dist/devplatform.exe`——`dist/` 在 `.gitignore` 中，84 MB 的 exe 刻意不入库。以前直接跑 `install.ps1` 会报「缺少 devplatform.exe；请先在有 Node 的机器上执行 npm run build」。
+
+**现在**：安装器第一步 `Ensure-Dist` 自动补齐，按以下优先级取包：
+
+| 顺序 | 来源 | 触发方式 | 适用场景 |
+|---|---|---|---|
+| 1 | 已有 `platform/dist/` | 自动检测 | 已构建 / 已拷贝过 |
+| 2 | `-DistZip <zip 或 dist 目录>` | 显式指定 | 内网、离线、指定版本 |
+| 3 | `windows\bootstrap\devplatform-dist.zip` | 放进去即可，零参数 | **内网批量分发（推荐）** |
+| 4 | `-DistUrl <http://...>` | 显式指定 | 内网文件服务器 |
+| 5 | GitHub Release `devplatform-dist.zip` | 默认自动，`-ReleaseTag` 指定版本 | 有外网的新机器 |
+
+下载依次尝试 `ghfast.top` 加速 → GitHub 直连 → `gh-proxy.com` / `hub.gitmirror.com` / `ghproxy.net`，单源超时 300 秒。拿到包后先校验结构（必须含 >10 MB 的 `devplatform.exe`，避免把 504 页面当包），再尝试下载同目录 `SHA256SUMS.txt` 做哈希校验（取不到则跳过、不阻断），最后解压到 `platform/dist/`。**已有的 `.env` / `data/` / `workspace/` 一律保留**，不会被覆盖。
+
+#### 18.11.1 让仓库自动发布预构建包
+
+仓库维护者做一次（有推送权限即可，不需要本机装 Node）：
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` 会在 `windows-latest` 上执行 `npm ci` → `npm run build` → `windows/pack-dist.ps1`，把 `devplatform-dist.zip` 与 `SHA256SUMS.txt` 发布到该 tag 的 Release；也可在 Actions 页面手动运行并输入 tag。`build.mjs` 会**从当前 node.exe 动态提取 SEA sentinel 字面量**，所以 CI 换 Node 22 小版本也不会因硬编码常量构建失败。
+
+> 仓库为 public，Release 资产无需任何 Token 即可下载。升版本时请同步 `platform/package.json` 的 `version` 与 tag。
+
+#### 18.11.2 内网 / 完全离线
+
+在**已有构建产物的一台机器**上生成包：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\pack-dist.ps1
+# 产出 windows\bootstrap\devplatform-dist.zip（约 35 MB）+ SHA256SUMS.txt
+```
+
+把 zip 拷到目标机器的 `windows\bootstrap\`（该目录随仓库存在），直接双击 `install.bat` 即可，不需要任何参数、不需要外网。也可以显式指定：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -DistZip D:\share\devplatform-dist.zip
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -DistUrl http://10.0.0.5/pkg/devplatform-dist.zip
+```
+
+`-DistZip` 也接受**一个已构建好的 `platform\dist\` 目录**，此时直接复制、不解压。用 `-SkipDistDownload` 可彻底禁用联网下载。
+
+#### 18.11.3 排错
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `未能获取 ... devplatform.exe` | 仓库还没有 Release，也没有离线包 | 按 §18.11.1 推 tag，或按 §18.11.2 放 zip |
+| 「不是有效预构建包」 | 代理返回 504 页面 / 大文件被截断 | 换 `-DistUrl` 指向内网源，或用 `windows\bootstrap\` 离线包 |
+| `SHA256 不匹配` | 包与校验文件不是同一版本 | 重跑或指定 `-ReleaseTag` |
+| CI 报 `Could not find the sentinel` | Node 版本差异 | `build.mjs` 已动态提取；确认 `actions/setup-node` 用官方 Node 22 |
+| fork 后仍下载到原仓库的包 | 默认 `-Repo` 未改 | 加 `-Repo <你的 owner/repo>` |
+| `-DryRun` 没看到下载 | DryRun 只打印计划 | 去掉 `-DryRun` 才会真正下载解压 |
