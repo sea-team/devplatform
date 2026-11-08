@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261106b" />
+  <link rel="stylesheet" href="/style.css?v=20261108a" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -43,6 +43,7 @@
         <button class="tab-scroll" id="tab-scroll-next" aria-label="向右滚动标签" hidden>›</button>
         <div class="tabbar-tools">
           <span class="pill live pill-mini" id="demo-pill">正常模式</span>
+          <button class="tab-tool sys-version" id="sys-btn" title="版本与热更新" aria-label="版本与热更新">版本</button>
           <button class="tab-tool" id="tab-info" title="当前标签说明" aria-label="查看当前标签说明">ⓘ</button>
           <button class="tab-tool" id="refresh-btn" title="刷新当前页" aria-label="刷新当前页">⟳</button>
           <button class="tab-tool" id="tab-new" title="新建文件管理器 / 终端">＋</button>
@@ -53,6 +54,17 @@
           <button data-tab-menu="close-all">关闭所有可关闭标签</button>
           <button data-tab-menu="open-modules">打开全部模块页</button>
           <button data-tab-menu="refresh">刷新当前页</button>
+        </div>
+        <div class="sys-menu" id="sys-menu" hidden>
+          <div class="sys-head">
+            <div class="sys-title">平台版本</div>
+            <div class="sys-ver" id="sys-version">-</div>
+            <div class="sys-meta" id="sys-meta">-</div>
+          </div>
+          <button data-sys="check">检查更新</button>
+          <button data-sys="apply">应用更新</button>
+          <button data-sys="reload">重载后端（热替换）</button>
+          <button data-sys="rollback">回滚上一版本</button>
         </div>
         <div class="tab-tip" id="tab-tip" hidden></div>
       </div>
@@ -315,6 +327,6 @@
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261106b"></script>
+  <script src="/app.js?v=20261108a"></script>
 </body>
 </html>

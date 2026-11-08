@@ -12,7 +12,7 @@
 | 章节 | 内容 |
 |---|---|
 | 1 | 平台能力与架构、端口 |
-| 2 | 三种运行方式如何选 |
+| 2 | 四种运行方式如何选 |
 | 3 | 快速开始（本机 / compose / 远程部署） |
 | 4 | 环境变量完整说明 |
 | 5 | 访问与鉴权 |
@@ -27,6 +27,7 @@
 | 14 | 安全须知 |
 | 15 | 故障排查 |
 | 16 | 目录结构、Git 与已知限制 |
+| 17 | 单文件可执行程序与热更新（本机免 Node） |
 
 ---
 
@@ -75,15 +76,16 @@
 
 ---
 
-## 2. 三种运行方式如何选
+## 2. 四种运行方式如何选
 
 | 方式 | 适用场景 | 优点 | 限制 |
 |---|---|---|---|
 | A. 宿主机直接跑 `node platform/src/server.js` | 本机开发、要用宿主机/WSL 里的 codex、claude | 能调用本机 CLI 与 WSL；改代码即时生效 | 需要 Node ≥ 20；集成服务要另行启动 |
 | B. `docker compose --profile full up -d` | 一台机器上完整拉起全部组件 | 一条命令、组件网络互通 | 镜像需可拉取；容器内**无法**使用 WSL / 宿主机 CLI |
 | C. `scripts/remote.js deploy <host>` | 部署到远程服务器（当前线上采用） | 自动选运行时（宿主机 Node ≥ 20 用 systemd，否则复用已有 node 镜像跑容器）；不依赖 Docker Hub | 需要先在本机 `data/state.json` 登记目标机凭据 |
+| **D. 单文件程序 `platform/dist/devplatform.exe`** | **本机 / 内网机器免装 Node 直接运行** | 双击即跑；业务与前端可在线热更，支持回滚；详见 [§17](#17-单文件可执行程序与热更新) | 需要先用 Node 构建一次；exe 壳本身升级需手动替换 |
 
-**当前线上是方式 C + 三个配套组件用 compose 单独启动**：`devplatform` 容器占用 9000，compose 的 `platform` 服务带 `profiles: ["full"]`，默认不启动，避免抢端口。
+**当前线上是方式 C + 三个配套组件用 compose 单独启动**：`devplatform` 容器占用 9000，compose 的 `platform` 服务带 `profiles: ["full"]`，默认不启动，避免抢端口。方式 D 只影响本机运行，不改变线上部署方式。
 
 ---
 
@@ -91,7 +93,7 @@
 
 ### 3.1 前置条件
 
-- Node.js ≥ 20（方式 A / 运行 `scripts/*.js`）；Docker 与 docker compose（方式 B / C）。
+- Node.js ≥ 20（方式 A / B / 构建方式 D 的 exe / 运行 `scripts/*.js`）；**方式 D 运行时不需要 Node**。Docker 与 docker compose（方式 B / C）。
 - Windows 下用 **Git Bash** 执行脚本；所有以 `/` 开头的路径参数必须加 `MSYS_NO_PATHCONV=1`，否则会被转义成本机 Windows 路径（例如 `/data/platform` 变成 `J:/...`），或改用 `DEPLOY_DIR=/data/platform` 环境变量。
 - 平台核心零依赖即可启动；`ssh2`、`undici`、`iconv-lite` 为可选增强依赖，缺失时 SSH/代理/GBK 编码能力会降级。
 
@@ -422,8 +424,12 @@ node scripts/verify.js http://<host>:9000
 | 命令 | 作用 |
 |---|---|
 | `cd platform && npm start` | 启动平台 |
-| `cd platform && npm run dev` | `node --watch` 热重载 |
-| `cd platform && npm run check` | 全量源码语法检查 |
+| `cd platform && npm run watch` | `node --watch` 源码直跑（无引导器） |
+| `cd platform && npm run dev` | 引导器开发模式：监听 `src/` + `public/`，自动重建并热重载（§17.6） |
+| `cd platform && npm run build` | 构建单文件程序到 `platform/dist/`（§17.2） |
+| `cd platform && npm run build:bundle` | 只重建 `bundle.cjs` 与 `public/`，不重新生成 exe |
+| `platform/dist/devplatform.exe version\|reload\|update\|rollback` | 单文件程序的版本 / 重载 / 更新 / 回滚命令（§17.3） |
+| `cd platform && npm run check` | 全量源码语法检查（含引导器与 mini.js） |
 | `node scripts/remote.js probe <host>` | 探测目标机 OS / 内核 / Node / Docker / 端口 / 磁盘 / 网络 |
 | `node scripts/remote.js deploy <host> [目录]` | 打包上传、解压、选运行时、启动、健康检查、幂等登记服务器 |
 | `node scripts/remote.js status <host>` | 结构化采集服务器状态 |
@@ -501,7 +507,10 @@ devplatform/
 ├── docker-compose.yml      # gitea / code-server / openlist / platform(full profile)
 ├── platform/
 │   ├── Dockerfile
-│   ├── package.json        # npm start / dev / check
+│   ├── package.json        # npm start / dev / build / check
+│   ├── build.mjs           # esbuild + Node SEA 打包，产出 dist/
+│   ├── launcher/           # 引导器（内嵌 exe）：监督、热重载、更新、回滚
+│   ├── dist/               # 构建产物（不入库）：devplatform.exe / bundle.cjs / public / release.json
 │   ├── public/             # 控制台：index.html、app.js、style.css、cm-theme.css
 │   │   └── vendor/         # 离线 xterm.js + CodeMirror 5（无需外网）
 │   └── src/                # core / mini / server / integrations / engine
@@ -533,3 +542,114 @@ git commit -m "feat: ..."
 - 动态标签（文件 / 编辑器 / 终端）不跨浏览器刷新恢复；模块标签顺序会恢复。
 - 一期未实现多租户 / 细粒度权限、GitOps 自动触发、Web 终端文件上传进度条。
 - `wsl.exe` 在部分受安全策略管控的 Windows 沙箱内会被拦截，需在真实宿主机运行本地 CLI 能力。
+
+---
+
+## 17. 单文件可执行程序与热更新
+
+让本机运行不再依赖 Node：把控制台编译成 `devplatform.exe`，同时保留「改代码不用重新编译、能在线升级和回滚」的能力。
+
+### 17.1 设计取舍
+
+| 路线 | 评估 |
+|---|---|
+| Go 重写后端 | 需移植 8 个模块约 2500 行（SSH/SFTP、SSE 终端、多编码、Docker Engine API、WSL CLI），约 3500–4500 行 Go 且要重做全量回归；线上容器也要换镜像。风险高，列为二期 |
+| **Node SEA 单文件 + 外置业务包（已实现）** | 现有逻辑零改动；exe 内嵌 Node 运行时与引导器，业务代码 `bundle.cjs`、前端 `public/` 外置。既免装 Node，又天然支持热更新 |
+| 纯 `pkg` 打成单个大 exe（业务也内嵌） | 改一行后端就要重新编译整个 exe，与热更新目标冲突，未采用 |
+
+架构分层：exe（固化的运行时 + 引导器）→ 监督进程 `fork` 业务 worker；worker 通过 `DP_ROOT` 定位外置的 `bundle.cjs`、`public/`、`data/`。源码直跑时不设置 `DP_ROOT`，行为与原来完全一致，因此线上方式 C 不受影响。
+
+### 17.2 构建与分发
+
+```bash
+cd platform
+npm install                 # 仅构建时需要 Node；运行 exe 的机器不需要
+npm run build               # 生成 platform/dist/
+```
+
+| 产物 | 说明 | 更新时 |
+|---|---|---|
+| `devplatform.exe` | 内嵌 Node 运行时、引导器、前端 `public.tar.gz`（首启释放），约 84 MB | 壳固化；升级引导器/Node 版本时手动替换 |
+| `bundle.cjs` | esbuild 把 8 个后端模块 + 纯 JS 依赖打成单文件，约 2 MB | **可热替换** |
+| `public/` | 前端静态资源，服务端 `no-cache`；首次启动从 exe 释放 | **可热替换** |
+| `release.json` | 版本号 + 每个文件的 `sha256` / `size` 清单 | 随更新写入 |
+| `data/` | `state.json`、`backups/`、`.staging/` | **永不覆盖** |
+| `.env`（可选） | 与 `data/` 同级的运行配置，引导器启动时加载 | **永不覆盖** |
+
+把整个 `dist/` 复制到任意 Windows 机器，双击 `devplatform.exe` 即可访问 `http://localhost:9000`。Linux / macOS 需在对应平台执行 `npm run build`，`build.mjs` 会生成 `devplatform`（无 `.exe` 后缀）并按平台注入 SEA 资源。
+
+> 构建踩坑记录：Windows 上 postject 需要二进制内存在 `NODE_SEA_FUSE_...:0` 标记，且该字面量随 Node 构建不同而变化。`build.mjs` 已使用本机 Node 22 的正确值；换 Node 版本后如报 `Could not find the sentinel`，用 `node -e "console.log(require('fs').readFileSync(process.execPath).indexOf('NODE_SEA_FUSE_'))"` 核对并调整 `SEA_FUSE`。
+
+### 17.3 运行命令
+
+| 命令 | 作用 |
+|---|---|
+| `devplatform.exe` | 启动控制台（监督进程 + 业务 worker），默认 `http://localhost:9000` |
+| `devplatform.exe --dev` | 开发模式，见 §17.6 |
+| `devplatform.exe version` | 查看版本、运行模式、exe 根目录、备份数量 |
+| `devplatform.exe reload` | 通过 HTTP 平滑重启正在运行的业务（需 `ADMIN_TOKEN` 一致） |
+| `devplatform.exe update <源>` | 应用更新；`<源>` 是本地目录或 `release.json` 的 URL，省略时用 `DP_UPDATE_URL` |
+| `devplatform.exe update <源> --force` | 版本号相同也强制重装 |
+| `devplatform.exe rollback` | 回滚到最近一次备份并重载 |
+| `devplatform.exe help` | 查看内置帮助 |
+
+界面入口：标签栏右端的**版本徽标**（如 `v0.2.0`），点开可查看运行模式与构建时间，并执行「检查更新 / 应用更新 / 重载后端 / 回滚上一版本」。所有 `/api/system/*` 接口都受 `ADMIN_TOKEN` 保护。
+
+### 17.4 三层热更新
+
+| 层级 | 触发方式 | 是否重编译 exe | 生效时间 |
+|---|---|---|---|
+| 前端热更 | 直接改 `dist/public/` 下文件，浏览器刷新 | 否 | 即时（`cache-control: no-cache`） |
+| 后端热替换 | 替换 `bundle.cjs` 后点「重载后端」或 `devplatform.exe reload` | 否 | 1–2 秒：旧 worker 收到 `SIGTERM` 优雅关闭，监督进程拉起加载新 bundle 的 worker |
+| 版本自更新 | 界面「应用更新」或 `update <源>` | 否 | 校验 → 备份 → 原子替换 → 自动 reload |
+
+更新流程会先按 `release.json` 逐个校验 `sha256`，任一文件不符即中止且不动现有版本；替换前把旧 `bundle.cjs` / `public/` / `release.json` 备份到 `dist/data/backups/<时间戳>-from-<旧版本>/`，失败可一键回滚。`data/state.json` 与 `.env` 从不参与替换。
+
+### 17.5 更新源格式
+
+本地目录或 HTTP 目录下放一份 `release.json` 与对应文件：
+
+```json
+{
+  "version": "0.2.1",
+  "buildTime": "2026-11-08T08:00:00.000Z",
+  "bundle": { "path": "bundle.cjs", "sha256": "<64 位十六进制>", "size": 2175095 },
+  "public": [
+    { "path": "index.html", "sha256": "<64 位十六进制>", "size": 19287 }
+  ]
+}
+```
+
+发布新版本时执行 `npm run build:bundle`（若后端有改动则 `npm run build`），把 `dist/` 中的 `bundle.cjs`、`public/`、`release.json` 原样拷到更新源目录即可。内网离线环境用目录路径；有文件服务时用 `release.json` 的 URL，并设置 `DP_UPDATE_URL` 让「检查更新」默认指向它。
+
+> 更新源必须可信：`sha256` 防传输损坏，但 manifest 本身没有数字签名，建议固定内网 HTTPS 地址并限制写入权限。
+
+### 17.6 开发模式
+
+```bash
+cd platform
+npm run dev          # 引导器 + 文件监听（推荐，验证热替换链路）
+npm run watch        # 或者 node --watch 直接跑源码，不经过引导器
+```
+
+`npm run dev` 会用 `fs.watch` 递归监听 `platform/src/` 与 `platform/public/`，变更 400ms 后自动执行 `build.mjs --bundle-only`（重建 `bundle.cjs`、同步 `public/`），再触发平滑重载；因此改后端 JS 或前端文件都无需手工重启。该模式需要源码仓库与 `node_modules`（有 esbuild）， exe 分发包里不包含构建工具，普通启动模式下不会尝试监听。
+
+### 17.7 相关 API
+
+| 接口 | 方法 | 说明 |
+|---|---|---|
+| `/api/system/version` | GET | 版本、构建时间、`runtime: binary/source`、`updateUrl`、备份数 |
+| `/api/system/reload` | POST | 平滑重载 worker；源码模式返回 `mode: source` 提示 |
+| `/api/system/update/check` | POST `{source}` | 只查询版本差异，不落盘 |
+| `/api/system/update/apply` | POST `{source, force}` | 校验 + 备份 + 原子替换，随后自动重载 |
+| `/api/system/rollback` | POST | 恢复最近备份并重载 |
+
+源码模式（方式 A/B/C）没有引导器，`reload` 返回 `{reloaded:false, mode:'source'}`，更新请用 CLI 或重新部署；`/api/system/version` 仍可正常读取版本信息。
+
+### 17.8 限制与后续
+
+- **exe 壳不自更新**：Windows 不能覆盖正在运行的自身，且引导器与 Node 运行时属于固化部分；业务代码、前端资源、配置都可在线更新，壳升级需替换 exe 并重启一次。
+- 更新会整体替换 `public/`，放在该目录下的自定义文件需重新拷入；建议自定义内容放在 `data/` 或工作区。
+- SEA 里 `require` 只能加载快照内模块，外置 `bundle.cjs` 由引导器用 `createRequire` 加载；新增依赖必须是可打包的纯 JS，`cpu-features` 等可选原生模块已设为 external，运行时自动降级。
+- 二期 Go 化路线：保持 `DP_ROOT` + `bundle.cjs` + `--worker` 协议不变，可逐个把后端模块换成 Go 实现的 worker 二进制，最终去掉内嵌 Node 运行时，无需重做前端与更新通道。
+

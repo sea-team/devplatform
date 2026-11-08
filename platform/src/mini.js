@@ -1,7 +1,7 @@
 'use strict';
 
 // 极简内置 HTTP 路由：零依赖即可运行控制台。
-// 生产容器里仍可安装 express/ssh2/undici 获得完整能力，本文件不依赖它们。
+// 生产容器里仍可安装 ssh2 / undici / iconv-lite 获得完整能力，本文件不依赖它们。
 const http = require('http');
 const fs = require('fs');
 const path = require('path');

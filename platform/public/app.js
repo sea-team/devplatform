@@ -1422,6 +1422,8 @@ $('#tab-menu').addEventListener('click', (e) => {
 document.addEventListener('click', (e) => {
   const menu = $('#tab-menu');
   if (!menu.hidden && !e.target.closest('.tab-menu') && !e.target.closest('#tab-menu-btn')) menu.hidden = true;
+  const sysMenu = $('#sys-menu');
+  if (!sysMenu.hidden && !e.target.closest('.sys-menu') && !e.target.closest('#sys-btn')) sysMenu.hidden = true;
   if (!e.target.closest('#tab-info')) { tipPinned = false; hideTabTip(); }
 });
 $('#tab-new').addEventListener('click', () => {
@@ -1429,8 +1431,69 @@ $('#tab-new').addEventListener('click', () => {
   toast('在服务器卡片中打开终端或文件管理，可同时开多个标签');
 });
 $('#refresh-btn').addEventListener('click', refreshActiveTab);
+
+/* -------------------- 版本与热更新（单文件程序） -------------------- */
+let sysInfo = null;
+let sysSource = '';
+
+async function loadSystemInfo() {
+  try {
+    sysInfo = await api('/system/version');
+    const version = sysInfo && sysInfo.version ? `v${sysInfo.version}` : 'v?';
+    $('#sys-btn').textContent = version;
+    $('#sys-version').textContent = version;
+    $('#sys-meta').textContent = `${sysInfo.runtime === 'binary' ? '单文件程序' : '源码模式'} · `
+      + `${sysInfo.buildTime ? fmtTime(sysInfo.buildTime) : '开发构建'}`
+      + `${sysInfo.backups ? ` · ${sysInfo.backups} 份备份` : ''}`;
+    sysSource = sysInfo.updateUrl || '';
+  } catch {
+    $('#sys-btn').textContent = '版本';
+    $('#sys-version').textContent = '未提供版本接口';
+    $('#sys-meta').textContent = '源码模式或旧版服务，不影响日常使用';
+  }
+}
+
+async function sysAction(action) {
+  $('#sys-menu').hidden = true;
+  try {
+    if (action === 'check') {
+      const d = await api('/system/update/check', { method: 'POST', body: { source: sysSource } });
+      if (d.sourceMode) toast('源码模式请用 CLI：node launcher/launcher.js update <源>');
+      else if (d.available) toast(`发现新版本 v${d.latest}（当前 v${d.current}），可点「应用更新」`);
+      else toast(`已是最新版本 v${d.current}`);
+    } else if (action === 'apply') {
+      const source = sysSource || (prompt('输入更新源：本地目录路径或 release.json 的 URL', '') || '');
+      if (!source) { toast('已取消：未指定更新源'); return; }
+      const d = await api('/system/update/apply', { method: 'POST', body: { source } });
+      toast(d.updated ? `已更新 v${d.from} → v${d.version}，正在重载…` : (d.reason || '无变化'));
+    } else if (action === 'reload') {
+      const d = await api('/system/reload', { method: 'POST', body: {} });
+      toast(d.reloaded ? '后端正在平滑重启（约 1–2 秒）' : (d.hint || '源码模式请用 npm run dev'));
+    } else if (action === 'rollback') {
+      const d = await api('/system/rollback', { method: 'POST', body: {} });
+      toast(`已回滚到 v${d.version}，正在重载…`);
+    }
+  } catch (err) {
+    toast(err.message || String(err), true);
+  }
+}
+
+$('#sys-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const menu = $('#sys-menu');
+  menu.hidden = !menu.hidden;
+  if (!menu.hidden) { $('#tab-menu').hidden = true; loadSystemInfo(); }
+});
+$('#sys-menu').addEventListener('click', (e) => {
+  const button = e.target.closest('[data-sys]');
+  if (button) sysAction(button.dataset.sys);
+});
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { $('#tab-menu').hidden = true; tipPinned = false; hideTabTip(); return; }
+  if (e.key === 'Escape') {
+    $('#tab-menu').hidden = true;
+    $('#sys-menu').hidden = true;
+    tipPinned = false; hideTabTip(); return;
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
     const tab = tabs.get(activeTabId);
     if (tab && tab.kind === 'editor') { e.preventDefault(); saveEditor(tab); }
@@ -1575,4 +1638,5 @@ $('#ops-form').addEventListener('submit', async (e) => {
     $('#health-text').textContent = '服务未连接';
   }
   restoreTabs();
+  loadSystemInfo();
 })();

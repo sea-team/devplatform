@@ -46,6 +46,17 @@ note(/\.tabbar\s*\{[\s\S]*?overflow-y:\s*hidden/.test(css) && /scrollbar-width:\
   '标签栏纵向溢出已锁定且原生滚动条隐藏');
 note(!/\.topbar\s*\{/.test(css), '旧 topbar 样式已清理');
 
+// 版本与热更新：界面入口、四个动作、菜单样式必须齐全。
+const sysActions = [...html.matchAll(/data-sys="([a-z-]+)"/g)].map((m) => m[1]);
+note(html.includes('id="sys-btn"') && html.includes('id="sys-menu"')
+  && ['check', 'apply', 'reload', 'rollback'].every((a) => sysActions.includes(a)),
+'版本徽标与热更新菜单四项动作已接入', sysActions.join(', '));
+note(['/system/version', '/system/update/check', '/system/update/apply', '/system/reload', '/system/rollback']
+  .every((p) => app.includes(`'${p}'`)) && app.includes('function loadSystemInfo'),
+'版本接口与热更新动作已全部接线');
+note(/\.sys-version\s*\{[^}]*width:\s*auto/.test(css) && /\.sys-menu\s*\{/.test(css),
+'版本菜单样式已定义且不挤压标签栏');
+
 const definedRoles = new Set([...app.matchAll(/data-role="([a-z-]+)"/g)].map((m) => m[1]));
 const usedRoles = new Set([...app.matchAll(/\bq\(pane, '([a-z-]+)'\)/g)].map((m) => m[1]));
 const badRoles = [...usedRoles].filter((r) => !definedRoles.has(r));

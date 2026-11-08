@@ -5,7 +5,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { createApp } = require('./mini');
 const {
-  config, state, update, uid, ok, fail, wrap,
+  config, state, update, uid, ok, fail, wrap, appRoot,
   safeWorkspacePath, relativeWorkspacePath,
 } = require('./core');
 const {
@@ -24,6 +24,91 @@ app.get('/api/health', (req, res) => ok(res, {
 }));
 // 鉴权由 mini.js 在分发层统一处理（/api/health 除外）。
 // 正常模式：外部服务未就绪时直接返回真实错误，不注入任何演示数据。
+
+/* --------------------- 运行时 / 热更新（引导器 IPC） --------------------- */
+// 源码直跑时没有引导器；编译成 exe 后由 launcher 监督进程处理更新、回滚与重载。
+const hasLauncher = () => typeof process.send === 'function' && Boolean(process.env.DP_LAUNCHER);
+const ipcPending = new Map();
+let ipcSeq = 0;
+
+if (hasLauncher()) {
+  process.on('message', (msg) => {
+    if (!msg || !msg.id) return;
+    const entry = ipcPending.get(msg.id);
+    if (!entry) return;
+    ipcPending.delete(msg.id);
+    clearTimeout(entry.timer);
+    if (msg.ok) entry.resolve(msg.data);
+    else entry.reject(new Error(msg.error || '引导器命令失败'));
+  });
+}
+
+function launcherCmd(type, payload = {}) {
+  return new Promise((resolve, reject) => {
+    if (!hasLauncher()) {
+      reject(new Error('当前为源码模式，请用 CLI：node launcher/launcher.js update|rollback|reload'));
+      return;
+    }
+    const id = `c${Date.now()}_${++ipcSeq}`;
+    const timer = setTimeout(() => {
+      ipcPending.delete(id);
+      reject(new Error('引导器响应超时'));
+    }, 120000);
+    ipcPending.set(id, { resolve, reject, timer });
+    process.send({ id, type, ...payload });
+  });
+}
+
+function localVersion() {
+  let release = null;
+  try { release = JSON.parse(fs.readFileSync(path.join(appRoot, 'release.json'), 'utf8')); } catch { /* noop */ }
+  return {
+    version: (release && release.version) || '0.2.0',
+    buildTime: (release && release.buildTime) || null,
+    runtime: hasLauncher() ? 'binary' : 'source',
+    node: process.version,
+    appRoot,
+    updateUrl: process.env.DP_UPDATE_URL || '',
+    launcher: hasLauncher(),
+  };
+}
+
+app.get('/api/system/version', wrap(async (req, res) => {
+  let info = localVersion();
+  if (hasLauncher()) {
+    try { info = { ...info, ...(await launcherCmd('version')) }; } catch { /* 保留本地信息 */ }
+  }
+  ok(res, info);
+}));
+
+app.post('/api/system/reload', wrap(async (req, res) => {
+  if (!hasLauncher()) {
+    return ok(res, { reloaded: false, mode: 'source', hint: '源码模式请使用 npm run dev（文件变更自动重启）' });
+  }
+  ok(res, { reloaded: true, mode: 'binary' });
+  // 先把响应发出去，再通知监督进程重启 worker。
+  setImmediate(() => process.send({ type: 'reload' }));
+}));
+
+app.post('/api/system/update/check', wrap(async (req, res) => {
+  const source = String((req.body && req.body.source) || '');
+  try {
+    ok(res, await launcherCmd('update-check', { source }));
+  } catch (error) {
+    ok(res, { available: false, sourceMode: true, error: String(error.message || error) });
+  }
+}));
+
+app.post('/api/system/update/apply', wrap(async (req, res) => {
+  ok(res, await launcherCmd('update-apply', {
+    source: String((req.body && req.body.source) || ''),
+    force: Boolean(req.body && req.body.force),
+  }));
+}));
+
+app.post('/api/system/rollback', wrap(async (req, res) => {
+  ok(res, await launcherCmd('rollback'));
+}));
 
 const requireBody = (body, keys) => {
   for (const key of keys) {
@@ -507,8 +592,17 @@ app.get('/api/ai/tools', (req, res) => ok(res, { readCommands: READ_COMMANDS }))
 
 app.useStatic(config.publicDir);
 
-app.listen(config.port, () => {
+const server = app.listen(config.port, () => {
   fs.mkdirSync(config.workspaceDir, { recursive: true });
   console.log(`[devplatform] 控制台已启动: http://localhost:${config.port}`);
   console.log(`[devplatform] 工作区: ${config.workspaceDir} | 运行模式: 正常（无演示数据）`);
+});
+
+// 引导器 reload / 更新时发 SIGTERM：先停止接新请求，SSE 长连接最多等 2s 后退出，
+// 监督进程会立刻拉起加载新 bundle.cjs 的 worker，实现 1~2s 的平滑热替换。
+process.on('SIGTERM', () => {
+  console.log('[devplatform] 收到重载信号，正在关闭连接…');
+  server.close(() => process.exit(0));
+  const timer = setTimeout(() => process.exit(0), 2000);
+  if (timer.unref) timer.unref();
 });

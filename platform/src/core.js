@@ -4,10 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const ROOT = path.resolve(__dirname, '..');
+// 源码直跑时 __dirname 指向 platform/src，根目录即 platform/；
+// 编译成单文件程序后由引导器注入 DP_ROOT（exe 所在目录），bundle.cjs / public / data 都放那里。
+// 不设置 DP_ROOT 时行为与原来完全一致，线上容器不受影响。
+const ROOT = process.env.DP_ROOT ? path.resolve(process.env.DP_ROOT) : path.resolve(__dirname, '..');
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
-const PUBLIC_DIR = path.join(ROOT, 'public');
+const PUBLIC_DIR = process.env.PUBLIC_DIR || path.join(ROOT, 'public');
 
 const env = (key, fallback = '') =>
   process.env[key] === undefined || process.env[key] === '' ? fallback : process.env[key];
@@ -110,6 +113,6 @@ function relativeWorkspacePath(abs) {
 
 // 正常模式：外部服务未配置 / 不可达时直接返回真实错误，不注入任何演示数据。
 module.exports = {
-  config, state, save, update, uid, auth, ok, fail, wrap,
+  config, state, save, update, uid, auth, ok, fail, wrap, appRoot: ROOT,
   safeWorkspacePath, relativeWorkspacePath, defaultState,
 };
