@@ -27,7 +27,23 @@ const PUBLIC_DIR = path.join(DIST, 'public');
 const DATA_DIR = path.join(DIST, 'data');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const BUILD_SCRIPT = path.join(REPO_ROOT, 'build.mjs');
-const SEA_FUSE_ASSET = 'public.tar.gz';
+const SEA_PUBLIC_ASSET = 'public.tar.gz';
+// 单独从 GitHub Release 下载 exe 时目录里没有任何外置文件，首启从 SEA asset 释放。
+// 仅当目标文件不存在时写入，绝不覆盖热更新过的 bundle / release.json。
+const SEA_FILE_ASSETS = { 'bundle.cjs': BUNDLE, 'release.json': RELEASE };
+const DEFAULT_ENV = [
+  '# DevPlatform 单文件程序配置（首启自动生成；更新/回滚不会覆盖）',
+  '# 默认指向本机端口，集成服务需自行启动；改完必须完全重启 devplatform.exe。',
+  '# 复用已部署服务器：在控制台登记服务器，或手工改成 http://<IP>:3002 等。',
+  'PORT=9000',
+  'GITEA_URL=http://localhost:3002',
+  'GITEA_TOKEN=',
+  'OPENLIST_URL=http://localhost:5244',
+  'OPENLIST_TOKEN=',
+  'OPENLIST_USER=admin',
+  'CODE_SERVER_URL=http://localhost:8080',
+  '# ADMIN_TOKEN=',
+].join('\n') + '\n';
 
 const log = (...a) => console.log('[launcher]', ...a);
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
@@ -91,7 +107,7 @@ function ensurePublic() {
   if (fs.existsSync(path.join(PUBLIC_DIR, 'index.html'))) return;
   let buf = null;
   if (isSea) {
-    try { buf = Buffer.from(sea.getAsset(SEA_FUSE_ASSET)); } catch { /* noop */ }
+    try { buf = Buffer.from(sea.getAsset(SEA_PUBLIC_ASSET)); } catch { /* noop */ }
   }
   if (!buf) {
     console.warn('[launcher] 未找到 public/，也没有内嵌资源；请执行 npm run build');
@@ -99,6 +115,31 @@ function ensurePublic() {
   }
   untar(zlib.gunzipSync(buf), PUBLIC_DIR);
   log('首次启动：已释放前端资源到', PUBLIC_DIR);
+}
+
+// 把内嵌的业务包 / 版本清单 / 默认配置补到 exe 所在目录。
+// 只在 SEA 模式生效；任一文件已存在就跳过，保证热更新与用户配置优先。
+function ensureAssets() {
+  if (!isSea) return;
+  for (const [asset, target] of Object.entries(SEA_FILE_ASSETS)) {
+    if (fs.existsSync(target)) continue;
+    try {
+      fs.writeFileSync(target, Buffer.from(sea.getAsset(asset)));
+      log('首次启动：已释放内嵌资源', asset);
+    } catch (error) {
+      console.warn(`[launcher] 无法释放 ${asset}：${error.message}`);
+    }
+  }
+  const envFile = path.join(DIST, '.env');
+  if (!fs.existsSync(envFile)) {
+    try {
+      fs.writeFileSync(envFile, DEFAULT_ENV, { encoding: 'utf8', mode: 0o600 });
+      log('首次启动：已生成 .env 配置模板', envFile);
+    } catch (error) {
+      console.warn(`[launcher] 无法生成 .env：${error.message}`);
+    }
+  }
+  ensurePublic();
 }
 
 async function fetchBuffer(url) {
@@ -386,6 +427,8 @@ async function httpCommand(action, body = {}) {
 }
 
 async function main() {
+  // SEA 模式且目录为空（从 Release 单独下载 exe）时，一次性补齐运行所需文件。
+  ensureAssets();
   // 优先用环境变量判定：SEA 模式下 argv 会被运行时改写，命令行标记不可靠。
   if (process.env.DP_WORKER === '1') { runWorker(); return; }
   // 熔断：被引导器启动却没拿到 worker 标记，直接退出，防止无限递归 fork。
@@ -429,6 +472,7 @@ async function main() {
       console.log([
         'DevPlatform 单文件程序',
         '  devplatform.exe                 启动控制台（默认 http://localhost:9000）',
+        '                                  单文件自包含：首启自动释放业务包/前端/.env，可直接从 Release 下载使用',
         '  devplatform.exe --dev           开发模式：源码变更自动重建 + 热重载',
         '  devplatform.exe version         查看版本与运行信息',
         '  devplatform.exe reload          平滑重启业务进程（不中断配置）',

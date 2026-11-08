@@ -10,6 +10,7 @@
 [CmdletBinding()]
 param(
   [string]$Root = (Split-Path -Parent $PSScriptRoot),
+  [string]$Dist = '',
   [string]$Output = ''
 )
 
@@ -18,7 +19,7 @@ $ProgressPreference = 'SilentlyContinue'
 # PowerShell 7 / CI 里该类型默认已可用；5.1 需要显式加载程序集。
 try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop } catch { }
 
-$Dist = Join-Path $Root 'platform\dist'
+if (-not $Dist) { $Dist = Join-Path $Root 'platform\dist' }
 if (-not $Output) { $Output = Join-Path (Join-Path $Root 'windows\bootstrap') 'devplatform-dist.zip' }
 $outDir = Split-Path -Parent $Output
 if (-not $outDir) { $outDir = (Get-Location).Path; $Output = Join-Path $outDir $Output }

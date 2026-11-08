@@ -12,8 +12,8 @@
 | 章节 | 内容 |
 |---|---|
 | 1 | 平台能力与架构、端口 |
-| 2 | 四种运行方式如何选 |
-| 3 | 快速开始（本机 / compose / 远程部署） |
+| 2 | 五种运行方式如何选 |
+| 3 | 快速开始（Release 免安装 / 本机 / compose / 远程部署） |
 | 4 | 环境变量完整说明 |
 | 5 | 访问与鉴权 |
 | 6 | 工作台通用操作（多标签、悬停说明、快捷键） |
@@ -28,7 +28,7 @@
 | 15 | 故障排查 |
 | 16 | 目录结构、Git 与已知限制 |
 | 17 | 单文件可执行程序、热更新与本机集成服务配置（本机免 Node） |
-| 18 | Windows 一键安装：Docker / 无 Docker 原生 / 复用服务器三种模式、服务管理与排错 |
+| 18 | Windows 一键安装：Docker / 无 Docker 原生 / 复用服务器三种模式、Release 免安装发行包、服务管理与排错 |
 
 ---
 
@@ -77,7 +77,7 @@
 
 ---
 
-## 2. 四种运行方式如何选
+## 2. 五种运行方式如何选
 
 | 方式 | 适用场景 | 优点 | 限制 |
 |---|---|---|---|
@@ -85,6 +85,7 @@
 | B. `docker compose --profile full up -d` | 一台机器上完整拉起全部组件 | 一条命令、组件网络互通 | 镜像需可拉取；容器内**无法**使用 WSL / 宿主机 CLI |
 | C. `scripts/remote.js deploy <host>` | 部署到远程服务器（当前线上采用） | 自动选运行时（宿主机 Node ≥ 20 用 systemd，否则复用已有 node 镜像跑容器）；不依赖 Docker Hub | 需要先在本机 `data/state.json` 登记目标机凭据 |
 | **D. 单文件程序 `platform/dist/devplatform.exe`** | **本机 / 内网机器免装 Node 直接运行** | 双击即跑；业务与前端可在线热更，支持回滚；详见 [§17](#17-单文件可执行程序与热更新) | 构建产物不入库；`git clone` 后由安装器自动下载 CI 发布的预构建包（[§18.11](#1811-从-github-clone-后首次安装无-node无-dist)），或自行 `npm run build`；exe 壳升级需手动替换 |
+| **E. GitHub Release 免安装发行包** | **不想 clone、不想装任何运行时的 Windows 机器** | 下载 `devplatform-windows.zip` 解压双击 `START.bat` 即用；或只下载自包含的 `devplatform.exe` 放任意空目录双击（首启自动释放业务包 / 前端 / `.env`），见 [§18.12](#1812-从-github-release-直接下载使用免-clone) | 集成服务默认「未配置 / 离线」，需再跑 `INSTALL.bat` 或在控制台填地址；exe 壳升级要重新下载 |
 
 **当前线上是方式 C + 三个配套组件用 compose 单独启动**：`devplatform` 容器占用 9000，compose 的 `platform` 服务带 `profiles: ["full"]`，默认不启动，避免抢端口。方式 D 只影响本机运行，不改变线上部署方式。
 
@@ -92,7 +93,9 @@
 
 ## 3. 快速开始
 
-> **Windows 用户推荐直接看第 18 章**：`git clone` 后**不必先准备 `platform/dist/devplatform.exe`**——双击 `windows\install.bat`，安装器会自动下载 CI 发布的预构建包（或读取 `windows\bootstrap\` 里的离线 zip，见 [§18.11](#1811-从-github-clone-后首次安装无-node无-dist)），一键装好平台与集成服务、初始化凭据并配置开机自启。**没有 Docker 也能装**——安装器会自动改用 Windows 原生 exe（Gitea / OpenList）+ VS Code 内置 Web IDE，详见 §18.10。下面 3.2–3.4 是各运行方式的手动步骤，用于理解原理或排错。
+> **Windows 用户最省事的路径**：打开 [GitHub Releases](https://github.com/sea-team/devplatform/releases/latest)，下载 `devplatform-windows.zip`，解压后双击 `START.bat` —— 不用 clone、不用 Node、不用 Docker，浏览器自动打开 `http://localhost:9000`。要连集成服务再双击 `INSTALL.bat`。详见 [§18.12](#1812-从-github-release-直接下载使用免-clone)。
+>
+> **想跟着源码走**：`git clone` 后也不必先准备 `platform/dist/devplatform.exe`——双击 `windows\install.bat`，安装器会自动下载 CI 发布的预构建包（或读取 `windows\bootstrap\` 里的离线 zip，见 [§18.11](#1811-从-github-clone-后首次安装无-node无-dist)），一键装好平台与集成服务、初始化凭据并配置开机自启。**没有 Docker 也能装**——安装器会自动改用 Windows 原生 exe（Gitea / OpenList）+ VS Code 内置 Web IDE，详见 §18.10。下面 3.2–3.4 是各运行方式的手动步骤，用于理解原理或排错。
 
 ### 3.1 前置条件
 
@@ -532,9 +535,10 @@ devplatform/
 ├── windows/                # Windows 一键安装：install.bat / install.ps1 /
 │                           # native-services.ps1（无 Docker 原生服务）/
 │                           # dist-package.ps1（获取/校验/解压预构建包）/
-│                           # pack-dist.ps1（生成离线 zip）/
+│                           # pack-dist.ps1（组件 zip）/ pack-release.ps1（完整绿色包）/
 │                           # start.bat / stop.bat / uninstall.ps1（§18）
 │   ├── bootstrap/          # 离线预构建包放置处（zip 不入库，§18.11）
+│   ├── release/            # 发行包模板：START/INSTALL/STOP.bat + README-RELEASE.txt（§18.12）
 │   └── runtime/            # 运行时（不入库）：bin/ 下载的 exe、gitea/ 仓库、
 │                           # openlist/ 数据、ide/、logs/、services.json、pids.txt
 ├── data/                   # 运行时状态（不入库，600/700）
@@ -760,7 +764,7 @@ node scripts/sync-integrations.js --probe
 | 项 | 要求 | 检查方式 |
 |---|---|---|
 | 系统 | Windows 10 1809+ / Windows 11，PowerShell 5.1+ | `$PSVersionTable.PSVersion` |
-| 平台程序 | **无需预先准备**：`platform/dist/devplatform.exe` 缺失时安装器自动获取（§18.11） | 已存在则直接用；没有也能装，只需能访问 GitHub Release，或备好离线 zip / 内网 URL |
+| 平台程序 | **无需预先准备**：Release 完整包内已含 exe（§18.12）；或 `git clone` 后由安装器自动获取（§18.11） | 已存在则直接用；没有也能装，只需能访问 GitHub Release，或备好离线 zip / 内网 URL |
 | 端口 | 9000 / 3002 / 5244 / 8080 未被占用（Gitea SSH 222、OpenList 5245 也需空闲） | `netstat -ano \| findstr ":9000 :3002 :5244 :8080"` |
 | `native` 模式 | **无需 Docker / WSL / Node / bash**；需联网下载 Gitea（约 112 MB）与 OpenList（完整包约 48 MB / lite 包约 31 MB）二进制，或提前放到 `windows\bin\` 走离线安装；在线 IDE 需要本机装有 VS Code（可选，缺失会自动降级） | `Get-Command code.cmd`、`Test-Path windows\bin` |
 | `local` 模式 | Docker Desktop 已安装并**正在运行**（托盘图标为 Running） | `docker info` |
@@ -772,6 +776,8 @@ node scripts/sync-integrations.js --probe
 > 内网 / 无外网机器：把 `gitea.exe` 和 `openlist.exe` 放进 `windows\bin\`，再运行 `install.ps1 -Mode native -BinDir windows\bin -NoDownload`（详见 §18.10.3）。
 
 ### 18.3 一键安装
+
+**不 clone 也行**：从 [Releases](https://github.com/sea-team/devplatform/releases/latest) 下载 `devplatform-windows.zip`，解压后双击根目录 `START.bat`（只用控制台）或 `INSTALL.bat`（连集成服务一起装），见 §18.12。
 
 **最简单**：`git clone` 后直接双击 `windows\install.bat`，等它跑完，浏览器会自动打开 `http://localhost:9000`。**没有 Docker 的机器会全自动走 `native` 模式**；**没有 `platform\dist\` 也会自动下载预构建包**（§18.11），两者都不需要额外参数。
 
@@ -1097,11 +1103,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode na
 仓库维护者做一次（有推送权限即可，不需要本机装 Node）：
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
-`.github/workflows/release.yml` 会在 `windows-latest` 上执行 `npm ci` → `npm run build` → `windows/pack-dist.ps1`，把 `devplatform-dist.zip` 与 `SHA256SUMS.txt` 发布到该 tag 的 Release；也可在 Actions 页面手动运行并输入 tag。`build.mjs` 会**从当前 node.exe 动态提取 SEA sentinel 字面量**，所以 CI 换 Node 22 小版本也不会因硬编码常量构建失败。
+`.github/workflows/release.yml` 会在 `windows-latest` 上执行 `npm ci` → `npm run build` → `windows/pack-dist.ps1` → `windows/pack-release.ps1`，把四类资产发布到该 tag 的 Release：`devplatform-windows.zip`（完整绿色包）、`devplatform.exe`（自包含单文件）、`devplatform-dist.zip`（clone 用户自动下载的组件包）、`SHA256SUMS.txt`（三者校验值）。完整包与单 exe 的用法见 §18.12。也可在 Actions 页面手动运行并输入 tag。`build.mjs` 会**从当前 node.exe 动态提取 SEA sentinel 字面量**，所以 CI 换 Node 22 小版本也不会因硬编码常量构建失败。
 
 > 仓库为 public，Release 资产无需任何 Token 即可下载。升版本时请同步 `platform/package.json` 的 `version` 与 tag。
 
@@ -1112,7 +1118,12 @@ git push origin v0.2.0
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File windows\pack-dist.ps1
 # 产出 windows\bootstrap\devplatform-dist.zip（约 35 MB）+ SHA256SUMS.txt
+
+# 一次性生成 Release 的全部四类资产（含完整绿色包与独立 exe）
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\pack-release.ps1
 ```
+
+`pack-release.ps1` 会复用已有的 `devplatform-dist.zip`，另外产出 `devplatform-windows.zip`（完整绿色包）、`devplatform.exe`（独立自包含单文件），并把三个文件的哈希一起写进 `SHA256SUMS.txt`。可直接把 `devplatform-windows.zip` 拷给内网机器解压使用，完全离线。
 
 把 zip 拷到目标机器的 `windows\bootstrap\`（该目录随仓库存在），直接双击 `install.bat` 即可，不需要任何参数、不需要外网。也可以显式指定：
 
@@ -1133,3 +1144,95 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -DistUrl
 | CI 报 `Could not find the sentinel` | Node 版本差异 | `build.mjs` 已动态提取；确认 `actions/setup-node` 用官方 Node 22 |
 | fork 后仍下载到原仓库的包 | 默认 `-Repo` 未改 | 加 `-Repo <你的 owner/repo>` |
 | `-DryRun` 没看到下载 | DryRun 只打印计划 | 去掉 `-DryRun` 才会真正下载解压 |
+
+### 18.12 从 GitHub Release 直接下载使用（免 clone）
+
+§18.11 解决的是「已经 clone 了仓库但没有 exe」；本节是**连仓库都不需要**的用法。Release 页面：https://github.com/sea-team/devplatform/releases/latest （public 仓库，无需登录 / Token）。
+
+#### 18.12.1 四个资产怎么选
+
+| 资产 | 体积 | 用途 | 需要 git / Node / Docker |
+|---|---|---|---|
+| **`devplatform-windows.zip`** | 约 36 MB | **推荐**。完整绿色包：程序 + 全部安装脚本 + `START.bat` / `INSTALL.bat` / `STOP.bat` + 中文说明 | 全不需要 |
+| `devplatform.exe` | 约 88 MB | 自包含单文件，放任意空目录双击即用；适合只要控制台或自行管理集成服务 | 全不需要 |
+| `devplatform-dist.zip` | 约 35 MB | 只有 `platform\dist\` 内容；给 `git clone` 后 `install.bat` 自动下载用，**一般不用手工下载** | 需要仓库脚本配套 |
+| `SHA256SUMS.txt` | < 1 KB | 前三个资产的 SHA256 校验值 | — |
+
+> 都只依赖 Windows 自带的 PowerShell 5.1，没有 Node、bash、WSL、Docker 也能跑。
+
+#### 18.12.2 完整绿色包：解压即用（推荐）
+
+1. 下载 `devplatform-windows.zip`，解压（建议路径**不要带中文和空格**，例如 `D:\devplatform\`）。
+2. 双击解压根目录的 **`START.bat`**：启动控制台并自动打开 `http://localhost:9000`，首次启动会在 `platform\dist\` 下释放 `bundle.cjs`、`public\`、`release.json`、`.env` 模板。服务器管理、SSH / Web 终端、远程文件与编辑器、AI、构建部署、系统状态立即可用。
+3. 需要 Gitea / OpenList / 在线 IDE 时，双击 **`INSTALL.bat`**（等价 `windows\install.bat`）：有 Docker 走容器、无 Docker 自动走 Windows 原生 exe（§18.10），复用已有服务器则执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode remote -RemoteHost 10.0.0.246
+```
+
+4. 停止用根目录 `STOP.bat`；卸载用 `windows\uninstall.ps1`（默认保留数据）。
+
+解压后的结构：
+
+```
+DevPlatform\
+├─ START.bat / INSTALL.bat / STOP.bat   ← 顶层快捷入口
+├─ README-RELEASE.txt                  ← 中文速查说明（随包附带）
+├─ .env.example                        ← 全部配置项说明
+├─ platform\dist\                      ← 程序本体与所有运行时状态
+│   ├─ devplatform.exe / bundle.cjs / release.json / public\
+│   └─ .env / data\ / workspace\       ← 首启生成，凭据都在这里
+├─ windows\                            ← install / native-services / stop / uninstall 等脚本
+│   └─ bootstrap\                      ← 内网可放 devplatform-dist.zip
+└─ scripts\                            ← remote 模式同步配置用（需 Node）
+```
+
+包内**不含** `.env`、`data\`、`state.json`、`windows\runtime\` 等本机状态与凭据；`INSTALL.bat` 检测到 exe 已存在会跳过联网取包，因此整包可以在完全离线环境使用。
+
+#### 18.12.3 单文件 exe：下载一个文件就能跑
+
+`devplatform.exe` 的 SEA 快照里内嵌了 `bundle.cjs`、`release.json` 与 `public.tar.gz`。放到任意空文件夹双击，首启会在 exe 同目录自动补齐四个文件（**已存在的同名文件绝不覆盖**，所以热更新与用户改过的 `.env` 都保留）：
+
+```
+bundle.cjs     业务包（之后可用 devplatform.exe update 热更）
+public\        前端资源
+release.json   版本清单
+.env           配置模板，集成服务地址 / Token 在这里改
+```
+
+注意事项：
+
+- 首次启动后目录必须**可写**；不要放在 `C:\Program Files\` 等受限目录。
+- 集成服务默认指向 `localhost:3002 / 5244 / 8080`，未启动时控制台显示「未配置 / 离线」，不影响其它模块。把已有服务地址与 Token 填进 `.env` 后**必须完全关闭并重启 exe**（`reload` 不重读配置）。
+- 业务与前端可在线热更（`devplatform.exe update <目录或 release.json URL>` / `rollback`）；exe 壳本身升级时下载新版 `devplatform.exe` 覆盖即可，旁边的 `.env`、`data\`、`workspace\` 不会被覆盖。
+
+#### 18.12.4 自己生成发行包 / 内网分发
+
+在已有构建产物的机器上一条命令生成全部资产（默认输出到 `windows\bootstrap\`）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\pack-release.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\pack-release.ps1 -OutputDir D:\share
+```
+
+`pack-release.ps1` 会调用 `pack-dist.ps1` 生成组件包，再用 `windows\release\` 里的模板（`START.bat` / `INSTALL.bat` / `STOP.bat` / `README-RELEASE.txt`）组装完整绿色包，最后把三个文件的哈希写入 `SHA256SUMS.txt`。可用 `-Dist <另一台机器的 dist 目录>` 指定程序来源。
+
+校验：
+
+```powershell
+Get-FileHash .\devplatform-windows.zip -Algorithm SHA256
+# 与 SHA256SUMS.txt 比对
+```
+
+内网机器把整个 `devplatform-windows.zip` 拷过去解压即可，不需要访问 GitHub；若坚持用 clone 方式，则把 `devplatform-dist.zip` 放进 `windows\bootstrap\`（§18.11.2）。
+
+#### 18.12.5 常见问题
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 双击 `START.bat` 一闪而过 | exe 不在 `platform\dist\`，或解压时丢了目录层级 | 保留 zip 里的 `DevPlatform\` 整层目录；确认 `platform\dist\devplatform.exe` 存在 |
+| 首次启动浏览器显示连接失败 | 首启释放前端资源需要几秒 | 等 3–5 秒刷新；或看 exe 同目录是否生成了 `public\index.html` |
+| 三项集成服务显示「离线 / 未配置」 | 只启动了控制台，没装集成服务 | 双击 `INSTALL.bat`，或在 `.env` 填已有服务地址后完全重启 exe |
+| 提示端口 9000 被占用 | 已有一个实例在跑 | 用 `STOP.bat` 停掉旧实例，或改 `.env` 里的 `PORT` |
+| 单 exe 提示「无法释放 bundle.cjs」 | exe 放在只读目录 | 移到可写目录（如 `D:\devplatform\`）再运行 |
+| 下载到的文件大小明显不对 | 代理返回了 504 页面 / 下载被截断 | 用 `SHA256SUMS.txt` 校验，换 `ghfast.top` 加速源或重新下载 |

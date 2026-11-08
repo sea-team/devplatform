@@ -18,7 +18,11 @@ const PUBLIC_SRC = path.join(HERE, 'public');
 const PUBLIC_DST = path.join(DIST, 'public');
 const LAUNCHER = path.join(HERE, 'launcher', 'launcher.js');
 const BUNDLE = path.join(DIST, 'bundle.cjs');
-const EXE = path.join(DIST, process.platform === 'win32' ? 'devplatform.exe' : 'devplatform');
+// 默认写到 dist/；设置 DP_EXE_OUT 可将 exe 输出到别处（例如本机服务正在运行、
+// dist/devplatform.exe 被占用时构建新壳，不影响正在跑的实例）。
+const EXE = process.env.DP_EXE_OUT
+  ? path.resolve(process.env.DP_EXE_OUT)
+  : path.join(DIST, process.platform === 'win32' ? 'devplatform.exe' : 'devplatform');
 const args = process.argv.slice(2);
 const bundleOnly = args.includes('--bundle-only');
 const noSea = args.includes('--no-sea');
@@ -142,13 +146,21 @@ async function buildSea(tarFile) {
   if (!fs.existsSync(LAUNCHER)) throw new Error(`缺少引导器：${LAUNCHER}`);
   const configPath = path.join(DIST, 'sea-config.json');
   const blobPath = path.join(DIST, 'sea.blob');
+  const releasePath = path.join(DIST, 'release.json');
+  // 把业务包与版本清单一并内嵌：从 GitHub Release 单独下载 devplatform.exe
+  // 到任意空目录，双击即可自释放成完整可运行实例；已存在的同名文件永远不覆盖，
+  // 因此热更新（替换外置 bundle.cjs / public/）仍然生效。
   fs.writeFileSync(configPath, JSON.stringify({
     main: LAUNCHER,
     output: blobPath,
     disableExperimentalSEAWarning: true,
     useSnapshot: false,
     useCodeCache: true,
-    assets: { 'public.tar.gz': tarFile },
+    assets: {
+      'public.tar.gz': tarFile,
+      'bundle.cjs': BUNDLE,
+      'release.json': releasePath,
+    },
   }, null, 2));
 
   const gen = spawnSync(process.execPath, ['--experimental-sea-config', configPath], {
@@ -157,6 +169,7 @@ async function buildSea(tarFile) {
   if (gen.status !== 0) throw new Error(`SEA blob 生成失败：${gen.stderr || gen.stdout}`);
   log('sea.blob     已生成');
 
+  fs.mkdirSync(path.dirname(EXE), { recursive: true });
   fs.copyFileSync(process.execPath, EXE);
   const { inject } = require('postject');
   const fuse = detectSeaFuse();

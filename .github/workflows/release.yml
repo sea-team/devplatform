@@ -1,6 +1,7 @@
-name: 构建 Windows 预构建包并发布 Release
+name: 构建 Windows 发行包并发布 Release
 
-# git clone 后安装器会自动下载本 workflow 发布的 devplatform-dist.zip。
+# 发布四类资产：devplatform-windows.zip（免 clone 绿色包）、devplatform.exe（自包含单文件）、
+# devplatform-dist.zip（git clone 后安装器自动下载的组件包）、SHA256SUMS.txt。
 # 触发：推送 v* tag（推荐），或在 Actions 页面手动运行（可指定 tag）。
 on:
   push:
@@ -45,6 +46,11 @@ jobs:
         run: |
           ./windows/pack-dist.ps1 -Root (Get-Location).Path -Output (Join-Path (Get-Location).Path 'devplatform-dist.zip')
 
+      - name: 生成完整绿色包与独立 exe
+        shell: pwsh
+        run: |
+          ./windows/pack-release.ps1 -Root (Get-Location).Path -OutputDir (Get-Location).Path
+
       - name: 计算发布 tag
         id: meta
         shell: pwsh
@@ -62,15 +68,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = '${{ steps.meta.outputs.tag }}'
-          $zip = 'devplatform-dist.zip'
-          $sums = 'SHA256SUMS.txt'
-          $size = [Math]::Round((Get-Item -LiteralPath $zip).Length / 1MB, 1)
           $notes = @(
-            "DevPlatform Windows 预构建包（$size MB）",
+            "DevPlatform $tag · Windows 免安装发行包",
             '',
             '由 GitHub Actions 在 windows-latest 上执行 npm ci + npm run build 自动构建。',
-            'git clone 后直接运行 windows\install.bat，安装器会自动下载本包并解压到 platform\dist\。',
-            '也可手动下载后用 -DistZip 指定，或放入 windows\bootstrap\ 离线安装。',
+            '',
+            '下载哪个：',
+            '  1) devplatform-windows.zip  推荐。解压后双击 START.bat 即用；INSTALL.bat 会连带装好集成服务。',
+            '  2) devplatform.exe          自包含单文件。放到任意空目录双击即用，首启自动释放业务包/前端/.env。',
+            '  3) devplatform-dist.zip     组件包，供 git clone 后 windows\install.bat 自动下载（无需手工下载）。',
+            '  4) SHA256SUMS.txt           以上三个文件的 SHA256 校验值。',
+            '',
+            '全程不需要 git、Node.js、Docker 或 bash；没有 Docker 的机器由 INSTALL.bat 自动改用 Windows 原生服务。',
+            '校验：Get-FileHash <文件> -Algorithm SHA256，与 SHA256SUMS.txt 比对。',
             '',
             "Commit: $env:GITHUB_SHA"
           ) -join "`n"
@@ -78,18 +88,20 @@ jobs:
           gh release view $tag | Out-Null
           $exists = ($LASTEXITCODE -eq 0)
           if ($exists) {
-            gh release upload $tag $zip $sums --clobber
+            gh release upload $tag devplatform-dist.zip devplatform-windows.zip devplatform.exe SHA256SUMS.txt --clobber
           } else {
             $extra = @()
             if ('${{ github.event_name }}' -ne 'push') { $extra += @('--target', $env:GITHUB_SHA) }
-            gh release create $tag $zip $sums --title "DevPlatform $tag" --notes-file release-notes.md @extra
+            gh release create $tag devplatform-dist.zip devplatform-windows.zip devplatform.exe SHA256SUMS.txt --title "DevPlatform $tag" --notes-file release-notes.md @extra
           }
           if ($LASTEXITCODE -ne 0) { throw '发布 Release 失败' }
 
       - name: 留存构建产物（便于排查）
         uses: actions/upload-artifact@v4
         with:
-          name: devplatform-dist
+          name: devplatform-release
           path: |
             devplatform-dist.zip
+            devplatform-windows.zip
+            devplatform.exe
             SHA256SUMS.txt
