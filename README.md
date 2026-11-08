@@ -28,6 +28,7 @@
 | 15 | 故障排查 |
 | 16 | 目录结构、Git 与已知限制 |
 | 17 | 单文件可执行程序、热更新与本机集成服务配置（本机免 Node） |
+| 18 | Windows 一键安装（含三个集成服务）、服务管理与排错 |
 
 ---
 
@@ -90,6 +91,8 @@
 ---
 
 ## 3. 快速开始
+
+> **Windows 用户推荐直接看第 18 章**：准备好 `platform/dist/devplatform.exe` 后双击 `windows\install.bat`，即可一键装好平台与 Gitea / OpenList / code-server 三个集成服务、初始化凭据并配置开机自启。下面 3.2–3.4 是各运行方式的手动步骤，用于理解原理或排错。
 
 ### 3.1 前置条件
 
@@ -439,6 +442,9 @@ node scripts/verify.js http://<host>:9000
 | `bash scripts/setup-integrations.sh` | 幂等初始化 Gitea / OpenList 凭据并写回 `.env` |
 | `node scripts/sync-integrations.js --from <IP>` | 从服务器同步集成服务地址与 Token 到 `platform/dist/.env`（§17.8） |
 | `node scripts/sync-integrations.js --check\|--probe\|--local` | 查看配置 / 探测连通性 / 生成本机模板 |
+| `windows\install.bat` | Windows 一键安装（自动装/连集成服务、写配置、注册自启），§18.3 |
+| `powershell -File windows\install.ps1 -Mode local\|remote -DryRun` | 指定模式安装 / 预演不改动系统 |
+| `windows\start.bat` / `stop.bat` / `uninstall.ps1` | 启动 / 停止 / 卸载（§18.6） |
 | `node scripts/verify.js [URL]` | 端到端回归（默认 `http://10.0.0.246:9000`，可用 `PLATFORM_URL` 覆盖） |
 | `node scripts/check-frontend.js` | 无浏览器 DOM 模拟：静态一致性 + 多标签交互自检 |
 
@@ -520,6 +526,8 @@ devplatform/
 │                           # dockerApi / remoteOps / fileTypes
 ├── scripts/                # remote.js、setup-integrations.sh、verify.js、
 │                           # check-frontend.js、sync-integrations.js（本机配置同步）
+├── windows/                # Windows 一键安装：install.bat / install.ps1 /
+│                           # start.bat / stop.bat / uninstall.ps1（§18）
 ├── data/                   # 运行时状态（不入库，600/700）
 └── workspace/              # 克隆与构建工作区（不入库）
 ```
@@ -706,4 +714,162 @@ node scripts/sync-integrations.js --probe
 - 更新会整体替换 `public/`，放在该目录下的自定义文件需重新拷入；建议自定义内容放在 `data/` 或工作区。
 - SEA 里 `require` 只能加载快照内模块，外置 `bundle.cjs` 由引导器用 `createRequire` 加载；新增依赖必须是可打包的纯 JS，`cpu-features` 等可选原生模块已设为 external，运行时自动降级。
 - 二期 Go 化路线：保持 `DP_ROOT` + `bundle.cjs` + `--worker` 协议不变，可逐个把后端模块换成 Go 实现的 worker 二进制，最终去掉内嵌 Node 运行时，无需重做前端与更新通道。
+
+---
+
+## 18. Windows 一键安装（含集成服务）
+
+本章面向「拿到项目后在 Windows 上直接部署使用」。平台本体是免 Node 的 `devplatform.exe`，但 **Gitea / OpenList / code-server 是三个独立服务，不会打进 exe**，所以安装器把它们一起装好、初始化好凭据、写好配置，并配置开机自启。
+
+### 18.1 两种安装模式
+
+| 模式 | 集成服务在哪 | 前置条件 | 适用 |
+|---|---|---|---|
+| `local`（本机完整安装） | 本机 Docker Desktop 里跑三个 Linux 容器 | Docker Desktop（WSL2 后端）、能拉镜像 | 想完全本地、离线也能用三个服务 |
+| `remote`（复用已部署服务器） | 已部署服务器上的 3002 / 5244 / 8080 | 该服务器已按第 3 章部署并初始化；本机需有 Node 与 `data/state.json` | 已有测试/生产服务器，本机只想开控制台 |
+| `auto`（默认） | 自动选择 | — | 检测到可用 Docker → `local`；否则若有 Node 且已登记服务器 → `remote`；都没有 → 提示安装 Docker |
+
+> **为什么本机模式需要 Docker Desktop**：code-server 官方只提供 Linux 版本，Windows 下没有原生可跑的等价物；Gitea / OpenList 虽有 Windows 二进制，但用同一套 compose 编排能保证三个服务与线上环境完全一致。Docker Desktop 用 Linux 容器即可，不需要在 Windows 上装 Node、Python 或 WSL 里的发行版（WSL2 只是 Docker 的后端）。
+
+安装器**只启动 compose 里的 `gitea / openlist / code-server`**；`platform` 服务带 `profiles: ["full"]` 不会启动，9000 端口由 exe 占用，不会冲突。
+
+### 18.2 前置要求
+
+| 项 | 要求 | 检查方式 |
+|---|---|---|
+| 系统 | Windows 10 1809+ / Windows 11，PowerShell 5.1+ | `$PSVersionTable.PSVersion` |
+| 平台程序 | `platform/dist/devplatform.exe` 已存在 | 没有则先在有 Node 的机器执行 `cd platform; npm run build`，或拷贝构建好的整个 `dist/` |
+| 端口 | 9000 / 3002 / 5244 / 8080 未被占用（Gitea SSH 222、OpenList 5245 也需空闲） | `netstat -ano \| findstr ":9000 :3002 :5244 :8080"` |
+| `local` 模式 | Docker Desktop 已安装并**正在运行**（托盘图标为 Running） | `docker info` |
+| `remote` 模式 | 本机有 Node、`data/state.json` 已登记服务器、服务器 `/data/platform/.env` 已有 Token | `node -v`、`node scripts/sync-integrations.js --probe` |
+| 权限 | 注册计划任务不强制管理员；失败会自动降级为「启动」文件夹快捷方式 | 安装器输出会说明 |
+
+> 安装器不会自动安装 Docker Desktop（这通常需要重启 / 重新登录）；需要时用 `-InstallDocker` 显式触发 winget，装完重启后再跑一次脚本。
+
+### 18.3 一键安装
+
+**最简单**：双击 `windows\install.bat`，等它跑完，浏览器会自动打开 `http://localhost:9000`。
+
+等价命令行（可加参数）：
+
+```powershell
+cd devplatform
+
+# 完整本机安装（三个集成服务都跑在本机）
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode local
+
+# 复用已部署服务器
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode remote -RemoteHost 10.0.0.246
+
+# 先看会做什么、不改动任何东西
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -DryRun
+
+# 尝试自动安装 Docker Desktop（winget 可用时）
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -InstallDocker
+```
+
+`.bat` 入口会绕过执行策略并显示结果；带参数运行时不会在结尾等待按键。`.ps1` 文件是 UTF-8 BOM，PowerShell 5.1 中文提示不会乱码。
+
+### 18.4 安装器做了什么
+
+| 步骤 | `local` 模式 | `remote` 模式 |
+|---|---|---|
+| 1 | 校验 `devplatform.exe` 存在 | 同左 |
+| 2 | 生成根 `.env`：随机 Gitea/OpenList 管理员密码、code-server 密码、镜像加速器前缀；**已存在则原样保留** | 调用 `scripts/sync-integrations.js` 从服务器读取地址与 Token |
+| 3 | `docker compose up -d gitea openlist code-server` | — |
+| 4 | 轮询 `3002/api/v1/version`、`5244/api/public/settings`、`8080/healthz` 直到就绪 | `sync-integrations.js --probe` 预检三个端点 |
+| 5 | 创建 Gitea 管理员、生成 Access Token；设置 OpenList 管理员密码并取 Admin Token；写回根 `.env` | — |
+| 6 | 生成 `platform/dist/.env`：`PORT`、三个 URL、两个 Token、`OPENLIST_USER`、`NO_PROXY` | 由同步脚本生成 `platform/dist/.env` |
+| 7 | 生成 `platform/dist/autostart.vbs`（无窗口启动） | 同左 |
+| 8 | 注册登录计划任务 `DevPlatform`；失败降级为启动文件夹快捷方式 | 同左 |
+| 9 | 后台启动 exe、健康检查、打开浏览器 | 同左 |
+
+所有凭据只落在本机 `.env`（根目录与 `dist/`），不打印到日志、不进 Git。安装器用 PowerShell 原生实现（HTTP、docker、计划任务、随机密码），**不依赖 Node / bash / curl**；只有 `remote` 模式复用 `sync-integrations.js` 的 SSH 逻辑才需要 Node。
+
+### 18.5 参数表
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `-Mode` | `auto` | `auto` / `local` / `remote` |
+| `-RemoteHost` | 空 | remote 模式指定服务器 IP；留空取 `data/state.json` 第一台 |
+| `-InstallDocker` | 关 | 无 Docker 时尝试 `winget install Docker.DockerDesktop`，之后需重启 |
+| `-NoService` | 关 | 跳过开机自启注册 |
+| `-NoLaunch` | 关 | 只装配置、不启动 exe、不开浏览器 |
+| `-DryRun` | 关 | 只打印计划，不写文件、不启容器、不注册任务 |
+| `-Port` | 9000 | 平台监听端口，写入 `dist/.env` 与浏览器地址 |
+| `-ImagePrefix` | `docker.m.daocloud.io` | 镜像加速器前缀；能直连 Docker Hub 时用 `-ImagePrefix ''` |
+
+### 18.6 服务管理
+
+| 操作 | 命令 |
+|---|---|
+| 启动平台 | 双击 `windows\start.bat`（最小化窗口） |
+| 停止平台 | 双击 `windows\stop.bat`（结束所有 `devplatform.exe`） |
+| 开机自启 | 登录后由计划任务 `DevPlatform` 无窗口拉起；非管理员时是「启动」文件夹的 `DevPlatform.lnk` |
+| 查看自启 | `Get-ScheduledTask -TaskName DevPlatform` |
+| 关闭自启 | `Unregister-ScheduledTask -TaskName DevPlatform -Confirm:$false` |
+| 卸载 | `powershell -ExecutionPolicy Bypass -File windows\uninstall.ps1` |
+| 连容器一起停 | 加 `-RemoveContainers`（`docker compose down`，**数据卷保留**） |
+| 连配置一起删 | 加 `-RemoveConfig -Force`（删根 `.env`、`dist/.env`、`autostart.vbs`） |
+
+卸载默认保留 `workspace/`、`data/`、`data/state.json` 与 Docker 卷，重装不会丢仓库和构建记录。
+
+> **改 `.env` 后必须完全重启 exe**：`loadDotEnv()` 只在进程启动且环境变量未定义时注入，`devplatform.exe reload` 只重启业务进程、不重读配置（§17.8）。
+
+### 18.7 常见问题
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 提示「本机模式需要 Docker Desktop」 | 未安装或 Docker 没在运行 | 启动 Docker Desktop 等托盘变绿；或加 `-InstallDocker`；或改 `-Mode remote` |
+| Docker Desktop 装完仍报未就绪 | WSL2 / 虚拟化未启用，或安装后需注销重登 | 重启一次再跑脚本；确认 `docker info` 成功 |
+| 镜像拉取超时 | Docker Hub 不可达 | 保持默认 `-ImagePrefix docker.m.daocloud.io`；或换可达加速器后重跑（脚本会保留已有 `.env`，需手工改 `*_IMAGE`） |
+| `docker compose` 不存在 | 老版 Docker | 安装器自动回退到 `docker-compose` v1 |
+| Gitea Token 生成失败 | 管理员密码与 `.env` 不一致，或 `INSTALL_LOCK` 未生效 | 确认根 `.env` 的 `OPENLIST_PASSWORD` 与容器初始化一致；删除 `data/gitea` 后重跑会重建（会丢 Gitea 数据） |
+| 三项仍显示离线 | `dist/.env` 未生效或地址不通 | 完全重启 exe；`node scripts/sync-integrations.js --probe`；看 §17.8 的四态说明 |
+| 打开 IDE 不是本机项目 | code-server 容器里是 `./workspace:/home/coder/project` 映射 | 本机模式两者已一致（都指向 `workspace/`）；remote 模式见 §17.8 的已知差异 |
+| 想对外网提供访问 | 默认 `ADMIN_TOKEN` 为空（不鉴权） | 在 `dist/.env` 设置 `ADMIN_TOKEN`，前端按第 5 章写入 `dp_token`，并配置防火墙 |
+| 计划任务注册失败 | 组策略限制 | 安装器自动降级为启动文件夹快捷方式；或加 `-NoService` 用 `start.bat` 手动启动 |
+
+### 18.8 手动安装对照（不用一键脚本）
+
+```powershell
+# 1. 已有 devplatform.exe（或先 npm run build）
+cd platform; npm run build; cd ..
+
+# 2. 配置：复制 .env.example 为 .env，至少填写
+#    OPENLIST_PASSWORD=<随机密码>   CODE_SERVER_PASSWORD=<随机密码>
+#    国内网络保留 GITEA_IMAGE / OPENLIST_IMAGE / CODE_SERVER_IMAGE 加速器
+
+# 3. 启动三个集成服务（platform 服务带 full profile，不会被启动）
+docker compose up -d gitea openlist code-server
+
+# 4. 初始化凭据（Git Bash / WSL 里执行，幂等）
+bash scripts/setup-integrations.sh
+
+# 5. 把生成的 GITEA_TOKEN / OPENLIST_TOKEN 写进 platform/dist/.env：
+#    GITEA_URL=http://localhost:3002
+#    OPENLIST_URL=http://localhost:5244
+#    CODE_SERVER_URL=http://localhost:8080
+#    GITEA_TOKEN=...   OPENLIST_TOKEN=...   OPENLIST_USER=admin
+
+# 6. 启动并验证
+.\windows\start.bat
+curl http://localhost:9000/api/overview
+```
+
+### 18.9 安装后验证清单
+
+```powershell
+# 平台健康
+curl http://localhost:9000/api/health
+# 三项集成服务应全部 status=online
+curl http://localhost:9000/api/overview
+# 容器状态（local 模式）
+docker compose ps
+# 配置检查（不显示 Token）
+node scripts/sync-integrations.js --check
+node scripts/sync-integrations.js --probe
+```
+
+浏览器打开 `http://localhost:9000`，总览「集成服务」三项应为绿色「在线」；Gitea `http://localhost:3002`、OpenList `http://localhost:5244`、code-server `http://localhost:8080` 均可访问。Gitea/OpenList 管理员账号为 `admin`，密码在根 `.env` 的 `OPENLIST_PASSWORD`；code-server 密码在 `CODE_SERVER_PASSWORD`。
 
