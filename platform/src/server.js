@@ -128,14 +128,43 @@ app.get('/api/overview', wrap(async (req, res) => {
   ]);
   const names = ['Git 仓库 (Gitea)', '存储挂载 (OpenList)', '在线 IDE (code-server)'];
   const urls = [config.giteaUrl, config.openlistUrl, config.codeServerUrl];
-  const services = probes.map((p, i) => ({
-    name: names[i],
-    url: urls[i],
-    status: p.status === 'fulfilled' ? 'online' : 'offline',
-    detail: p.status === 'fulfilled'
-      ? (i === 0 ? `v${p.value.version || 'unknown'}` : '可连接')
-      : String((p.reason && p.reason.message) || p.reason).slice(0, 120),
-  }));
+  const configured = [
+    Boolean(config.giteaToken),
+    Boolean(config.openlistToken || config.openlistPassword),
+    true,
+  ];
+  const hints = [
+    'GITEA_TOKEN 未配置，仓库列表与创建不可用；在 dist/.env 中填写后完全重启程序',
+    'OPENLIST_TOKEN 或 OPENLIST_PASSWORD 未配置；在 dist/.env 中填写后完全重启程序',
+    '确认 code-server 已启动，或在 dist/.env 中把 CODE_SERVER_URL 指向已部署的地址',
+  ];
+  // 把 Node 的 "fetch failed" 翻译成可操作的提示，避免出现容器服务名时用户无从下手。
+  const friendly = (reason) => {
+    const err = reason && reason.message ? reason : { message: String(reason), cause: null };
+    const code = (err.cause && err.cause.code) || '';
+    const msg = String(err.message || reason);
+    if (/未配置/.test(msg)) return msg;
+    if (/ENOTFOUND|EAI_AGAIN/.test(code)) {
+      return `域名无法解析（${code}）：地址可能是容器内服务名，请改成本机可访问的地址`;
+    }
+    if (/ECONNREFUSED/.test(code)) return '连接被拒绝：服务未启动或端口不对';
+    if (/ETIMEDOUT|timeout|abort/i.test(`${msg} ${code}`)) return '连接超时：检查地址、端口与防火墙';
+    if (/fetch failed/i.test(msg)) return '连接失败：服务未启动，或地址是容器内服务名（本机无法解析）';
+    return msg.slice(0, 120);
+  };
+  const services = probes.map((p, i) => {
+    const up = p.status === 'fulfilled';
+    const detail = up
+      ? (i === 0 ? `v${(p.value && p.value.version) || 'unknown'}` : '可连接')
+      : friendly(p.reason);
+    let status;
+    if (up) status = configured[i] ? 'online' : 'partial';
+    else status = /未配置/.test(detail) ? 'unconfigured' : 'offline';
+    return {
+      name: names[i], url: urls[i], status, configured: configured[i],
+      detail, hint: up && configured[i] ? '' : hints[i],
+    };
+  });
   const builds = state().builds;
   ok(res, {
     services,

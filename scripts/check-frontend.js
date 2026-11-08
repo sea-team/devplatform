@@ -57,6 +57,11 @@ note(['/system/version', '/system/update/check', '/system/update/apply', '/syste
 note(/\.sys-version\s*\{[^}]*width:\s*auto/.test(css) && /\.sys-menu\s*\{/.test(css),
 '版本菜单样式已定义且不挤压标签栏');
 
+// 集成服务：四态映射 + 可操作提示，避免本机直跑时只显示 fetch failed。
+note(['online', 'partial', 'unconfigured', 'offline'].every((s) => app.includes(`${s}: [`))
+  && /s\.hint/.test(app) && /\.list-item \.desc\.hint/.test(css),
+'集成服务四态与修复提示已接线');
+
 const definedRoles = new Set([...app.matchAll(/data-role="([a-z-]+)"/g)].map((m) => m[1]));
 const usedRoles = new Set([...app.matchAll(/\bq\(pane, '([a-z-]+)'\)/g)].map((m) => m[1]));
 const badRoles = [...usedRoles].filter((r) => !definedRoles.has(r));
@@ -115,7 +120,12 @@ const respond = (url) => {
   if (url.includes('/api/overview')) {
     return { ok: true, data: {
       counts: { servers: 0, builds: 0, buildSuccess: 0, buildFailed: 0, deploys: 0, aiProviders: 0 },
-      services: [],
+      services: [
+        { name: 'Gitea', url: 'http://localhost:3002', status: 'online', configured: true, detail: 'v1.23.8', hint: '' },
+        { name: 'Code', url: 'http://localhost:8080', status: 'partial', configured: false, detail: '可连接', hint: '补 Token' },
+        { name: 'OpenList', url: 'http://localhost:5244', status: 'unconfigured', configured: false, detail: '未配置', hint: '补 Token' },
+        { name: 'Down', url: 'http://gitea:3000', status: 'offline', configured: false, detail: '域名无法解析', hint: '改地址' },
+      ],
     } };
   }
   if (url.includes('/files/content')) return { ok: true, data: textFile };

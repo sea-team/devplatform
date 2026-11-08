@@ -158,8 +158,32 @@ async function buildSea(tarFile) {
   }
 }
 
+// 首启/首次构建时给 dist/ 一份可编辑的配置模板。
+// 已存在的 .env 一律保留（用户填过的 Token 与地址不能被构建覆盖）。
+function ensureDotEnv() {
+  const file = path.join(DIST, '.env');
+  if (fs.existsSync(file)) return;
+  const lines = [
+    '# DevPlatform 单文件程序配置（本文件不会提交 Git；更新/回滚不会覆盖）',
+    '# 默认指向本机端口，需自行启动集成服务；修改后必须完全重启 devplatform.exe。',
+    '# 复用已部署服务器上的服务：node scripts/sync-integrations.js --from <host>',
+    'PORT=9000',
+    'GITEA_URL=http://localhost:3002',
+    'GITEA_TOKEN=',
+    'OPENLIST_URL=http://localhost:5244',
+    'OPENLIST_TOKEN=',
+    'OPENLIST_USER=admin',
+    'CODE_SERVER_URL=http://localhost:8080',
+    '# ADMIN_TOKEN=',
+  ];
+  fs.writeFileSync(file, lines.join('\n') + '\n', { encoding: 'utf8', mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch { /* Windows 下忽略 */ }
+  log('已生成 dist/.env 配置模板（集成服务地址与 Token 需按实际环境填写）');
+}
+
 async function main() {
   fs.mkdirSync(DIST, { recursive: true });
+  ensureDotEnv();
   await buildBundle();
   if (bundleOnly) { syncPublic(); log('完成（--bundle-only）'); return; }
   syncPublic();

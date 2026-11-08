@@ -198,6 +198,7 @@ tr:last-child td { border-bottom: 0; }
 .list-item:last-child { border-bottom: 0; }
 .list-item .title { font-weight: 620; font-size: 13px; }
 .list-item .desc { color: var(--muted); font-size: 12px; margin-top: 3px; word-break: break-all; }
+.list-item .desc.hint { color: var(--amber); word-break: normal; line-height: 1.5; }
 .arch-row { display: flex; gap: 12px; padding: 9px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
 .arch-row:last-child { border-bottom: 0; }
 .arch-row b { width: 62px; color: var(--primary); flex: 0 0 62px; }

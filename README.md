@@ -27,7 +27,7 @@
 | 14 | 安全须知 |
 | 15 | 故障排查 |
 | 16 | 目录结构、Git 与已知限制 |
-| 17 | 单文件可执行程序与热更新（本机免 Node） |
+| 17 | 单文件可执行程序、热更新与本机集成服务配置（本机免 Node） |
 
 ---
 
@@ -178,11 +178,11 @@ node scripts/verify.js http://<host>:9000
 | `ADMIN_TOKEN` | 空 | 对外暴露时**必须设置**；空则不鉴权 |
 | `DATA_DIR` | `platform/data` | 状态文件目录，写入后自动 700 |
 | `WORKSPACE_DIR` | `platform/workspace` | 项目工作区（克隆、构建、IDE 共用） |
-| `GITEA_URL` | `http://gitea:3000` | compose 内用服务名；独立容器用宿主机 IP |
-| `GITEA_TOKEN` | 空 | Gitea 访问令牌 |
+| `GITEA_URL` | `http://localhost:3002` | 本机/源码直跑用 localhost；compose 内自动覆盖为 `http://gitea:3000`；独立容器用宿主机 IP |
+| `GITEA_TOKEN` | 空 | Gitea 访问令牌；缺了仓库列表与创建不可用（总览仍显示「待配置」） |
 | `CODE_SERVER_URL` | `http://localhost:8080` | 在线 IDE 地址 |
-| `OPENLIST_URL` | `http://openlist:5244` | OpenList 地址 |
-| `OPENLIST_TOKEN` | 空 | Admin Token，优先于密码登录 |
+| `OPENLIST_URL` | `http://localhost:5244` | 本机/源码直跑用 localhost；compose 内自动覆盖为 `http://openlist:5244` |
+| `OPENLIST_TOKEN` | 空 | Admin Token，优先于密码登录；缺了存储模块整体不可用 |
 | `OPENLIST_USER` / `OPENLIST_PASSWORD` | `admin` / 空 | Token 缺失时的回退登录；`OPENLIST_PASSWORD` 同时也是 `setup-integrations.sh` 的初始密码来源，运行该脚本前必须设置 |
 
 ### 4.2 配套组件与镜像
@@ -437,6 +437,8 @@ node scripts/verify.js http://<host>:9000
 | `node scripts/remote.js script <host> <本地脚本>` | 上传 Bash 脚本（自动转 LF）并执行 |
 | `node scripts/remote.js stop <host>` | 停止远端平台服务 |
 | `bash scripts/setup-integrations.sh` | 幂等初始化 Gitea / OpenList 凭据并写回 `.env` |
+| `node scripts/sync-integrations.js --from <IP>` | 从服务器同步集成服务地址与 Token 到 `platform/dist/.env`（§17.8） |
+| `node scripts/sync-integrations.js --check\|--probe\|--local` | 查看配置 / 探测连通性 / 生成本机模板 |
 | `node scripts/verify.js [URL]` | 端到端回归（默认 `http://10.0.0.246:9000`，可用 `PLATFORM_URL` 覆盖） |
 | `node scripts/check-frontend.js` | 无浏览器 DOM 模拟：静态一致性 + 多标签交互自检 |
 
@@ -478,6 +480,7 @@ node scripts/verify.js http://<host>:9000
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 总览三个集成服务全离线 | `.env` 里写的是 compose 服务名，或地址不通 | 独立容器必须用宿主机 IP：`http://<IP>:3002/5244/8080`；改完重新 deploy |
+| **本机 exe 集成服务全离线**（`gitea:3000` / `openlist:5244` fetch failed） | 全新 `dist/` 没有 `.env`，沿用默认地址；且本机没有启动这三个服务 | 执行 `node scripts/sync-integrations.js --from <服务器IP>` 复用已部署服务，或 `docker compose up -d gitea openlist code-server` 在本机启动；改完**完全重启 exe**，见 17.8 |
 | Gitea 起不来 / 端口冲突 | 3000 被 grafana、3001 被其他服务占用 | 用 `GITEA_PORT=3002` 或换其他端口 |
 | code-server 退出码 134、`uv_thread_create` | 老内核 4.x + Docker 19.03 默认 seccomp 拦 Node 20 | compose 已内置 `seccomp=unconfined`；自建时补上 |
 | code-server / Gitea 写不了配置 | 挂载目录属主不是 uid 1000 | `chown -R 1000:1000 data/code-server data/gitea workspace` |
@@ -510,12 +513,13 @@ devplatform/
 │   ├── package.json        # npm start / dev / build / check
 │   ├── build.mjs           # esbuild + Node SEA 打包，产出 dist/
 │   ├── launcher/           # 引导器（内嵌 exe）：监督、热重载、更新、回滚
-│   ├── dist/               # 构建产物（不入库）：devplatform.exe / bundle.cjs / public / release.json
+│   ├── dist/               # 构建产物（不入库）：devplatform.exe / bundle.cjs / public / release.json / .env
 │   ├── public/             # 控制台：index.html、app.js、style.css、cm-theme.css
 │   │   └── vendor/         # 离线 xterm.js + CodeMirror 5（无需外网）
 │   └── src/                # core / mini / server / integrations / engine
 │                           # dockerApi / remoteOps / fileTypes
-├── scripts/                # remote.js、setup-integrations.sh、verify.js、check-frontend.js
+├── scripts/                # remote.js、setup-integrations.sh、verify.js、
+│                           # check-frontend.js、sync-integrations.js（本机配置同步）
 ├── data/                   # 运行时状态（不入库，600/700）
 └── workspace/              # 克隆与构建工作区（不入库）
 ```
@@ -646,7 +650,57 @@ npm run watch        # 或者 node --watch 直接跑源码，不经过引导器
 
 源码模式（方式 A/B/C）没有引导器，`reload` 返回 `{reloaded:false, mode:'source'}`，更新请用 CLI 或重新部署；`/api/system/version` 仍可正常读取版本信息。
 
-### 17.8 限制与后续
+### 17.8 本机集成服务配置（总览全离线的处理）
+
+单文件 exe 只包含平台自身，**不包含** Gitea / OpenList / code-server 这三个独立服务。全新 `dist/` 首次运行时没有 `.env`，三项都会显示离线；截图中 `http://gitea:3000`、`http://openlist:5244` 是旧默认值里的 compose 内部服务名，本机 DNS 无法解析。现版本默认值已改成 `localhost:3002/5244/8080`，并在首次构建时自动生成 `dist/.env` 模板。
+
+三种处理方式，按本机条件选一种：
+
+| 方式 | 适用 | 操作 | 结果 |
+|---|---|---|---|
+| **A. 复用已部署服务器**（推荐，零安装） | 已有一台跑着三个组件的服务器 | `node scripts/sync-integrations.js --from <IP>` → 完全重启 exe | 本机直连远端服务，三项立即在线 |
+| **B. 本机自建服务** | 本机装了 Docker Desktop | `docker compose up -d gitea openlist code-server`，再 `scripts/setup-integrations.sh` 初始化 Token；`dist/.env` 保持 localhost 模板并填入 Token | 完全本地、不依赖服务器 |
+| **C. 不使用集成服务** | 只用服务器管理 / 文件 / 终端 / AI / 构建 | 不改配置 | 三项显示「离线 / 未配置」并给出提示，其他模块照常可用 |
+
+方式 A 的完整步骤：
+
+```bash
+cd devplatform
+# 1. 从服务器 /data/platform/.env 读取服务地址 + GITEA_TOKEN / OPENLIST_TOKEN，
+#    写入 platform/dist/.env（权限 600，不打印、不提交任何凭据）
+node scripts/sync-integrations.js --from 10.0.0.246
+
+# 2. 查看配置（只显示 URL 与「已设置」，不显示 Token）
+node scripts/sync-integrations.js --check
+
+# 3. 探测三个服务是否可达
+node scripts/sync-integrations.js --probe
+
+# 4. 完全重启程序（reload 只重启业务进程，不重读 .env）
+#    Windows：任务管理器结束两个 devplatform.exe，再双击 dist/devplatform.exe
+```
+
+脚本其它用法：`--local` 生成纯 localhost 模板（不连服务器）；不带参数时自动取 `data/state.json` 里的第一台服务器。若远端 `.env` 写的是 `127.0.0.1`，脚本会自动替换成服务器 IP，避免本机连到自己。
+
+`dist/.env` 的要点：
+
+- 位置固定为 `platform/dist/.env`（与 exe 同级）；`dist/` 整体、`.env*` 均已被 `.gitignore` 排除。
+- 内容只有 `PORT`、三个 URL、`GITEA_TOKEN`、`OPENLIST_TOKEN`、`OPENLIST_USER`、`ADMIN_TOKEN`（注释）、`NO_PROXY`；**更新与回滚不会覆盖它**，备份只涉及 `bundle.cjs` 与 `public/`。
+- 修改后必须**完全重启** exe：`loadDotEnv()` 只在进程启动、`process.env` 未定义该键时注入，`reload` 不会重读。
+- 若设置了 `ADMIN_TOKEN`，前端首次访问需按第 4 章写入 `dp_token`；本机自用可留空。
+
+总览状态现在有四种，便于定位：
+
+| 状态 | 含义 | 卡片提示 |
+|---|---|---|
+| 在线 | 探测成功且凭据齐全 | 显示 Gitea 版本号 |
+| 待配置 | 服务可达但缺 Token（如 Gitea 的 version 接口无需鉴权） | 提示补 `GITEA_TOKEN` 并重启 |
+| 未配置 | 因缺凭据导致探测失败（OpenList 常见） | 提示补 `OPENLIST_TOKEN` |
+| 离线 | 地址不通 | 中文提示「域名无法解析 / 连接被拒绝 / 服务未启动」，不再只显示 `fetch failed` |
+
+> **方式 A 的已知差异**：本机 exe 的工作区是 `dist/workspace`，而 code-server 里的 `/home/coder/project` 指向服务器上的挂载目录，二者不是同一份文件。通过本机控制台「打开 IDE」时会进入远端工作区；需要编辑本机项目时，请用「服务器 → 文件管理」走 SFTP，或把项目放在远端工作区中。
+
+### 17.9 限制与后续
 
 - **exe 壳不自更新**：Windows 不能覆盖正在运行的自身，且引导器与 Node 运行时属于固化部分；业务代码、前端资源、配置都可在线更新，壳升级需替换 exe 并重启一次。
 - 更新会整体替换 `public/`，放在该目录下的自定义文件需重新拷入；建议自定义内容放在 `data/` 或工作区。

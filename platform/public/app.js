@@ -369,11 +369,23 @@ async function loadOverview() {
     ].map(([label, value, sub]) => `
       <div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="sub">${esc(sub)}</div></div>
     `).join('');
-    $('#service-list').innerHTML = d.services.map((s) => `
+    $('#service-list').innerHTML = d.services.map((s) => {
+      const meta = {
+        online: ['在线', 'green'],
+        partial: ['待配置', 'amber'],
+        unconfigured: ['未配置', 'amber'],
+        offline: ['离线', 'red'],
+      }[s.status] || ['离线', 'red'];
+      return `
       <div class="list-item">
-        <div><div class="title">${esc(s.name)}</div><div class="desc">${esc(s.url)} · ${esc(s.detail)}</div></div>
-        ${badge(s.status === 'online' ? '在线' : '离线', s.status === 'online' ? 'green' : 'red')}
-      </div>`).join('');
+        <div>
+          <div class="title">${esc(s.name)}</div>
+          <div class="desc">${esc(s.url)} · ${esc(s.detail)}</div>
+          ${s.hint ? `<div class="desc hint">↳ ${esc(s.hint)}</div>` : ''}
+        </div>
+        ${badge(meta[0], meta[1])}
+      </div>`;
+    }).join('');
     const pill = $('#demo-pill');
     pill.textContent = '正常模式';
     pill.classList.add('live');

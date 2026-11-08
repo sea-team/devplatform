@@ -20,10 +20,13 @@ const config = {
   publicDir: PUBLIC_DIR,
   dataDir: DATA_DIR,
   adminToken: env('ADMIN_TOKEN'),
-  giteaUrl: env('GITEA_URL', 'http://gitea:3000').replace(/\/+$/, ''),
+  // 默认值必须是「本机 / 源码直跑 / 单文件 exe」可解析的地址。
+  // Docker compose 会显式注入 gitea:3000 / openlist:5244 等容器服务名覆盖这里；
+  // 远程部署的容器则由 .env 显式注入宿主机地址，两种场景都不受影响。
+  giteaUrl: env('GITEA_URL', 'http://localhost:3002').replace(/\/+$/, ''),
   giteaToken: env('GITEA_TOKEN'),
   codeServerUrl: env('CODE_SERVER_URL', 'http://localhost:8080').replace(/\/+$/, ''),
-  openlistUrl: env('OPENLIST_URL', 'http://openlist:5244').replace(/\/+$/, ''),
+  openlistUrl: env('OPENLIST_URL', 'http://localhost:5244').replace(/\/+$/, ''),
   openlistToken: env('OPENLIST_TOKEN'),
   openlistUser: env('OPENLIST_USER', 'admin'),
   openlistPassword: env('OPENLIST_PASSWORD'),
