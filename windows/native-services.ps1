@@ -12,8 +12,11 @@
     powershell -ExecutionPolicy Bypass -File windows\native-services.ps1 -Action stop
     powershell -ExecutionPolicy Bypass -File windows\native-services.ps1 -Action status
 
-  setup 额外参数：-BinDir（离线二进制目录）、-NoDownload、-IdeMode、
+  setup 额外参数：-BinDir（额外离线目录）、-NoDownload、-IdeMode、
                   -ForceEnv、-GiteaVersion、-OpenListVersion、-DownloadProxy、-DryRun
+  随包自带（无需 -BinDir / -NoDownload，安装器会自动识别）：
+    windows\bin\gitea.exe / openlist.exe / code-tunnel.exe
+    windows\bootstrap\devplatform-services.zip（轻量包用户的离线补充包）
   数据/日志/PID 全部在 windows\runtime\，该目录不入库。
 #>
 [CmdletBinding()]
@@ -54,6 +57,14 @@ $RootEnv   = Join-Path $Root '.env'
 $Workspace = Join-Path $Dist 'workspace'
 $GiteaExe  = Join-Path $Bin 'gitea.exe'
 $OlExe     = Join-Path $Bin 'openlist.exe'
+$IdeExe    = Join-Path $Bin 'code-tunnel.exe'
+# 发行包随附的官方二进制（只读来源，不写运行时状态）
+$BundledBin = Join-Path $Root 'windows\bin'
+$BundledZip = Join-Path $Root 'windows\bootstrap\devplatform-services.zip'
+# setup 时按优先级填充：-BinDir > 随包 windows\bin > 已装好的 runtime\bin
+$script:OfflineDirs = @()
+# DryRun 下不解压离线补充包，用虚拟文件清单让预览也显示「离线安装」而非「将联网下载」
+$script:OfflineVirtual = @()
 
 function Step($msg) { Write-Host ''; Write-Host "==> $msg" -ForegroundColor Cyan }
 function Good($msg) { Write-Host "    [OK]   $msg" -ForegroundColor Green }
@@ -205,15 +216,65 @@ function Install-FromZip([string]$Zip, [string]$Name, [string]$Target) {
   return $false
 }
 
+# 轻量包 / git clone 用户把 devplatform-services.zip 放进 windows\bootstrap\ 后，
+# 自动解压成与全量包等价的离线二进制；全量包里 windows\bin 已有文件，此处直接跳过。
+function Expand-BundledServices {
+  if (-not (Test-Path -LiteralPath $BundledZip)) { return }
+  $need = @()
+  foreach ($f in @('gitea.exe', 'openlist.exe', 'code-tunnel.exe')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $Bin $f))) { $need += $f }
+  }
+  if ($need.Count -eq 0) { return }
+  Step '解压随包附带的集成服务补充包'
+  if ($DryRun) {
+    Skip "解压 $BundledZip 到 $Bin"
+    $script:OfflineVirtual = @('gitea.exe', 'openlist.exe', 'code-tunnel.exe')
+    return
+  }
+  $tmp = Join-Path $Runtime 'services-unzip'
+  if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+  try {
+    Expand-Archive -LiteralPath $BundledZip -DestinationPath $tmp -Force -ErrorAction Stop
+    foreach ($f in @('gitea.exe', 'openlist.exe', 'code-tunnel.exe')) {
+      if (Test-Path -LiteralPath (Join-Path $Bin $f)) { continue }
+      $found = Get-ChildItem -LiteralPath $tmp -Filter $f -Recurse -File | Select-Object -First 1
+      if ($found) {
+        Copy-Item -LiteralPath $found.FullName -Destination (Join-Path $Bin $f) -Force
+        Good "$f 已从离线补充包安装"
+      }
+    }
+  } catch { Warn "集成服务补充包解压失败：$($_.Exception.Message)" }
+  finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+function Install-BundledIde {
+  if (Test-Path -LiteralPath $IdeExe) { return }
+  if ($DryRun -and ($script:OfflineVirtual -contains 'code-tunnel.exe')) {
+    Skip '从离线补充包安装 code-tunnel.exe（在线 IDE）'
+    return
+  }
+  $src = Join-Path $BundledBin 'code-tunnel.exe'
+  if (-not (Test-Path -LiteralPath $src)) { return }
+  if ($DryRun) { Skip '复制随包自带的 code-tunnel.exe（在线 IDE）'; return }
+  Copy-Item -LiteralPath $src -Destination $IdeExe -Force
+  Good '在线 IDE 使用随包自带的 VS Code CLI（无需本机安装 VS Code）'
+}
+
 function Resolve-Binary([string]$Name, [string]$Target, [string[]]$Urls, [string[]]$ZipNames, [int]$Timeout = 120) {
   if (Test-Path -LiteralPath $Target) { Good "$Name 已存在，跳过下载"; return $true }
+  if ($DryRun -and ($script:OfflineVirtual -contains "$Name.exe")) {
+    Skip "从离线补充包安装 $Name.exe（$BundledZip）"
+    return $true
+  }
   $local = ''
-  if ($BinDir) {
-    $candidates = @((Join-Path $BinDir "$Name.exe"), (Join-Path $BinDir $Name))
-    foreach ($z in $ZipNames) { if ($z) { $candidates += (Join-Path $BinDir $z) } }
+  foreach ($dir in @($script:OfflineDirs)) {
+    if (-not $dir) { continue }
+    $candidates = @((Join-Path $dir "$Name.exe"), (Join-Path $dir $Name))
+    foreach ($z in $ZipNames) { if ($z) { $candidates += (Join-Path $dir $z) } }
     foreach ($candidate in $candidates) {
       if (Test-Path -LiteralPath $candidate) { $local = $candidate; break }
     }
+    if ($local) { break }
   }
   if ($local) {
     if ($DryRun) { Skip "从离线目录安装 $local"; return $true }
@@ -226,7 +287,7 @@ function Resolve-Binary([string]$Name, [string]$Target, [string[]]$Urls, [string
       return $true
     }
   }
-  if ($NoDownload) { Warn "$Name 缺失且指定了 -NoDownload；请把 $Name.exe 或官方 zip 放到 $(if ($BinDir) { $BinDir } else { $Bin }) 后重跑"; return $false }
+  if ($NoDownload) { Warn "$Name 缺失且指定了 -NoDownload；请把 $Name.exe 或官方 zip 放到 $(@($script:OfflineDirs) -join ' / ') 后重跑"; return $false }
   if ($DryRun) { Skip "下载 $Name（首选 $($Urls[0])）"; return $true }
 
   $deadline = (Get-Date).AddMinutes(8)
@@ -254,6 +315,10 @@ function Resolve-Binary([string]$Name, [string]$Target, [string[]]$Urls, [string
 }
 
 function Find-VsCodeTunnel {
+  # 优先级：安装器已复制的 runtime\bin > 随包 windows\bin > 本机安装的 VS Code
+  foreach ($p in @($IdeExe, (Join-Path $BundledBin 'code-tunnel.exe'))) {
+    if (Test-Path -LiteralPath $p) { return $p }
+  }
   $cmd = Get-Command code.cmd -ErrorAction SilentlyContinue
   if ($cmd) {
     $exe = Join-Path (Split-Path -Parent $cmd.Source) 'code-tunnel.exe'
@@ -522,6 +587,21 @@ function Invoke-Setup {
     if ($DryRun) { } else { Ensure-Dir $d }
   }
   if ($DryRun) { Skip "运行目录 $Runtime（将创建）" } else { Good "运行目录 $Runtime" }
+
+  # 离线来源优先级：显式 -BinDir > 随包 windows\bin > 已装好的 runtime\bin
+  $script:OfflineDirs = @()
+  if ($BinDir) { $script:OfflineDirs += $BinDir }
+  $script:OfflineDirs += $BundledBin
+  $script:OfflineDirs += $Bin
+  Expand-BundledServices
+  Install-BundledIde
+  $bundled = @()
+  foreach ($f in @('gitea.exe', 'openlist.exe', 'code-tunnel.exe')) {
+    if (Test-Path -LiteralPath (Join-Path $BundledBin $f)) { $bundled += $f }
+  }
+  if ($bundled.Count -gt 0) {
+    Good "检测到随包自带的集成服务程序（$($bundled -join ' / ')），无需联网下载"
+  }
 
   $rootCfg = Read-EnvFile $RootEnv
   $pw = $rootCfg.OPENLIST_PASSWORD

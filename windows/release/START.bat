@@ -32,6 +32,11 @@ echo.
 echo   ------------------------------------------------------------
 echo   START.bat   = console only, integrations stay offline.
 echo   INSTALL.bat = console + Gitea / OpenList / online IDE + autostart.
+if exist "%ROOT%windows\bin\gitea.exe" (
+  echo   Bundled service binaries found in windows\bin - INSTALL.bat is fully offline.
+) else (
+  echo   Lite package: INSTALL.bat downloads service binaries on first run.
+)
 echo   Stop: STOP.bat
 echo   ------------------------------------------------------------
 echo.

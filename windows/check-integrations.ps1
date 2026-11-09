@@ -10,8 +10,9 @@
     1. 读取 platform\dist\.env（回退根 .env / 进程环境变量）里的三个服务地址
     2. 用 TCP 连接快速探测每个地址是否在线（单个 1.2 秒超时）
     3. 判断 windows\runtime\services.json 是否存在 = 本机原生集成服务是否已安装
-    4. -StartNative 时，若已安装则先拉起本机原生服务再检测
-    5. 打印明确结论与下一步操作，避免「START.bat 启动了但集成服务离线」的困惑
+    4. 统计 windows\bin 下随包自带的 gitea/openlist/code-tunnel 二进制（决定提示联网还是离线）
+    5. -StartNative 时，若已安装则先拉起本机原生服务再检测
+    6. 打印明确结论与下一步操作，避免「START.bat 启动了但集成服务离线」的困惑
 
   退出码：0 = 三项全部在线；2 = 至少一项离线（启动脚本不会因此中断）。
 #>
@@ -29,8 +30,9 @@ try { $Root = (Resolve-Path -LiteralPath $Root).Path } catch { }
 
 $DistEnv   = Join-Path $Root 'platform\dist\.env'
 $RootEnv   = Join-Path $Root '.env'
-$Services  = Join-Path $Root 'windows\runtime\services.json'
-$NativePs1 = Join-Path $Root 'windows\native-services.ps1'
+$Services   = Join-Path $Root 'windows\runtime\services.json'
+$NativePs1  = Join-Path $Root 'windows\native-services.ps1'
+$BundledBin = Join-Path $Root 'windows\bin'
 
 function Read-EnvFile([string]$File) {
   $map = @{}
@@ -82,6 +84,10 @@ function Test-Endpoint([string]$Url) {
 }
 
 $nativeInstalled = (Test-Path -LiteralPath $Services)
+$bundledCount = 0
+foreach ($f in @('gitea.exe', 'openlist.exe', 'code-tunnel.exe')) {
+  if (Test-Path -LiteralPath (Join-Path $BundledBin $f)) { $bundledCount++ }
+}
 
 if ($StartNative -and $nativeInstalled -and (Test-Path -LiteralPath $NativePs1)) {
   if (-not $Json) { Write-Host '  检测到已安装的本机原生服务，正在拉起...' -ForegroundColor Cyan }
@@ -111,6 +117,7 @@ if ($Json) {
     root            = $Root
     configSource    = $cfgSource
     nativeInstalled = $nativeInstalled
+    bundledServices = $bundledCount
     onlineCount     = $online
     total           = $items.Count
     services        = @($items | ForEach-Object {
@@ -136,6 +143,11 @@ if ($nativeInstalled) {
 } else {
   Write-Host '  本机原生服务: 未安装 (未运行过 INSTALL.bat 的 native 模式)' -ForegroundColor DarkGray
 }
+if ($bundledCount -gt 0) {
+  Write-Host "  随包服务程序: 已自带 $bundledCount/3 (windows\bin)，INSTALL.bat 可纯离线安装" -ForegroundColor Green
+} else {
+  Write-Host '  随包服务程序: 未自带（轻量包 / git clone），INSTALL.bat 需联网下载' -ForegroundColor DarkGray
+}
 Write-Host ''
 
 if ($exitCode -eq 0) {
@@ -145,7 +157,11 @@ if ($exitCode -eq 0) {
   Write-Host '     控制台里这几项会显示「未配置 / 离线」，其它模块不受影响。' -ForegroundColor Yellow
   Write-Host ''
   if (-not $nativeInstalled) {
-    Write-Host '     要本机集成服务 -> 双击 INSTALL.bat（首次下载 Gitea / OpenList 二进制）' -ForegroundColor White
+    if ($bundledCount -gt 0) {
+      Write-Host '     要本机集成服务 -> 双击 INSTALL.bat（包内已自带二进制，全程离线）' -ForegroundColor White
+    } else {
+      Write-Host '     要本机集成服务 -> 双击 INSTALL.bat（首次需联网下载 Gitea / OpenList）' -ForegroundColor White
+    }
   } else {
     Write-Host '     服务已装但没起来 -> 跑 windows\native-services.ps1 -Action status 查日志' -ForegroundColor White
   }

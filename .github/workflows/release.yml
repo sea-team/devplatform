@@ -1,7 +1,9 @@
 name: 构建 Windows 发行包并发布 Release
 
-# 发布四类资产：devplatform-windows.zip（免 clone 绿色包）、devplatform.exe（自包含单文件）、
-# devplatform-dist.zip（git clone 后安装器自动下载的组件包）、SHA256SUMS.txt。
+# 发布资产：devplatform-windows.zip（全量绿色包，随包自带 Gitea / OpenList / VS Code CLI）、
+# devplatform-windows-lite.zip（轻量包）、devplatform-services.zip（服务程序补充包）、
+# devplatform.exe（自包含单文件）、devplatform-dist.zip（clone 后安装器自动下载的组件包）、
+# SHA256SUMS.txt。二进制在 CI 里由 windows/fetch-services.ps1 从官方源抓取并校验。
 # 触发：推送 v* tag（推荐），或在 Actions 页面手动运行（可指定 tag）。
 on:
   push:
@@ -41,15 +43,26 @@ jobs:
         working-directory: platform
         run: npm run build
 
+      - name: 复用随包集成服务二进制缓存
+        uses: actions/cache@v4
+        with:
+          path: windows/bin
+          key: dp-services-${{ hashFiles('windows/fetch-services.ps1') }}-gitea-1.23.8-openlist-v4.2.6-vscode-cli-1
+
+      - name: 下载随发行包自带的官方集成服务程序
+        shell: pwsh
+        run: |
+          ./windows/fetch-services.ps1 -Root (Get-Location).Path -RequireCore
+
       - name: 打包可分发 zip（排除 .env / data / workspace）
         shell: pwsh
         run: |
           ./windows/pack-dist.ps1 -Root (Get-Location).Path -Output (Join-Path (Get-Location).Path 'devplatform-dist.zip')
 
-      - name: 生成完整绿色包与独立 exe
+      - name: 生成全量包 / 轻量包 / 服务补充包 / 独立 exe
         shell: pwsh
         run: |
-          ./windows/pack-release.ps1 -Root (Get-Location).Path -OutputDir (Get-Location).Path
+          ./windows/pack-release.ps1 -Root (Get-Location).Path -OutputDir (Get-Location).Path -IncludeServices
 
       - name: 计算发布 tag
         id: meta
@@ -69,39 +82,51 @@ jobs:
         run: |
           $tag = '${{ steps.meta.outputs.tag }}'
           $notes = @(
-            "DevPlatform $tag · Windows 免安装发行包",
+            "DevPlatform $tag · Windows 免安装发行包（集成服务程序已随包自带）",
             '',
-            '由 GitHub Actions 在 windows-latest 上执行 npm ci + npm run build 自动构建。',
+            '由 GitHub Actions 在 windows-latest 上构建，并把官方原版二进制内嵌进全量包。',
             '',
             '【重要】START.bat 与 INSTALL.bat 不是一回事：',
-            '  START.bat   只启动控制台（服务器 / SSH / 终端 / 文件 / AI / 构建）。',
+            '  START.bat   只启动控制台（服务器 / SSH / 终端 / 文件 / AI / 构建），',
             '              不会安装、也不会自动启动 Gitea / OpenList / 在线 IDE；',
-            '              启动前会打印这三项的在线状态与本机服务是否已安装。',
-            '  INSTALL.bat 额外安装并启动三项集成服务（无 Docker 自动改用 Windows 原生 exe），',
-            '              首次需联网下载二进制，或把 exe 放进 windows\bin 走 -NoDownload 离线安装。',
+            '              启动前会打印三项状态、本机服务是否已安装、以及是否自带二进制。',
+            '  INSTALL.bat 额外安装并启动三项集成服务（无 Docker 自动改用 Windows 原生 exe）。',
+            '              全量包已自带这三个程序，INSTALL.bat 全程离线，无需联网下载。',
             '',
             '下载哪个：',
-            '  1) devplatform-windows.zip  推荐。解压后：只要控制台双击 START.bat；',
-            '                              要集成服务再双击 INSTALL.bat（含顶层中文说明）。',
-            '  2) devplatform.exe          自包含单文件，放任意空目录双击即用（只有控制台，无安装脚本）。',
-            '  3) devplatform-dist.zip     组件包，供 git clone 后 windows\install.bat 自动下载。',
-            '  4) SHA256SUMS.txt           以上三个文件的 SHA256 校验值。',
+            '  1) devplatform-windows.zip       推荐 · 全量包：控制台 + 三项集成服务程序。',
+            '                                    START.bat 只启控制台；INSTALL.bat 离线装好服务。',
+            '  2) devplatform-windows-lite.zip  轻量包：只有控制台，INSTALL.bat 首次需联网下载服务。',
+            '  3) devplatform-services.zip      仅三项官方程序 + 清单；放进轻量包 / git clone 的',
+            '                                    windows\bootstrap\ 目录，即可同样离线安装。',
+            '  4) devplatform.exe               自包含单文件，放任意空目录双击即用（只有控制台）。',
+            '  5) devplatform-dist.zip          组件包，供 git clone 后 windows\install.bat 自动下载。',
+            '  6) SHA256SUMS.txt                以上文件的 SHA256 校验值。',
+            '',
+            '全量包 windows\bin 内自带的官方原版二进制（未修改）：',
+            '  gitea.exe        Gitea Windows x64',
+            '  openlist.exe     OpenList Windows x64',
+            '  code-tunnel.exe  VS Code 独立 CLI（code.exe 重命名），用于 serve-web 在线 IDE',
+            '版本、来源与 SHA256 见 services-manifest.json；第三方许可见 THIRD-PARTY.txt。',
             '',
             '只跑 START.bat 时三项集成服务显示「未配置 / 离线」是预期行为，不是故障。',
-            '全程不需要 git、Node.js、Docker 或 bash（只有 INSTALL.bat 装集成服务时才需联网）。',
+            '全程不需要 git、Node.js、Docker 或 bash；不再需要单独下载集成服务程序。',
             '校验：Get-FileHash <文件> -Algorithm SHA256，与 SHA256SUMS.txt 比对。',
             '',
             "Commit: $env:GITHUB_SHA"
           ) -join "`n"
           $notes | Out-File -FilePath release-notes.md -Encoding utf8
+          $assets = @('devplatform-dist.zip', 'devplatform-windows.zip',
+                      'devplatform-windows-lite.zip', 'devplatform-services.zip',
+                      'devplatform.exe', 'SHA256SUMS.txt')
           gh release view $tag | Out-Null
           $exists = ($LASTEXITCODE -eq 0)
           if ($exists) {
-            gh release upload $tag devplatform-dist.zip devplatform-windows.zip devplatform.exe SHA256SUMS.txt --clobber
+            gh release upload $tag @assets --clobber
           } else {
             $extra = @()
             if ('${{ github.event_name }}' -ne 'push') { $extra += @('--target', $env:GITHUB_SHA) }
-            gh release create $tag devplatform-dist.zip devplatform-windows.zip devplatform.exe SHA256SUMS.txt --title "DevPlatform $tag" --notes-file release-notes.md @extra
+            gh release create $tag @assets --title "DevPlatform $tag" --notes-file release-notes.md @extra
           }
           if ($LASTEXITCODE -ne 0) { throw '发布 Release 失败' }
 
@@ -112,5 +137,7 @@ jobs:
           path: |
             devplatform-dist.zip
             devplatform-windows.zip
+            devplatform-windows-lite.zip
+            devplatform-services.zip
             devplatform.exe
             SHA256SUMS.txt

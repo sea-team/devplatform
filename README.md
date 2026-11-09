@@ -732,7 +732,7 @@ node scripts/sync-integrations.js --probe
 
 ## 18. Windows 一键安装（含集成服务）
 
-本章面向「拿到项目后在 Windows 上直接部署使用」。平台本体是免 Node 的 `devplatform.exe`，但 **Gitea / OpenList / code-server 是三个独立服务，不会打进 exe**，所以安装器把它们一起装好、初始化好凭据、写好配置，并配置开机自启。
+本章面向「拿到项目后在 Windows 上直接部署使用」。平台本体是免 Node 的 `devplatform.exe`，但 **Gitea / OpenList / code-server 是三个独立服务，不会打进 exe**，所以安装器把它们一起装好、初始化好凭据、写好配置，并配置开机自启。**GitHub Release 的全量包 `devplatform-windows.zip` 已把这三个官方 Windows 程序放进 `windows\bin\`**（Gitea / OpenList / VS Code 独立 CLI），`INSTALL.bat` 会自动识别并纯离线安装，不需要再单独下载集成服务程序。
 
 ### 18.1 三种模式（没有 Docker 也能装）
 
@@ -740,7 +740,7 @@ node scripts/sync-integrations.js --probe
 
 | 模式 | 集成服务在哪 | 前置条件 | 适用 |
 |---|---|---|---|
-| `native`（**无 Docker 推荐**） | 本机 Windows 原生 exe：Gitea、OpenList 单文件程序；在线 IDE 用 VS Code 内置 `serve-web` | 无需 Docker / WSL / Node / bash；只需能下载两个 exe（或提前放到 `windows\bin\` 离线安装） | 普通 Windows 机器、内网机器、不想装 Docker Desktop |
+| `native`（**无 Docker 推荐**） | 本机 Windows 原生 exe：Gitea、OpenList 单文件程序；在线 IDE 用 `code-tunnel.exe serve-web` | 无需 Docker / WSL / Node / bash；**全量发行包已自带三个 exe**（`windows\bin\`，自动纯离线安装），轻量包 / clone 首次才需联网下载或离线放置 | 普通 Windows 机器、内网机器、不想装 Docker Desktop |
 | `local` | 本机 Docker Desktop 里跑三个 Linux 容器 | Docker Desktop 正在运行、能拉镜像 | 想与线上环境完全一致、已有 Docker |
 | `remote` | 已部署服务器上的 3002 / 5244 / 8080 | 服务器已按第 3 章部署并初始化；本机需 Node 与 `data/state.json` | 已有测试/生产服务器，本机只开控制台 |
 | `auto`（默认） | 按下面决策树自动选 | — | 直接双击 `install.bat` |
@@ -766,18 +766,18 @@ node scripts/sync-integrations.js --probe
 | 系统 | Windows 10 1809+ / Windows 11，PowerShell 5.1+ | `$PSVersionTable.PSVersion` |
 | 平台程序 | **无需预先准备**：Release 完整包内已含 exe（§18.12）；或 `git clone` 后由安装器自动获取（§18.11） | 已存在则直接用；没有也能装，只需能访问 GitHub Release，或备好离线 zip / 内网 URL |
 | 端口 | 9000 / 3002 / 5244 / 8080 未被占用（Gitea SSH 222、OpenList 5245 也需空闲） | `netstat -ano \| findstr ":9000 :3002 :5244 :8080"` |
-| `native` 模式 | **无需 Docker / WSL / Node / bash**；需联网下载 Gitea（约 112 MB）与 OpenList（完整包约 48 MB / lite 包约 31 MB）二进制，或提前放到 `windows\bin\` 走离线安装；在线 IDE 需要本机装有 VS Code（可选，缺失会自动降级） | `Get-Command code.cmd`、`Test-Path windows\bin` |
+| `native` 模式 | **无需 Docker / WSL / Node / bash / 联网**（全量包）：`windows\bin\` 已自带 Gitea / OpenList / VS Code CLI，安装器自动识别并启用 `-NoDownload`；轻量包 / clone 首次需联网下载或放离线二进制，本机是否装 VS Code 都不影响 | `Test-Path windows\bin\gitea.exe`、`windows\check-integrations.ps1` |
 | `local` 模式 | Docker Desktop 已安装并**正在运行**（托盘图标为 Running） | `docker info` |
 | `remote` 模式 | 本机有 Node、`data/state.json` 已登记服务器、服务器 `/data/platform/.env` 已有 Token | `node -v`、`node scripts/sync-integrations.js --probe` |
 | 权限 | 注册计划任务不强制管理员；失败会自动降级为「启动」文件夹快捷方式 | 安装器输出会说明 |
 
 > 安装器不会主动安装 Docker Desktop（这通常需要重启 / 重新登录）；`local` 模式缺 Docker 时可用 `-InstallDocker` 显式触发 winget，**但更推荐直接改用 `-Mode native`**，无需重启、无需虚拟化。
 >
-> 内网 / 无外网机器：把 `gitea.exe` 和 `openlist.exe` 放进 `windows\bin\`，再运行 `install.ps1 -Mode native -BinDir windows\bin -NoDownload`（详见 §18.10.3）。
+> 内网 / 无外网机器：直接下载 Release 全量包 `devplatform-windows.zip`（已自带三个程序），解压后双击 `INSTALL.bat` 即可纯离线安装；轻量包 / `git clone` 用户把 `devplatform-services.zip` 放进 `windows\bootstrap\` 效果相同（详见 §18.10.3）。
 
 ### 18.3 一键安装
 
-**不 clone 也行**：从 [Releases](https://github.com/sea-team/devplatform/releases/latest) 下载 `devplatform-windows.zip`，解压后双击根目录 `START.bat`（**只启动控制台，集成服务不会自动安装**）或 `INSTALL.bat`（控制台 + 三项集成服务 + 开机自启），见 §18.12。
+**不 clone 也行**：从 [Releases](https://github.com/sea-team/devplatform/releases/latest) 下载 `devplatform-windows.zip`（**全量包，已自带三项集成服务程序**），解压后双击根目录 `START.bat`（**只启动控制台，集成服务不会自动安装**）或 `INSTALL.bat`（控制台 + 三项集成服务 + 开机自启，**全程离线**），见 §18.12。
 
 **最简单**：`git clone` 后直接双击 `windows\install.bat`，等它跑完，浏览器会自动打开 `http://localhost:9000`。**没有 Docker 的机器会全自动走 `native` 模式**；**没有 `platform\dist\` 也会自动下载预构建包**（§18.11），两者都不需要额外参数。
 
@@ -975,10 +975,12 @@ node scripts/sync-integrations.js --probe
 |---|---|---|---|
 | Git 仓库 | `gitea.exe web --config <app.ini>`，SQLite 单库、内置 SSH 关闭 | Gitea 官方 Windows amd64 exe（Go 单文件，无运行时依赖） | ≈ 112 MB |
 | 存储挂载 | `openlist.exe server` | OpenList 官方 `openlist-windows-amd64.zip` 里的 `openlist.exe` | ≈ 48 MB |
-| 在线 IDE | `code-tunnel.exe serve-web --port 8080 ...` | 本机已安装的 VS Code（Windows 原生 Web IDE） | 0（复用） |
+| 在线 IDE | `code-tunnel.exe serve-web --port 8080 ...` | 全量包随带的 VS Code 官方独立 CLI（`code.exe` 重命名）；未自带时回退本机已装 VS Code | ≈ 29 MB（随包） |
 | 平台本体 | `platform/dist/devplatform.exe` | 已构建好的单文件程序 | ≈ 84 MB |
 
 `code-server` 官方没有 Windows 版，所以 `native` 模式用 VS Code 自带的 `serve-web` 代替。实测它的 `/healthz` 返回 2xx，平台现有的 `/api/overview` 探测逻辑**无需改动**即可判定在线；浏览器打开 `CODE_SERVER_URL` 就是完整的 VS Code Web UI。
+
+> **全量发行包已内置这三项程序**（`windows\bin\`，由 CI 的 `windows/fetch-services.ps1` 从官方源抓取，并写入 `services-manifest.json` / `THIRD-PARTY.txt`）。`INSTALL.bat` 检测到三项齐全会自动加 `-NoDownload`，下面这些下载源只对轻量包 / `git clone` 用户生效。
 
 下载源按可达性依次尝试，任一成功即停：
 
@@ -1012,28 +1014,39 @@ windows/runtime/              # 整个目录不入库（.gitignore 已排除）
 
 > `native` 模式把 `WORKSPACE_DIR` 显式写成 `platform/dist/workspace`——这是 exe 的实际工作区（`DP_ROOT/workspace`）。IDE 的 `--default-folder` 也指向它，因此**在线 IDE 与平台的文件管理器看到的是同一份文件**，这一点比 `remote` 模式更一致。
 
-#### 18.10.3 内网 / 离线安装（不联网）
+#### 18.10.3 内网 / 离线安装（全量包开箱即用）
 
-在有网的机器上下载两个文件，放到项目 `windows\bin\` 目录：
+**全量包 `devplatform-windows.zip` 不需要下面的手动步骤**：`windows\bin\` 已含 `gitea.exe` / `openlist.exe` / `code-tunnel.exe` + `services-manifest.json` + `THIRD-PARTY.txt`，由 CI 通过 `windows/fetch-services.ps1` 从官方源抓取。`install.ps1 -Mode native` 会自动把 `windows\bin` 作为离线源，三项齐全时自动启用 `-NoDownload`；`native-services.ps1` 再把 exe 复制进 `windows\runtime\bin\` 后启动。全程零联网。
+
+轻量包 / `git clone` 用户有三种等价的离线补齐方式：
+
+| 方式 | 操作 | 结果 |
+|---|---|---|
+| 全量包（推荐） | 直接下载 `devplatform-windows.zip` 解压 | 开箱离线 |
+| 服务补充包 | 把 `devplatform-services.zip` 原样放到 `windows\bootstrap\devplatform-services.zip`，再跑 `INSTALL.bat` | `native-services.ps1` 自动解压到 `runtime\bin\` |
+| 手工放置 | 把三个 exe / OpenList 官方 zip 放进 `windows\bin\` | 自动识别（zip 会自动解压取 exe） |
+
+手工放置时的官方来源（也可用 `windows\fetch-services.ps1 -RequireCore` 一把抓齐，幂等、已有文件自动跳过）：
 
 | 文件名 | 下载地址 |
 |---|---|
 | `gitea.exe` | `https://dl.gitea.com/gitea/1.23.8/gitea-1.23.8-windows-4.0-amd64.exe` |
-| `openlist.exe` / `openlist-windows-amd64.zip` / `openlist-windows-amd64-lite.zip` | `https://github.com/OpenListTeam/OpenList/releases/download/v4.2.6/openlist-windows-amd64.zip`（解压取 `openlist.exe`；直接放任一官方 zip 也行，脚本会自动解压。lite 版约 31 MB，慢网更省时间） |
+| `openlist.exe` / `openlist-windows-amd64.zip` / `openlist-windows-amd64-lite.zip` | `https://github.com/OpenListTeam/OpenList/releases/download/v4.2.6/openlist-windows-amd64.zip` |
+| `code-tunnel.exe` | `https://update.code.visualstudio.com/latest/cli-win32-x64/stable`（zip 里的 `code.exe` 重命名） |
 
-然后在目标机器执行：
+强制纯离线安装（一般不必加参数，安装器会自动判断）：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode native -BinDir windows\bin -NoDownload
 ```
 
-`-BinDir` 里可以放 `gitea.exe`、`openlist.exe`、`openlist-windows-amd64.zip`、`openlist-windows-amd64-lite.zip` 任意组合（zip 会自动解压取出 exe）；`-NoDownload` 保证完全不联网。另一种分发方式是：在一台联网机器跑完 `-Mode native`，把整个 `windows\runtime\` 连同 `platform\dist\` 一起拷到目标机，脚本检测到 `runtime\bin\` 里已有二进制就不会重复下载。
+`-BinDir` 里可放 `gitea.exe`、`openlist.exe`、`code-tunnel.exe`、任一 OpenList 官方 zip 的任意组合；`-NoDownload` 保证完全不联网。另一种分发方式是：在一台联网机器跑完 `-Mode native`，把整个 `windows\runtime\` 连同 `platform\dist\` 一起拷到目标机，脚本检测到 `runtime\bin\` 里已有二进制就不会重复下载。
 
 #### 18.10.4 在线 IDE 的四种选择
 
 | `-IdeMode` | 行为 |
 |---|---|
-| `auto`（默认） | 自动找 `code.cmd` 同目录的 `code-tunnel.exe`（含 `%LOCALAPPDATA%`、`%ProgramFiles%` 常见安装位置）；找到就启用，找不到则该项保持「未配置」，其余模块照常 |
+| `auto`（默认） | 优先用 `windows\runtime\bin\code-tunnel.exe` / 随包 `windows\bin\code-tunnel.exe`；没有再找 `code.cmd` 同目录的 `code-tunnel.exe`（含 `%LOCALAPPDATA%`、`%ProgramFiles%` 常见安装位置）；都找不到则该项保持「未配置」，其余模块照常 |
 | `code` | 强制要求 VS Code；找不到时明确警告 |
 | `wsl` | 不接管 IDE 生命周期，提示你在 WSL 发行版内自行安装并监听 8080 的 code-server |
 | `none` | 完全不启用在线 IDE |
@@ -1070,7 +1083,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode na
 | Git 克隆方式 | HTTP（内置 SSH 关闭） | HTTP / SSH（compose 映射 222） | 远端配置 |
 | IDE | VS Code Web（扩展随本机 VS Code） | code-server（独立扩展目录） | 远端 code-server |
 | 工作区 | `platform/dist/workspace`，IDE 与文件管理一致 | compose 映射的 `workspace/` | 远端 `/home/coder/project`，与本机文件管理**不是同一份** |
-| 离线可用 | 可以（`-BinDir -NoDownload`） | 需先拉好镜像 | 需服务器在线 |
+| 离线可用 | 可以（全量包开箱离线；轻量包用 `devplatform-services.zip` 或 `-BinDir -NoDownload`） | 需先拉好镜像 | 需服务器在线 |
 | 升级 | 替换 `runtime/bin/*.exe` 后重跑 setup | `docker compose pull && up -d` | 远端 deploy |
 
 #### 18.10.8 已知限制
@@ -1080,7 +1093,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode na
 - 三个原生进程是「登录时由计划任务拉起」，不是 Windows 服务；注销后停止，重新登录自动恢复。
 - OpenList 若未来调整 `admin token` 输出格式，脚本取不到 Token 时会回退到 `OPENLIST_PASSWORD` 登录（平台已支持），不会中断安装。
 - 二进制版本默认固定为 Gitea `1.23.8` / OpenList `v4.2.6`；升级用 `-GiteaVersion` / `-OpenListVersion`，或手动替换 `runtime/bin/` 下的 exe。
-- 下载大文件受网络影响较大（Gitea 约 112 MB）；Gitea 优先用官方 `dl.gitea.com`，OpenList 默认走 `ghfast.top`（2026-11 实测：GitHub 直连大文件会被代理截断到 2 MB，其它加速源多超时，仅该源可完整下载 48 MB 包并校验通过）；仍不通就用 `-BinDir -NoDownload` 离线放置。
+- 下载大文件受网络影响较大（Gitea 约 112 MB）；Gitea 优先用官方 `dl.gitea.com`，OpenList 默认走 `ghfast.top`（2026-11 实测：GitHub 直连大文件会被代理截断到 2 MB，其它加速源多超时，仅该源可完整下载 48 MB 包并校验通过）。**全量发行包已内置这些二进制，可直接跳过整条下载链路**；只有轻量包 / `git clone` 用户才需要它，仍不通就下载 `devplatform-services.zip` 或用 `-BinDir -NoDownload` 离线放置。
 
 ### 18.11 从 GitHub clone 后首次安装（无 Node、无 dist）
 
@@ -1149,29 +1162,33 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -DistUrl
 
 §18.11 解决的是「已经 clone 了仓库但没有 exe」；本节是**连仓库都不需要**的用法。Release 页面：https://github.com/sea-team/devplatform/releases/latest （public 仓库，无需登录 / Token）。
 
-> **最容易误解的一点**：完整包里 `START.bat` **只启动控制台**，`INSTALL.bat` 才安装 Gitea / OpenList / 在线 IDE。只跑前者时三项显示「未配置 / 离线」是预期行为；`START.bat` 现在会在启动前把状态明确打印出来。
+> **最容易误解的一点**：全量包里 `START.bat` **只启动控制台**，`INSTALL.bat` 才安装 Gitea / OpenList / 在线 IDE。只跑前者时三项显示「未配置 / 离线」是预期行为；`START.bat` 现在会在启动前把状态明确打印出来。**好消息是**：全量包已自带这三项的官方二进制，`INSTALL.bat` 全程离线，不用再单独去下载集成服务程序。
 
-#### 18.12.1 四个资产怎么选
+#### 18.12.1 六个资产怎么选
 
-| 资产 | 体积 | 用途 | 需要 git / Node / Docker |
+| 资产 | 体积 | 用途 | 需要 git / Node / Docker / 联网 |
 |---|---|---|---|
-| **`devplatform-windows.zip`** | 约 36 MB | **推荐**。完整绿色包：程序 + 全部安装脚本 + `START.bat` / `INSTALL.bat` / `STOP.bat` + 中文说明 | 全不需要 |
+| **`devplatform-windows.zip`** | 约 134 MB | **推荐 · 全量包**：程序 + 全部安装脚本 + `START/INSTALL/STOP.bat` + 中文说明 + **随包自带的三个集成服务程序**（`windows\bin\`，原始大小约 279 MB，压缩后随包） | 全不需要，**安装集成服务也不需要联网** |
+| `devplatform-windows-lite.zip` | 约 36 MB | 轻量包：只含控制台与脚本；`INSTALL.bat` 首次需联网下载服务程序 | 全不需要，装服务时需联网 |
+| `devplatform-services.zip` | 约 101 MB | 仅三个官方 exe + 清单；放进轻量包 / `git clone` 的 `windows\bootstrap\` 即可离线安装 | 全不需要 |
 | `devplatform.exe` | 约 88 MB | 自包含单文件，放任意空目录双击即用；适合只要控制台或自行管理集成服务 | 全不需要 |
 | `devplatform-dist.zip` | 约 35 MB | 只有 `platform\dist\` 内容；给 `git clone` 后 `install.bat` 自动下载用，**一般不用手工下载** | 需要仓库脚本配套 |
-| `SHA256SUMS.txt` | < 1 KB | 前三个资产的 SHA256 校验值 | — |
+| `SHA256SUMS.txt` | < 1 KB | 以上资产的 SHA256 校验值 | — |
+
+> 全量包内 `windows\bin\services-manifest.json` 记录三个二进制的版本、官方来源与 SHA256，`THIRD-PARTY.txt` 是上游许可说明；三个文件都是官方原版、未修改。
 
 > **别混淆两个入口**：`START.bat` = **只启动控制台**；`INSTALL.bat` = 控制台 **+** 三项集成服务 **+** 开机自启。只跑 `START.bat` 时，控制台里 Gitea / OpenList / 在线 IDE 显示「未配置 / 离线」是**预期行为**，不是故障。`START.bat` 启动前会调用 `windows\check-integrations.ps1`，把三项的在线状态、本机原生服务是否已安装、以及下一步该做什么直接打印在窗口里。
 
 > 都只依赖 Windows 自带的 PowerShell 5.1，没有 Node、bash、WSL、Docker 也能跑。
 
-#### 18.12.2 完整绿色包：两个入口，按需选择（推荐）
+#### 18.12.2 全量绿色包：两个入口，按需选择（推荐）
 
 1. 下载 `devplatform-windows.zip`，解压（建议路径**不要带中文和空格**，例如 `D:\devplatform\`）。
 2. **只要控制台** → 双击解压根目录的 **`START.bat`**：
    - 启动前先运行 `windows\check-integrations.ps1`：窗口里打印 `Gitea / OpenList / 在线 IDE` 各自的地址与在线状态、本机原生服务是否已安装，以及下一步指引；若之前装过本机原生服务会自动拉起。
    - 然后启动控制台并打开 `http://localhost:9000`；首次启动会在 `platform\dist\` 下释放 `bundle.cjs`、`public\`、`release.json`、`.env` 模板。服务器管理、SSH / Web 终端、远程文件与编辑器、AI、构建部署、系统状态立即可用。
    - **这一步不会安装集成服务**，控制台里三项显示「未配置 / 离线」是预期行为。
-3. **要 Gitea / OpenList / 在线 IDE** → 双击 **`INSTALL.bat`**（等价 `windows\install.bat`）：有 Docker 走容器、无 Docker 自动走 Windows 原生 exe（§18.10）。装完会写好 `.env` 的地址与 Token 并启动服务，之后日常只需 `START.bat`（自动拉起已装好的原生服务）。复用已部署服务器则执行：
+3. **要 Gitea / OpenList / 在线 IDE** → 双击 **`INSTALL.bat`**（等价 `windows\install.bat`）：有 Docker 走容器、无 Docker 自动走 Windows 原生 exe（§18.10）。**全量包已自带三个程序**，安装器检测到 `windows\bin\` 三项齐全会自动启用 `-NoDownload`，全程离线；在线 IDE 也不要求本机装 VS Code。装完会写好 `.env` 的地址与 Token 并启动服务，之后日常只需 `START.bat`（自动拉起已装好的原生服务）。复用已部署服务器则执行：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1 -Mode remote -RemoteHost 10.0.0.246
@@ -1198,11 +1215,12 @@ DevPlatform\
 │   ├─ devplatform.exe / bundle.cjs / release.json / public\
 │   └─ .env / data\ / workspace\       ← 首启生成，凭据都在这里
 ├─ windows\                            ← install / native-services / check-integrations / stop / uninstall 等脚本
-│   └─ bootstrap\                      ← 内网可放 devplatform-dist.zip
+│   ├─ bin\                            ← 随包自带的三个官方服务程序 + 清单 + 许可说明
+│   └─ bootstrap\                      ← 内网可放 devplatform-dist.zip / devplatform-services.zip
 └─ scripts\                            ← remote 模式同步配置用（需 Node）
 ```
 
-包内**不含** `.env`、`data\`、`state.json`、`windows\runtime\` 等本机状态与凭据；`INSTALL.bat` 检测到 exe 已存在会跳过联网取包，因此整包可以在完全离线环境使用。
+包内**不含** `.env`、`data\`、`state.json`、`windows\runtime\` 等本机状态与凭据；`INSTALL.bat` 检测到 exe 已存在会跳过联网取包，且三个集成服务程序已在 `windows\bin\`，因此**整包可以在完全离线环境完成安装**（轻量包才需要首次联网下载）。
 
 #### 18.12.3 单文件 exe：下载一个文件就能跑
 
@@ -1223,14 +1241,17 @@ release.json   版本清单
 
 #### 18.12.4 自己生成发行包 / 内网分发
 
-在已有构建产物的机器上一条命令生成全部资产（默认输出到 `windows\bootstrap\`）：
+在已有构建产物的机器上准备随包二进制并生成全部资产（默认输出到 `windows\bootstrap\`）：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File windows\pack-release.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File windows\pack-release.ps1 -OutputDir D:\share
+# 1) 从官方源抓取 Gitea / OpenList / VS Code CLI 到 windows\bin（幂等，已有则跳过）
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\fetch-services.ps1 -RequireCore
+# 2) 生成六个资产（全量包 / 轻量包 / 服务补充包 / 组件包 / 单 exe / 校验文件）
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\pack-release.ps1 -IncludeServices
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\pack-release.ps1 -IncludeServices -OutputDir D:\share
 ```
 
-`pack-release.ps1` 会调用 `pack-dist.ps1` 生成组件包，再用 `windows\release\` 里的模板（`START.bat` / `INSTALL.bat` / `STOP.bat` / `README-RELEASE.txt`）组装完整绿色包，最后把三个文件的哈希写入 `SHA256SUMS.txt`。可用 `-Dist <另一台机器的 dist 目录>` 指定程序来源。
+`fetch-services.ps1` 会校验 PE 头、写 `services-manifest.json`（版本 / 来源 / SHA256）与 `THIRD-PARTY.txt`；`pack-release.ps1 -IncludeServices` 调用 `pack-dist.ps1` 生成组件包，用 `windows\release\` 模板组装**全量包与轻量包**，另产出 `devplatform-services.zip`，并把五个文件的哈希写入 `SHA256SUMS.txt`。GitHub Actions (`.github/workflows/release.yml`) 用的就是这两个命令，CI 里还有 `actions/cache` 缓存二进制。不加 `-IncludeServices` 时保持旧行为（只产一个不含服务的 `devplatform-windows.zip`）；可用 `-Dist` / `-ServicesDir` 指定程序与二进制来源。
 
 校验：
 
@@ -1239,7 +1260,7 @@ Get-FileHash .\devplatform-windows.zip -Algorithm SHA256
 # 与 SHA256SUMS.txt 比对
 ```
 
-内网机器把整个 `devplatform-windows.zip` 拷过去解压即可，不需要访问 GitHub；解压后同样记得区分 `START.bat`（只启动控制台）与 `INSTALL.bat`（连集成服务一起装）。若坚持用 clone 方式，则把 `devplatform-dist.zip` 放进 `windows\bootstrap\`（§18.11.2）。
+内网机器把整个 `devplatform-windows.zip` 拷过去解压即可，不需要访问 GitHub；解压后同样记得区分 `START.bat`（只启动控制台）与 `INSTALL.bat`（连集成服务一起装，**三项程序已在包内**）。已有轻量包 / clone 安装的机器，只需把 `devplatform-services.zip` 拷进 `windows\bootstrap\` 即可升级成离线全量；clone 方式取程序包则把 `devplatform-dist.zip` 也放进 `windows\bootstrap\`（§18.11.2）。
 
 #### 18.12.5 常见问题
 
@@ -1251,4 +1272,5 @@ Get-FileHash .\devplatform-windows.zip -Algorithm SHA256
 | 窗口里提示「本机原生服务：未安装」 | 从未执行过 `INSTALL.bat` 的 native 模式 | 单独复查：`windows\check-integrations.ps1`；装完会生成 `windows\runtime\services.json`，之后 `START.bat` 会自动拉起 |
 | 提示端口 9000 被占用 | 已有一个实例在跑 | 用 `STOP.bat` 停掉旧实例，或改 `.env` 里的 `PORT` |
 | 单 exe 提示「无法释放 bundle.cjs」 | exe 放在只读目录 | 移到可写目录（如 `D:\devplatform\`）再运行 |
+| `INSTALL.bat` 仍在联网下载 / 提示下载超时 | 用的是轻量包或 `git clone` 安装，包内没有三个二进制 | 换全量包 `devplatform-windows.zip`；或把 `devplatform-services.zip` 放进 `windows\bootstrap\` 后重跑（§18.10.3） |
 | 下载到的文件大小明显不对 | 代理返回了 504 页面 / 下载被截断 | 用 `SHA256SUMS.txt` 校验，换 `ghfast.top` 加速源或重新下载 |

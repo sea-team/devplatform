@@ -13,6 +13,11 @@
     也可用 -DistZip（本地 zip / 已构建好的 dist 目录）、-DistUrl（内网 HTTP）离线安装，
     或把 zip 放进 windows\bootstrap\ 目录。-SkipDistDownload 可禁用自动下载。
 
+  集成服务程序随发行包自带：windows\bin\ 下的 gitea.exe / openlist.exe /
+  code-tunnel.exe 会被自动识别，三项齐全时直接纯离线安装，无需联网、无需
+  手动 -BinDir / -NoDownload。轻量包用户可把 devplatform-services.zip
+  放进 windows\bootstrap\，效果相同。
+
   三种集成服务模式：
     local  = Docker 容器（需 Docker Desktop）
     native = Windows 原生 exe（无 Docker，推荐普通 Windows 机器）
@@ -305,6 +310,24 @@ function Start-NativeSetup {
     Action = 'setup'; Root = $Root; Port = $Port; IdeMode = $IdeMode
     GiteaVersion = $GiteaVersion; OpenListVersion = $OpenListVersion
   }
+  $bundledBin = Join-Path $PSScriptRoot 'bin'
+  $bundled = @()
+  foreach ($f in @('gitea.exe', 'openlist.exe', 'code-tunnel.exe')) {
+    if (Test-Path -LiteralPath (Join-Path $bundledBin $f)) { $bundled += $f }
+  }
+  if ($bundled.Count -gt 0) {
+    $mb = 0
+    foreach ($f in $bundled) { $mb += (Get-Item -LiteralPath (Join-Path $bundledBin $f)).Length }
+    Good "发行包已自带集成服务程序：$($bundled -join ' / ')（$([math]::Round($mb / 1MB)) MB）"
+    if (-not $BinDir) { $h.BinDir = $bundledBin }
+    if (-not $NoDownload -and $bundled.Count -eq 3) {
+      $h.NoDownload = $true
+      Good '三项齐全，启用纯离线安装（不访问任何下载源）'
+    }
+  }
+  if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'bootstrap\devplatform-services.zip')) {
+    Good '检测到 windows\bootstrap\devplatform-services.zip，安装器会优先离线解压（无需联网）'
+  }
   if ($BinDir) { $h.BinDir = $BinDir }
   if ($NoDownload) { $h.NoDownload = $true }
   if ($ForceEnv) { $h.ForceEnv = $true }
@@ -429,6 +452,10 @@ function Show-Summary([string]$ActualMode) {
   if ($ActualMode -eq 'remote') { Write-Host '    集成服务    : 复用已部署服务器（本机无服务进程）' -ForegroundColor DarkGray }
   elseif ($ActualMode -eq 'native') {
     Write-Host '    集成服务    : Windows 原生 exe（windows\runtime，无需 Docker）' -ForegroundColor DarkGray
+    $src = '联网下载 / 已有本机二进制'
+    if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'bin\gitea.exe')) { $src = '随发行包自带（纯离线安装）' }
+    elseif (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'bootstrap\devplatform-services.zip')) { $src = '离线补充包 devplatform-services.zip（纯离线安装）' }
+    Write-Host "    服务来源    : $src" -ForegroundColor DarkGray
     Write-Host "    在线 IDE    : $(if ($IdeMode -eq 'none') { '未启用' } elseif ($IdeMode -eq 'wsl') { 'WSL code-server（自行安装）' } else { 'VS Code serve-web' })" -ForegroundColor DarkGray
   } else { Write-Host '    集成服务    : Docker 容器（gitea / openlist / code-server）' -ForegroundColor DarkGray }
   Write-Host "    Gitea       : $gitea" -ForegroundColor White

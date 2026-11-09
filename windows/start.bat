@@ -24,6 +24,11 @@ cd /d "%DIST%"
 start "DevPlatform" /min devplatform.exe
 echo.
 echo   START.bat = console only. INSTALL.bat / windows\install.bat = with integrations.
+if exist "%ROOT%\windows\bin\gitea.exe" (
+  echo   Bundled service binaries found - INSTALL.bat works fully offline.
+) else (
+  echo   No bundled binaries - INSTALL.bat downloads them on first run.
+)
 echo   Stop: STOP.bat / windows\stop.bat
 echo.
 endlocal
