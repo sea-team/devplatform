@@ -7,17 +7,32 @@ if not exist "%DIST%\devplatform.exe" (
   echo   Please re-download the full package from GitHub Releases.
   exit /b 1
 )
-if exist "%ROOT%windows\runtime\services.json" (
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%ROOT%windows\native-services.ps1" -Action start >nul 2>&1
+
+echo.
+echo   [1/3] Checking integration services (Gitea / OpenList / online IDE)...
+if exist "%ROOT%windows\check-integrations.ps1" (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%windows\check-integrations.ps1" -StartNative
+) else (
+  if exist "%ROOT%windows\runtime\services.json" (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%windows\native-services.ps1" -Action start
+  )
+  echo   NOTE: integrations are NOT installed automatically; run INSTALL.bat.
 )
+
+echo.
+echo   [2/3] Starting DevPlatform console (this does NOT install integrations)...
 cd /d "%DIST%"
 start "DevPlatform" /min devplatform.exe
 echo.
-echo   DevPlatform is starting: http://localhost:9000
-echo   First launch extracts embedded files into platform\dist - please wait a few seconds.
+echo   [3/3] Opening http://localhost:9000
+echo         First launch extracts embedded files into platform\dist - wait a few seconds.
 timeout /t 3 >nul
 start "" http://localhost:9000
 echo.
-echo   Stop: STOP.bat      Full setup with integrations: INSTALL.bat
+echo   ------------------------------------------------------------
+echo   START.bat   = console only, integrations stay offline.
+echo   INSTALL.bat = console + Gitea / OpenList / online IDE + autostart.
+echo   Stop: STOP.bat
+echo   ------------------------------------------------------------
 echo.
 endlocal

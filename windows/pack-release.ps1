@@ -7,7 +7,8 @@
 
   产出（都在 -OutputDir）：
     devplatform-dist.zip     组件包，供 git clone 后的安装器自动下载（保持兼容）
-    devplatform-windows.zip  完整绿色包，解压后双击 START.bat / INSTALL.bat 即可用
+    devplatform-windows.zip  完整绿色包；START.bat 只启动控制台，
+                             INSTALL.bat 才安装 Gitea / OpenList / 在线 IDE
     devplatform.exe          独立自包含单文件，放到任意空目录双击即可运行
     SHA256SUMS.txt           以上三个文件的哈希
 
