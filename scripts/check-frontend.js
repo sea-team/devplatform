@@ -28,11 +28,24 @@ const missing = refs.filter((id) => !ids.has(id) && id !== 'ops-hint');
 note(missing.length === 0, 'app.js 引用的静态 id 均存在', missing.length ? `缺失：${missing.join(', ')}` : `${refs.length} 个引用`);
 
 const sections = [...html.matchAll(/class="page" id="view-([a-z]+)"/g)].map((m) => m[1]);
-note(sections.length === 11 && sections.includes('gitsrc') && sections.includes('docker'),
-  '11 个模块页面已转为可标签化的 .page（含 Git 源 / Docker 管理）', sections.join(', '));
+note(sections.length === 12 && sections.includes('gitsrc') && sections.includes('docker') && sections.includes('proxy'),
+  '12 个模块页面已转为可标签化的 .page（含 Git 源 / Docker / 代理配置）', sections.join(', '));
 note(['/git-sources', '/docker/overview', '/extensions/backups', '/extensions/dbgate', '/builds/backends']
   .every((p) => app.includes(p)) && app.includes('function loadGitSources') && app.includes('function loadDocker'),
 'Git 源 / Docker 管理 / 备份 / DbGate / 构建后端接口已全部接线');
+
+// v0.3.1：分层代理页 + OpenList 管理集成。
+note(['/proxy/global', '/proxy/groups/', '/proxy/rules', '/proxy/overrides/', '/proxy/resolve', '/proxy/entities']
+  .every((p) => app.includes(p)) && app.includes('function loadProxy') && app.includes('proxy: loadProxy'),
+  '代理配置页四级优先级接口已全部接线');
+note(['/openlist/status', '/openlist/storages', '/openlist/drivers', '/openlist/files', '/openlist/connection']
+  .every((p) => app.includes(p)) && app.includes('function loadStorage') && app.includes('function olAction'),
+  'OpenList 连接 / 挂载 / 驱动 / 文件管理接口已全部接线');
+note(['id="openlist-config-form"', 'id="ol-driver"', 'id="storage-select-all"', 'data-ol-action="move"', 'id="openlist-frame"']
+  .every((s) => html.includes(s)), 'OpenList 管理界面控件齐全');
+note(['data-proxy-repo', 'data-dk-op="proxy"', 'data-server-proxy', 'data-ai-proxy']
+  .every((s) => app.includes(s)) && app.includes('function gotoProxyOverride'),
+  '四类对象均可一键跳到代理页预填单项覆盖');
 
 const scripts = [...html.matchAll(/<script src="\/vendor\/([^"]+)"/g)].map((m) => m[1]);
 const cmIndex = scripts.indexOf('codemirror.js');

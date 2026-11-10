@@ -247,7 +247,9 @@ node scripts/verify.js http://<host>:9000
 
 ---
 
-## 7. 八个功能模块
+## 7. 功能模块
+
+> 控制台目前共 12 个可标签化模块：总览、Git 仓库、在线 IDE、存储 / 文件、构建 · 部署、服务器、扩展 / 数据库、Git 源、Docker 管理、代理配置、AI 服务配置、AI 运维。后加入的四个模块分别见 §21–§23、§26–§27。
 
 ### 7.1 总览
 
@@ -463,7 +465,8 @@ node scripts/verify.js http://<host>:9000
 | 健康 / 总览 | `GET /health`、`GET /overview` |
 | 仓库 | `GET/POST /repos`、`POST /repos/clone` |
 | IDE | `GET /ide`、`POST /ide/open` |
-| OpenList | `GET /storage`、`POST /storage/mkdir`、`POST /storage/remove`、`PUT /storage/upload`、`GET /storage/mounts` |
+| OpenList 文件（旧） | `GET /storage`、`POST /storage/mkdir`、`POST /storage/remove`、`PUT /storage/upload`、`GET /storage/mounts` |
+| OpenList 管理（新） | `GET/PUT /openlist/connection`、`POST /openlist/connection/reset`、`GET /openlist/status\|settings`、`GET/POST/PUT/DELETE /openlist/storages...`、`GET /openlist/drivers...`、`GET/POST /openlist/files...`、`GET .../link\|download`、`PUT .../upload`（§26） |
 | 构建 | `GET /profiles`、`GET/POST /builds`、`GET /builds/:id`、`GET /builds/:id/log`、`POST /deploy`、`GET /deploys` |
 | 服务器 | `GET/POST /servers`、`DELETE /servers/:id`、`POST /servers/:id/test`、`GET /servers/:id/status`、`POST /servers/:id/exec` |
 | 远程文件 | `GET /servers/:id/files`、`GET/PUT /servers/:id/files/content`、`GET .../files/download`、`PUT .../files/upload`、`POST .../files/create\|mkdir\|rename\|delete` |
@@ -472,6 +475,7 @@ node scripts/verify.js http://<host>:9000
 | 扩展 / 数据库 | `GET /extensions/catalog`、`GET/POST/DELETE /extensions/instances[/:id]`、`POST .../action\|health\|inject\|backup\|upgrade`、`GET/PUT .../repos`、`GET .../connection\|logs`、`GET/POST/DELETE /extensions/backups...`、`GET/POST /extensions/dbgate...`（§19 / §23） |
 | 外部 Git 源 | `GET/POST /git-sources`、`PUT/DELETE /git-sources/:id`、`POST .../test`、`GET .../repos\|branches`、`GET /builds/backends`（§21） |
 | Docker 管理 | `GET /docker/overview\|audit`、容器 `POST .../action\|exec`、`GET .../logs\|inspect\|stats`、镜像 `POST /docker/images/pull\|load\|load-path\|remove`、`GET /docker/images/export`、卷 / 网络 / 模板 CRUD（§22） |
+| 分层代理 | `GET /proxy`、`PUT /proxy/global`、`PUT /proxy/groups/:scope`、`GET/POST/PUT/DELETE /proxy/rules...`、`GET /proxy/entities`、`PUT/DELETE /proxy/overrides/:scope...`、`POST /proxy/resolve\|test`（§27） |
 
 需要鉴权时，SSE 与下载链接用 `?token=<ADMIN_TOKEN>`，其余用 `Authorization: Bearer <ADMIN_TOKEN>`。
 
@@ -485,6 +489,7 @@ node scripts/verify.js http://<host>:9000
 4. 挂载 `/var/run/docker.sock` 等价于把宿主机 root 能力交给容器，仅限可信内网。
 5. SFTP 路径做 `..` 穿越与系统目录删除保护；构建命令使用内置白名单；编辑器对有损编码拒绝保存。
 6. `.env.example` 与 `verify.js` 内含测试机内网地址和示例口令，如要推送到公共远程仓库，先替换为占位符。
+7. 代理 URL 里的账号密码、OpenList Token / 管理员密码同样只存 `data/state.json`（600）。`/api/proxy`、`/api/openlist/connection`、各类列表接口一律脱敏；表单把 `******` 原样提交时后端沿用已保存值，不会写入占位符。OpenList 站点设置接口只回白名单字段，不回传令牌类配置。
 
 ---
 
@@ -1612,3 +1617,113 @@ DbGate 社区版按 GPL-3.0 分发，平台只提供官方镜像清单与连接�
 前端新增「Git 源」「Docker 管理」两个模块页（共 11 个可标签化模块），扩展页增加备份存档、绑定仓库、打开管理界面、升级等卡片；`public/index.html` 资源版本升至 `?v=20261110b`。
 
 验证方式：`npm run check`（19 个后端模块）、`scripts/check-frontend.js`（静态一致性 + DOM stub 跑 boot）、`scripts/verify.js`；隔离实例冒烟覆盖外部 Git 源登记 / 脱敏 / 连通 / 分支 / 多源聚合 / **真实 git clone**、外部实例绑定仓库与多目录注入、模板 CRUD、路径穿越与缺参校验；Docker Engine API 模拟覆盖容器二次确认与审计、镜像拉取 / 裸 tar 导入 / 含斜杠 ref 导出与删除、卷与网络 CRUD、`mysqldump` 备份 → 下载 → 恢复、tag 升级（升级前自动备份）、DbGate 安装与连接同步、`purge=1` 卸载。完整 SEA 构建验证新增模块打进单文件 exe 后还原运行实例的 `dist`。
+
+---
+
+## 26. OpenList 管理集成（存储 / 文件）
+
+「存储 / 文件」页不再只是只读的目录列表：平台把 OpenList（兼容 AList V3 API）的**连接配置、挂载存储、驱动清单、站点设置与全部文件操作**接成原生 API，同时保留「打开 / 内嵌 OpenList 后台」入口处理更复杂的高级设置。
+
+### 26.1 页面能力
+
+| 区块 | 能力 |
+|---|---|
+| 连接状态 | 在线 / 离线、版本、站点名、挂载数、配置来源（面板 / .env）、生效代理、WebDAV 地址；一键打开或内嵌 `/@manage` 后台 |
+| 连接设置 | 服务地址、管理员账号、API Token、管理员密码；可一键「恢复 .env 配置」。凭据只写 `data/state.json`（600），列表一律脱敏 |
+| 文件浏览 | 面包屑导航、多选全选、进入目录、下载、直链（自动拼 `sign`）、重命名、移动、复制、批量删除、新建目录、多文件上传 |
+| 挂载存储 | 列出 / 新增 / 编辑 / 启停 / 删除 / 重载全部挂载；`addition` 用 JSON 填写，点驱动清单可自动带出配置模板 |
+| 驱动清单 | `/api/admin/driver/list` 与 `/api/admin/driver/info`，展示可用驱动并回填模板 |
+| WebDAV | 复制 `http://<host>:5244/dav/`，可直接挂到本机或 rclone |
+
+> 存储增删、驱动清单、站点设置需要**管理员权限的 Token**。用只读 Token 或密码登录换取到的令牌权限不足时，对应卡片会显示真实错误而不是空数据。
+
+### 26.2 后端接口
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET / PUT | `/api/openlist/connection` | 读取 / 保存连接信息 |
+| POST | `/api/openlist/connection/reset` | 恢复 `.env` 配置 |
+| GET | `/api/openlist/status` `/api/openlist/settings` | 在线状态与站点设置（敏感项白名单过滤） |
+| GET / POST / PUT / DELETE | `/api/openlist/storages[/:id]` | 挂载存储 CRUD；`/:id/toggle` 启停；`/reload` 重载 |
+| GET | `/api/openlist/drivers` `/api/openlist/drivers/info?driver=` | 驱动清单与配置模板 |
+| GET | `/api/openlist/files?path=` | 列目录（归一化 `isDir / size / modified / parent`） |
+| POST | `/api/openlist/files/{mkdir,rename,remove,move,copy}` | 文件全操作 |
+| GET | `/api/openlist/files/link?path=` `/api/openlist/files/download?path=` | 直链与**后端代理下载**（浏览器不必直连 OpenList / 对象存储，不暴露 Token） |
+| PUT | `/api/openlist/files/upload?path=&name=` | 二进制上传（raw body，上限 100 MB） |
+
+旧的 `/api/storage` `/api/storage/mkdir` `/api/storage/remove` `/api/storage/upload` `/api/storage/mounts` **继续保留**，供已有脚本兼容；前端已切到新接口。
+
+路径安全：所有路径必须以 `/` 开头、拒绝 `..` / 空字节 / 换行；名称拒绝 `/`、`\`、`.`、`..`。下载有 100 MB 上限，避免把平台内存打爆。
+
+---
+
+## 27. 分层代理配置
+
+新增「代理配置」模块页（第 12 个可标签化模块）。**命中即停止**的优先级链：
+
+| 作用域 | 优先级（高 → 低） |
+|---|---|
+| Git 仓库 | 单个仓库代理 → Git Host 匹配规则 → Git 分组代理 → 全局代理 |
+| Docker / 容器 | 单个容器代理 → Docker 代理 → 全局代理 |
+| 服务器 / SSH | 单个服务器代理 → 服务器代理 → 全局代理 |
+| AI 服务 | 单个 AI 服务代理 → AI 服务代理 → 全局代理 |
+
+Git 作用域额外支持 Host 规则（`github.com`、`*.gitea.internal`、完整 URL 或仓库 id，支持 `*` 通配），按匹配精确度与规则长度排序。**克隆表单里的「本次克隆代理」**位于所有层级之上，优先级最高，仅对这一次请求生效。
+
+「Git 仓库 / Docker 管理 / 服务器 / AI 服务配置」四处的列表都新增了「代理」按钮，点击直接跳到代理页并预填该对象标识，不用手工复制 id。
+
+### 27.1 取值语义
+
+| 值 | 含义 |
+|---|---|
+| 留空 | 继承下一级 |
+| `http://` `https://` | HTTP 转发（undici ProxyAgent）；账号密码只存 `state.json`，界面显示 `******` |
+| `socks5://` `socks4://` | 用于 SSH 隧道与本地 CLI 环境变量；HTTP 请求不支持，会给出明确报错 |
+| `direct` | 明确直连：终止链，并把 `HTTP_PROXY / HTTPS_PROXY / ALL_PROXY` 显式清空，避免子进程继承平台环境 |
+
+`NO_PROXY` 支持精确域名、`.后缀`、`*` 与 IPv4 CIDR，默认已含 `localhost / 127.0.0.1 / ::1 / 10.0.0.0/8 / 172.16.0.0/12 / 192.168.0.0/16`。
+
+### 27.2 各链路的实际落地方式
+
+| 链路 | 生效方式 |
+|---|---|
+| Git API / Gitea | 每次 `httpJSON` 传入该作用域解析出的代理；内置 Gitea 也按 host 走同一条链 |
+| `git clone` | `-c http.proxy=... -c https.proxy=...` + 子进程环境变量；SSH 地址在非 Windows 下用 `core.sshCommand` 挂 `nc -X connect` |
+| Docker Engine | `DOCKER_HOST=tcp://...` 时通过 CONNECT 隧道转发；平台创建的容器把代理注入 `Env`（远程安装走 600 权限 `--env-file`） |
+| 构建 / 编译 | `npm / go / pip / cargo` 等构建子进程注入代理环境变量 |
+| SSH / SFTP / Web 终端 | `sshConnect()` 用 HTTP CONNECT 或 SOCKS5 握手生成裸 socket，传给 ssh2 的 `sock` 选项 |
+| AI API | `aiChat()` 按 AI 作用域链设置 undici dispatcher |
+| 本地 AI CLI | 注入 `HTTP_PROXY / HTTPS_PROXY / ALL_PROXY`；WSL 下在 bash 里 `export` 或 `unset` |
+| OpenList / 内置服务 | 不属于四个作用域，统一走全局代理 + `NO_PROXY` |
+
+### 27.3 接口与自检
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/proxy` | 全量配置（脱敏）、优先级说明、能力探测 |
+| PUT | `/api/proxy/global` `/api/proxy/groups/:scope` | 全局 / 分组设置 |
+| GET / POST / PUT / DELETE | `/api/proxy/rules[/:id]` | Git Host 规则 CRUD |
+| GET | `/api/proxy/entities` | 四类对象的下拉候选（仓库 / 容器 / 服务器 / AI 服务，网络探测失败自动降级） |
+| PUT / DELETE | `/api/proxy/overrides/:scope[/:id]` | 单项覆盖；id 含 `/` 时用 `?id=` 传 |
+| POST | `/api/proxy/resolve` | 解析预览：返回每一层的命中情况与最终代理 |
+| POST | `/api/proxy/test` | 连通性测试（可测全局 / 分组 / 单项 / 手动指定） |
+
+`DP_PROXY_GLOBAL / DP_PROXY_GIT / DP_PROXY_DOCKER / DP_PROXY_SERVER / DP_PROXY_AI / DP_PROXY_NO / DP_PROXY_GIT_RULES / DP_PROXY_ENABLED` 是**首次启动默认值**，见 `.env.example`；界面保存后以 `state.json` 为准。`DP_PROXY_GIT_RULES` 格式为 `分号分隔的 pattern=proxy`，例如 `github.com=http://127.0.0.1:7890;gitlab.internal=direct`。
+
+安全边界：代理 URL 中的凭据不会出现在任何 API 响应、日志或前端表单回显里；表单把脱敏值原样提交时后端会沿用已保存的真实地址，不会把 `******` 写回配置。
+
+---
+
+## 28. v0.3.1 新增文件与验证
+
+| 文件 | 职责 |
+|---|---|
+| `src/proxy.js` | 分层代理配置、四级解析、脱敏、NO_PROXY、HTTP CONNECT / SOCKS5 隧道、连通性测试 |
+| `src/openlist.js` | OpenList 连接 / 挂载存储 / 驱动 / 设置 / 文件全操作客户端 |
+| `scripts/smoke-proxy-openlist.js` | 本地假 OpenList + 假 HTTP 代理的端到端冒烟（不依赖外网 / Docker） |
+
+改动：`src/core.js`（state 新增 `proxy / openlist`）、`src/integrations.js`（统一代理注入、SSH 隧道、OpenList 通用 API）、`src/gitSources.js`（clone 代理）、`src/dockerApi.js` / `src/extRuntime.js` / `src/engine.js` / `src/buildBackends.js`（容器与构建代理）、`src/remoteOps.js`（sshConnect）、`src/extensions.js` / `src/server.js`（实例代理 + 40 余条新路由）、前端三件套（第 12 个模块页 + 重构存储页）、`docker-compose.yml` / `.env.example` / 单文件 `.env` 模板。
+
+验证：`npm run check`（21 个后端模块）、`scripts/check-frontend.js`（12 个模块页 + DOM stub 跑 boot）、`scripts/smoke-proxy-openlist.js`（**45 项全通过**：四组优先级链、direct / 通配 / NO_PROXY / 脱敏 / 回显保护、HTTP CONNECT 与 SOCKS5 隧道转发真实请求、`tunnelAgent` 转发 Docker Engine TCP、代理连通性、git clone 注入、OpenList 连接 / 状态 / 设置白名单 / 挂载 CRUD / 驱动模板 / 文件全操作 / 直链 / 下载 / 上传 / 非法参数拦截 / 旧接口回归）、完整 SEA 构建（release.json = 0.3.1，bundle 含新模块）。
+
+前端资源版本升至 `?v=20261110c`；已发布包升级到 v0.3.1 后前端会自动刷新（静态资源 `cache-control: no-cache`）。

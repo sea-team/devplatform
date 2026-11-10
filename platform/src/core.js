@@ -61,6 +61,10 @@ function defaultState() {
     gitSources: [],
     backups: [],
     composeTemplates: [],
+    // 分层代理：全局 / 分组 / Git Host 规则 / 单项覆盖（见 src/proxy.js）
+    proxy: { global: {}, groups: {}, rules: [], overrides: {} },
+    // 运行时 OpenList 连接配置（界面可覆盖 .env；凭据只存 state.json）
+    openlist: null,
   };
 }
 

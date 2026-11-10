@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const net = require('net');
+const proxyModule = require('./proxy');
 const crypto = require('crypto');
 const {
   config, state, update, uid, safeWorkspacePath, relativeWorkspacePath,
@@ -200,6 +201,10 @@ function publicInstance(inst) {
     canUpgrade: Boolean(manifest && manifest.tags.length > 1),
     kind: (manifest && manifest.kind) || 'custom',
     lastUpgrade: inst.lastUpgrade || null,
+    proxy: inst.proxy ? proxyModule.maskUrl(inst.proxy) : '',
+    effectiveProxy: proxyModule.resolve('docker', {
+      itemId: inst.id, host: inst.host, entity: inst,
+    }).masked,
   };
 }
 
@@ -264,6 +269,8 @@ async function createInstance(body = {}) {
     statusDetail: mode === 'docker' ? '正在创建容器' : '正在校验外部地址',
     containerId: '', containerName: '', volumeName: '',
     target, repoIds: [], createdAt: new Date().toISOString(),
+    // 单个容器代理（留空则按 Docker 代理 → 全局代理继承）
+    proxy: String(body.proxy || '').trim(),
   };
   update((s) => {
     if (!Array.isArray(s.extensions)) s.extensions = [];

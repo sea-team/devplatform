@@ -155,7 +155,8 @@ Q: 我只想连到别处已经部署好的三个服务？
 A: 不用 INSTALL.bat，把地址与 Token 填进 platform\dist\.env 后重启 exe。
 
 Q: 项目要用 MySQL / PostgreSQL / Redis，或要连 GitHub 上的仓库，怎么弄？
-A: 控制台左侧新增了「扩展 / 数据库」「Git 源」「Docker 管理」三个模块：
+A: 控制台左侧新增了「扩展 / 数据库」「Git 源」「Docker 管理」「代理配置」四个模块，
+   「存储 / 文件」页也已集成 OpenList 后台管理：
    - 有 Docker：可一键装数据库容器，自动生成密码与连接串并注入项目 .env；
      还能装 DbGate（开源多数据库 Web 客户端），连接会自动同步。
    - 无 Docker：自动降级为「外部连接」，只登记已有数据库地址与凭据，
@@ -166,5 +167,19 @@ A: 控制台左侧新增了「扩展 / 数据库」「Git 源」「Docker 管理
      构建后端 auto 会自动走 SSH 远程容器构建，不需要本机装 Docker Desktop。
    数据库镜像不含在本安装包内（体积 GB 级且依赖容器运行时）；
    内网可先用「Docker 管理 · 镜像」离线导入，详见 README 第 19-25 章。
+
+Q: 公司网络要走代理，Git / Docker / SSH / AI 能不能分别配？
+A: 可以。控制台「代理配置」页按四级优先级生效（命中即停止）：
+   - 单个仓库代理 > Git Host 匹配 > Git 分组 > 全局；
+   - 单个容器代理 > Docker 代理 > 全局；
+   - 单个服务器代理 > 服务器代理 > 全局；
+   - 单个 AI 服务代理 > AI 服务代理 > 全局。
+   留空继承下一级，填 direct 表示强制直连；支持 NO_PROXY、解析预览与连通性测试。
+   代理账号密码只存 state.json（600），界面和接口一律显示 ******。详见 README 第 27 章。
+
+Q: 文件管理除了服务器 SFTP，OpenList 里的挂载和文件怎么管？
+A: 「存储 / 文件」页已集成 OpenList：可改连接信息、增删启停挂载存储、查看驱动模板，
+   并支持面包屑浏览、多选、重命名 / 移动 / 复制 / 批量删除、直链、下载、多文件上传；
+   也可一键打开或内嵌 OpenList 后台。需要管理员权限的 Token。详见 README 第 26 章。
 
 完整文档：https://github.com/sea-team/devplatform#readme

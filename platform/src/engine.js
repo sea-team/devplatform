@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 const { config, state, update, uid, safeWorkspacePath } = require('./core');
 const { sshExec, sftpPut, collectStatus, aiChat } = require('./integrations');
 const buildBackends = require('./buildBackends');
+const proxyModule = require('./proxy');
 
 /* --------------------------- 多语言构建 Profile -------------------------- */
 // 每个 profile 定义：识别文件、容器镜像、安装 / 编译 / 测试命令、产物目录。
@@ -87,7 +88,11 @@ function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: { ...process.env, CI: 'true', DEBIAN_FRONTEND: 'noninteractive' },
+      env: {
+        ...process.env, CI: 'true', DEBIAN_FRONTEND: 'noninteractive',
+        // 编译期拉取依赖（npm / go / pip / cargo）按 Docker 代理链注入环境变量。
+        ...proxyModule.envFor(proxyModule.resolve('docker', { itemId: 'build' })),
+      },
       shell: false,
     });
     let settled = false;

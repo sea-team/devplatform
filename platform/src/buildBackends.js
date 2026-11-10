@@ -21,12 +21,16 @@ const remoteOps = require('./remoteOps');
 const remoteDocker = require('./remoteDocker');
 const runtime = require('./extRuntime');
 const { runContainer } = require('./dockerApi');
+const proxyModule = require('./proxy');
 
 const shq = remoteDocker.shq;
 
 function runProcess(cmd, args, { cwd, onData, timeoutMs = 900000, stdinText = '' } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, shell: false });
+    const child = spawn(cmd, args, {
+      cwd, shell: false,
+      env: { ...process.env, ...proxyModule.envFor(proxyModule.resolve('docker', { itemId: 'build-backend' })) },
+    });
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;

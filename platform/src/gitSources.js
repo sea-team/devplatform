@@ -15,6 +15,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { config, state, update, uid, safeWorkspacePath, relativeWorkspacePath } = require('./core');
 const { httpJSON } = require('./integrations');
+const proxyModule = require('./proxy');
 
 const BUILTIN_ID = 'builtin-gitea';
 const TYPES = ['github', 'gitea', 'gitlab', 'generic'];
@@ -45,12 +46,21 @@ function findSource(id) {
   return s;
 }
 
+/** Git 作用域代理链：单个仓库 > Host 匹配规则 > Git 分组 > 全局。 */
+function gitProxyFor(url, itemId = '') {
+  return proxyModule.forHttp(url, 'git', {
+    url, itemId, host: proxyModule.hostOf(url),
+  });
+}
+
 function publicSource(s) {
   return {
     id: s.id, label: s.label, type: s.type, baseUrl: s.baseUrl,
     username: s.username || '', builtin: Boolean(s.builtin),
     hasToken: Boolean(s.token),
     tokenMasked: s.token ? `${String(s.token).slice(0, 3)}****${String(s.token).slice(-3)}` : '',
+    effectiveProxy: gitProxyFor(s.baseUrl, s.id).masked,
+    host: proxyModule.hostOf(s.baseUrl),
     createdAt: s.createdAt || null,
   };
 }
@@ -154,8 +164,10 @@ async function listReposOf(s) {
   const pathname = kind === 'github' ? '/user/repos?per_page=100&sort=updated'
     : kind === 'gitlab' ? '/projects?membership=true&per_page=100&order_by=updated_at'
       : '/user/repos?limit=100';
-  const payload = await httpJSON(`${url}${pathname}`, {
+  const target = `${url}${pathname}`;
+  const payload = await httpJSON(target, {
     headers: authHeaders(s), timeout: 12000,
+    proxy: gitProxyFor(target, s.id).proxy,
   });
   if (!Array.isArray(payload)) throw new Error(`Git 源「${s.label}」返回了非预期数据`);
   return payload.map((r) => normalizeRepo(s, r));
@@ -183,7 +195,11 @@ async function listBranches(sourceId, fullName) {
   if (kind === 'github') pathname = `/repos/${fullName}/branches?per_page=100`;
   else if (kind === 'gitlab') pathname = `/projects/${encodeURIComponent(fullName)}/repository/branches`;
   else pathname = `/repos/${fullName}/branches`;
-  const payload = await httpJSON(`${url}${pathname}`, { headers: authHeaders(s), timeout: 12000 });
+  const target = `${url}${pathname}`;
+  const payload = await httpJSON(target, {
+    headers: authHeaders(s), timeout: 12000,
+    proxy: gitProxyFor(target, s.id).proxy,
+  });
   if (!Array.isArray(payload)) throw new Error('分支接口返回了非预期数据');
   return { items: payload.map((b) => ({ name: String(b.name || ''), protected: Boolean(b.protected), sha: String((b.commit && (b.commit.sha || b.commit.id)) || '').slice(0, 12) })) };
 }
@@ -199,8 +215,10 @@ async function createRepo(sourceId, body = {}) {
     : kind === 'gitlab'
       ? { name, description: body.description || '', visibility: body.private ? 'private' : 'public', initialize_with_readme: true }
       : { name, description: body.description || '', private: Boolean(body.private), auto_init: true };
-  const created = await httpJSON(`${url}${kind === 'github' ? '/user/repos' : kind === 'gitlab' ? '/projects' : '/user/repos'}`, {
+  const target = `${url}${kind === 'github' ? '/user/repos' : kind === 'gitlab' ? '/projects' : '/user/repos'}`;
+  const created = await httpJSON(target, {
     method: 'POST', headers: authHeaders(s), body: payload, timeout: 20000,
+    proxy: gitProxyFor(target, s.id).proxy,
   });
   return normalizeRepo(s, created);
 }
@@ -217,12 +235,29 @@ async function testSource(id) {
  * 只在本次进程的参数中出现，不写入 .git/config、不落到磁盘。
  * SSH 地址（git@ / ssh://）不做处理，走本机 SSH 密钥。
  */
-function cloneArgs(source, cloneUrl) {
+function cloneArgs(source, cloneUrl, resolved = null) {
   const args = ['clone'];
   let env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
   const url = String(cloneUrl || '').trim();
   if (!/^(https?:\/\/|git@|ssh:\/\/)/.test(url)) throw new Error('cloneUrl 必须是 http(s)/ssh/git 地址');
   const isHttp = /^https?:\/\//i.test(url);
+
+  // 分层代理结果：HTTP(S) 用 git -c http.proxy；SSH 地址用 core.sshCommand 挂 CONNECT 隧道。
+  const proxyUrl = resolved && resolved.url
+    && !proxyModule.shouldBypass(proxyModule.hostOf(url), resolved.noProxy)
+    ? resolved.url : '';
+  if (proxyUrl) {
+    proxyModule.validateUrl(proxyUrl, { allowDirect: false });
+    if (isHttp) {
+      args.push('-c', `http.proxy=${proxyUrl}`);
+      args.push('-c', `https.proxy=${proxyUrl}`);
+    } else if (process.platform !== 'win32' && /^https?:\/\//i.test(proxyUrl)) {
+      const u = new URL(proxyUrl);
+      args.push('-c', `core.sshCommand=ssh -o ProxyCommand='nc -X connect -x ${u.hostname}:${u.port || 80} %h %p'`);
+    }
+  }
+  if (resolved) env = { ...env, ...proxyModule.envFor(resolved) };
+
   if (isHttp && source && source.token) {
     let header;
     if (source.type === 'gitlab') header = `PRIVATE-TOKEN: ${source.token}`;
@@ -238,7 +273,7 @@ function cloneArgs(source, cloneUrl) {
     args.push('-c', 'http.extraHeaderRedact=true');
   }
   args.push(url);
-  return { args, env, auth: Boolean(isHttp && source && source.token) };
+  return { args, env, auth: Boolean(isHttp && source && source.token), proxyUrl };
 }
 
 function scrub(text, token) {
@@ -246,7 +281,7 @@ function scrub(text, token) {
   return String(text).split(token).join('******').replace(/(Basic\s+)[A-Za-z0-9+/=]{8,}/gi, '$1******');
 }
 
-async function cloneRepo({ sourceId, cloneUrl, name, branch } = {}) {
+async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId } = {}) {
   const source = sourceId ? findSource(sourceId) : null;
   const url = String(cloneUrl || '').trim();
   if (!url) throw new Error('缺少 cloneUrl');
@@ -255,7 +290,12 @@ async function cloneRepo({ sourceId, cloneUrl, name, branch } = {}) {
   const target = safeWorkspacePath(repoName);
   if (fs.existsSync(target)) throw new Error(`目录已存在：${repoName}`);
 
-  const { args, env, auth } = cloneArgs(source, url);
+  // 单个仓库代理可来自：克隆表单本次指定 > 代理页按仓库 id 登记的覆盖 > Host 规则 > Git 分组 > 全局。
+  const resolved = proxyModule.resolve('git', {
+    itemId: repoId || name || url, url, host: proxyModule.hostOf(url),
+    inlineProxy: proxy || '',
+  });
+  const { args, env, auth, proxyUrl } = cloneArgs(source, url, resolved);
   if (branch && /^[A-Za-z0-9._/-]{1,120}$/.test(String(branch))) args.splice(args.length - 1, 0, '-b', String(branch));
   args.push(target);
 
@@ -271,11 +311,12 @@ async function cloneRepo({ sourceId, cloneUrl, name, branch } = {}) {
   return {
     name: repoName, path: relativeWorkspacePath(target), cloneUrl: url,
     sourceId: sourceId || '', authenticated: auth,
+    proxy: proxyModule.maskUrl(proxyUrl), proxySource: resolved.sourceLabel,
   };
 }
 
 module.exports = {
   BUILTIN_ID, TYPES, listSources, createSource, updateSource, removeSource,
   listAllRepos, listReposOf, listBranches, createRepo, testSource,
-  cloneRepo, cloneArgs, allSources, findSource, publicSource,
+  cloneRepo, cloneArgs, allSources, findSource, publicSource, gitProxyFor,
 };

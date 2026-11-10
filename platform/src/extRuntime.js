@@ -9,6 +9,7 @@ const net = require('net');
 const docker = require('./dockerApi');
 const remoteDocker = require('./remoteDocker');
 const dbgateSync = require('./dbgateSync');
+const proxyModule = require('./proxy');
 const { config } = require('./core');
 
 const LABEL = 'devplatform.ext';
@@ -109,10 +110,22 @@ async function install(inst, manifest, rendered) {
   const volumeName = `dp-ext-${inst.name}-data`;
   const image = `${inst.image}:${inst.tag}`;
   const dynamic = manifest.dynamicEnv === 'dbgate-connections' ? dbgateSync.connectionsEnv().env : [];
-  const env = [
+  // 单个容器代理 > Docker 代理 > 全局代理：把结果注入容器环境，
+  // 远程安装时同一份 env 走 600 权限的 --env-file，不出现在命令行里。
+  const resolvedProxy = proxyModule.resolve('docker', {
+    itemId: inst.id, host: inst.host, entity: inst,
+  });
+  const proxyPairs = Object.entries(proxyModule.envFor(resolvedProxy));
+  const envMap = new Map();
+  for (const line of [
     ...Object.entries(rendered.env || {}).map(([k, v]) => `${k}=${String(v)}`),
     ...dynamic,
-  ];
+  ]) {
+    const at = line.indexOf('=');
+    if (at > 0) envMap.set(line.slice(0, at), line.slice(at + 1));
+  }
+  for (const [k, v] of proxyPairs) envMap.set(k, v);
+  const env = [...envMap.entries()].map(([k, v]) => `${k}=${v}`);
 
   // 远程安装：SSH 下发 docker run，凭据走远程 600 权限的 --env-file，不进命令行。
   if (isRemote(inst)) {

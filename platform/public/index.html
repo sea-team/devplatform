@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261110b" />
+  <link rel="stylesheet" href="/style.css?v=20261110c" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -29,6 +29,7 @@
         <button class="nav-item" data-view="extensions"><span class="ico">▦</span>扩展 / 数据库</button>
         <button class="nav-item" data-view="gitsrc"><span class="ico">⑃</span>Git 源</button>
         <button class="nav-item" data-view="docker"><span class="ico">⬡</span>Docker 管理</button>
+        <button class="nav-item" data-view="proxy"><span class="ico">⇄</span>代理配置</button>
         <button class="nav-item" data-view="ai"><span class="ico">✦</span>AI 服务配置</button>
         <button class="nav-item" data-view="ops"><span class="ico">◎</span>AI 运维</button>
       </nav>
@@ -114,9 +115,11 @@
                 <label>Git 源（用于临时携带凭据）<select name="sourceId" id="clone-source"></select></label>
                 <label>仓库地址<input name="cloneUrl" placeholder="从下方列表点「克隆」自动填入，也可手填 http(s)/git@ 地址" required /></label>
                 <label>本地目录名（可选）<input name="name" placeholder="留空则用仓库名" /></label>
+                <label>本次克隆代理（可选）<input name="proxy" placeholder="留空按代理规则继承；填 direct 强制直连" /></label>
+                <input type="hidden" name="repoId" id="clone-repo-id" value="" />
                 <div class="form-actions"><button class="btn btn-block" type="submit">克隆到工作区</button></div>
               </form>
-              <div class="hint" style="margin-top:10px">凭据通过临时 <code>http.extraHeader</code> 传递，不会写入 .git/config 或落到磁盘。</div>
+              <div class="hint" style="margin-top:10px">凭据通过临时 <code>http.extraHeader</code> 传递，不会写入 .git/config 或落到磁盘。代理优先级：本次指定 &gt; 单个仓库 &gt; Git Host 匹配 &gt; 全局。</div>
             </div>
           </div>
           <div class="card">
@@ -261,33 +264,98 @@
           </div>
         </section>
 
-        <!-- 存储 -->
+        <!-- 存储 / 文件：OpenList 管理集成 -->
         <section class="page" id="view-storage">
+          <div class="card">
+            <div class="card-head"><h2>OpenList 连接</h2><span class="muted" id="openlist-status-text">检测中…</span></div>
+            <div class="row gap wrap">
+              <a class="btn btn-primary btn-sm" id="openlist-open" href="#" target="_blank" rel="noopener">打开 OpenList 后台</a>
+              <button class="btn btn-sm" id="openlist-embed-toggle">内嵌后台</button>
+              <button class="btn btn-ghost btn-sm" id="openlist-refresh">刷新状态</button>
+              <button class="btn btn-ghost btn-sm" id="openlist-config-toggle">连接设置</button>
+            </div>
+            <div class="hint" id="openlist-status-detail">-</div>
+            <form id="openlist-config-form" class="form" hidden>
+              <div class="grid-3">
+                <label>服务地址<input name="url" id="ol-cfg-url" placeholder="http://127.0.0.1:5244" /></label>
+                <label>管理员账号<input name="user" id="ol-cfg-user" placeholder="admin" /></label>
+                <label>API Token<input name="token" id="ol-cfg-token" type="password" placeholder="留空不修改" /></label>
+              </div>
+              <label>管理员密码（无 Token 时用于自动换取 Token）<input name="password" id="ol-cfg-password" type="password" placeholder="留空不修改" /></label>
+              <div class="form-actions">
+                <button class="btn btn-primary btn-sm" type="submit">保存连接</button>
+                <button class="btn btn-ghost btn-sm" type="button" id="openlist-config-reset">恢复 .env 配置</button>
+              </div>
+              <div class="notice">连接信息只写本机 <code>data/state.json</code>（600 权限）；挂载存储增删、驱动管理需要管理员权限的 Token。</div>
+            </form>
+            <div class="card" id="openlist-frame-card" hidden style="margin-top:12px">
+              <div class="card-head"><h2>OpenList 后台</h2><button class="btn btn-ghost btn-sm" id="openlist-frame-close">收起</button></div>
+              <iframe id="openlist-frame" class="ide-frame" title="OpenList 管理后台"></iframe>
+            </div>
+          </div>
+
           <div class="card">
             <div class="card-head"><h2>文件浏览</h2><span class="muted" id="storage-provider"></span></div>
             <form id="storage-path-form" class="row">
               <input id="storage-path" value="/" placeholder="/" />
               <button class="btn" type="submit">浏览</button>
               <button class="btn btn-ghost" type="button" id="storage-up">上一级</button>
+              <button class="btn btn-ghost" type="button" id="storage-refresh">刷新目录</button>
             </form>
+            <div class="hint" id="storage-breadcrumb">/</div>
+            <div class="row gap wrap file-toolbar">
+              <label class="check"><input type="checkbox" id="storage-select-all" /> 全选</label>
+              <button class="btn btn-sm" data-ol-action="rename">重命名</button>
+              <button class="btn btn-sm" data-ol-action="move">移动</button>
+              <button class="btn btn-sm" data-ol-action="copy">复制</button>
+              <button class="btn btn-sm" data-ol-action="link">获取直链</button>
+              <button class="btn btn-sm" data-ol-action="download">下载</button>
+              <button class="btn btn-sm btn-danger" data-ol-action="remove">删除所选</button>
+            </div>
             <div id="file-list" class="table-wrap"></div>
-            <div class="row gap">
+            <div class="row gap wrap">
               <form id="mkdir-form" class="row">
                 <input name="name" placeholder="新目录名" required />
                 <button class="btn btn-sm" type="submit">新建目录</button>
               </form>
-              <label class="file-btn">上传文件<input type="file" id="upload-input" /></label>
+              <label class="file-btn">上传文件<input type="file" id="upload-input" multiple /></label>
             </div>
+            <pre class="log short" id="storage-result" hidden>—</pre>
           </div>
+
           <div class="grid-2">
             <div class="card">
-              <div class="card-head"><h2>已挂载存储</h2><span class="muted">来自 OpenList</span></div>
+              <div class="card-head"><h2>挂载存储</h2>
+                <div class="row gap">
+                  <button class="btn btn-ghost btn-sm" id="storage-storages-reload">重载</button>
+                  <button class="btn btn-sm" id="storage-add-toggle">新增存储</button>
+                </div>
+              </div>
               <div id="mount-list" class="list"></div>
+              <form id="storage-add-form" class="form" hidden style="margin-top:12px">
+                <div class="grid-2">
+                  <label>挂载路径<input name="mountPath" placeholder="/local" required /></label>
+                  <label>驱动<select name="driver" id="ol-driver"></select></label>
+                </div>
+                <label>驱动配置 addition（JSON）<textarea name="addition" rows="4" placeholder='{"root_folder_path":"/data"}'></textarea></label>
+                <label>备注<input name="remark" placeholder="可选" /></label>
+                <input type="hidden" name="id" id="ol-storage-id" value="" />
+                <div class="form-actions">
+                  <button class="btn btn-primary btn-sm" type="submit">保存存储</button>
+                  <button class="btn btn-ghost btn-sm" type="button" id="storage-add-cancel">取消</button>
+                </div>
+                <div class="hint">点右侧驱动清单可带出配置模板。增删改会立即作用到 OpenList，请谨慎操作。</div>
+              </form>
             </div>
             <div class="card">
-              <div class="card-head"><h2>WebDAV</h2><span class="muted">可直接挂载到本机 / rclone</span></div>
+              <div class="card-head"><h2>WebDAV / 驱动清单</h2><span class="muted">可挂载到本机 / rclone</span></div>
               <div class="hint" id="webdav-url">-</div>
-              <p class="muted small">rclone 配置示例：<code>rclone config → webdav → url: http://localhost:5244/dav/</code></p>
+              <div class="row gap" style="margin-top:8px">
+                <button class="btn btn-ghost btn-sm" id="webdav-copy">复制 WebDAV 地址</button>
+                <button class="btn btn-ghost btn-sm" id="storage-drivers-reload">刷新驱动</button>
+              </div>
+              <div id="storage-driver-list" class="list" style="margin-top:10px;max-height:280px;overflow:auto"></div>
+              <p class="muted small">rclone：<code>rclone config → webdav → url: http://localhost:5244/dav/</code></p>
             </div>
           </div>
         </section>
@@ -342,6 +410,7 @@
                 <label>登录密码<input name="password" type="password" placeholder="密码登录时填写" autocomplete="new-password" /></label>
                 <label>私钥密码 / Passphrase<input name="passphrase" type="password" placeholder="加密私钥的口令" autocomplete="new-password" /></label>
                 <label>默认部署目录<input name="deployDir" placeholder="/data/platform" value="/data/platform" /></label>
+                <label>单个服务器代理（可选）<input name="proxy" placeholder="留空继承服务器代理 / 全局代理" /></label>
               </div>
               <label>私钥 PEM 内容（可选）<textarea name="privateKey" rows="2" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
               <label>或私钥文件路径（可选）<input name="privateKeyPath" placeholder="C:/Users/you/.ssh/id_rsa （容器内请填挂载后的路径）" /></label>
@@ -462,6 +531,86 @@
               <button class="btn" type="submit">发送测试请求</button>
               <pre class="log short" id="chat-result">—</pre>
             </form>
+          </div>
+        </section>
+
+        <!-- 代理配置 -->
+        <section class="page" id="view-proxy">
+          <div class="card">
+            <div class="card-head"><h2>全局代理</h2><span class="muted" id="proxy-capability">检测中…</span></div>
+            <form id="proxy-global-form" class="form">
+              <div class="grid-2">
+                <label>全局代理地址<input name="url" id="proxy-global-url" placeholder="http://127.0.0.1:7890 / socks5://... / direct" /></label>
+                <label>NO_PROXY 绕过列表<input name="noProxy" id="proxy-global-no" placeholder="localhost,127.0.0.1,10.0.0.0/8" /></label>
+              </div>
+              <label class="check"><input type="checkbox" name="enabled" id="proxy-global-enabled" /> 启用全局代理</label>
+              <div class="form-actions">
+                <button class="btn btn-primary btn-sm" type="submit">保存全局设置</button>
+                <button class="btn btn-sm" type="button" id="proxy-test-global">测试全局代理</button>
+              </div>
+            </form>
+            <div class="notice">留空 = 继续向下继承；<code>direct</code> = 明确直连并清除子进程继承的代理变量。URL 中的账号密码只存 <code>state.json</code>，界面一律显示 ******。</div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>分组代理</h2><span class="muted">留空继承全局代理</span></div>
+            <div id="proxy-groups" class="form"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Git Host 匹配规则</h2><span class="muted">单个仓库代理之后、Git 分组代理之前生效</span></div>
+            <form id="proxy-rule-form" class="row">
+              <input name="pattern" placeholder="github.com 或 *.gitea.internal" required />
+              <input name="url" placeholder="http://127.0.0.1:7890 或 direct" required />
+              <input name="note" placeholder="备注（可选）" />
+              <button class="btn btn-sm btn-primary" type="submit">添加规则</button>
+            </form>
+            <div id="proxy-rules" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>单项代理覆盖</h2><span class="muted">仓库 / 容器 / 服务器 / AI 服务，优先级最高</span></div>
+            <form id="proxy-override-form" class="form">
+              <div class="grid-3">
+                <label>作用域<select name="scope" id="proxy-override-scope">
+                  <option value="git">单个仓库 / Git 源</option>
+                  <option value="docker">单个容器 / 扩展实例</option>
+                  <option value="server">单个服务器</option>
+                  <option value="ai">单个 AI 服务</option>
+                </select></label>
+                <label>对象<select name="id" id="proxy-override-id"></select></label>
+                <label>代理地址<input name="url" placeholder="留空并保存 = 删除覆盖；direct = 强制直连" /></label>
+              </div>
+              <label>或手动填写对象标识<input name="customId" id="proxy-override-custom" placeholder="仓库 id / 容器名 / 服务器 id / AI 服务 id" /></label>
+              <div class="form-actions">
+                <button class="btn btn-primary btn-sm" type="submit">保存覆盖</button>
+                <button class="btn btn-ghost btn-sm" type="button" id="proxy-entities-reload">刷新对象列表</button>
+              </div>
+            </form>
+            <div id="proxy-overrides" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2>解析预览</h2><span class="muted">验证某条请求最终走哪个代理</span></div>
+              <form id="proxy-resolve-form" class="form">
+                <label>作用域<select name="scope">
+                  <option value="git">Git 仓库</option>
+                  <option value="docker">Docker / 容器</option>
+                  <option value="server">服务器 / SSH</option>
+                  <option value="ai">AI 服务</option>
+                </select></label>
+                <label>对象标识<input name="itemId" placeholder="可留空" /></label>
+                <label>目标 URL / Host<input name="url" placeholder="https://github.com/org/repo.git" /></label>
+                <button class="btn btn-sm" type="submit">解析</button>
+              </form>
+              <pre class="log short" id="proxy-resolve-result">—</pre>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>优先级规则</h2><span class="muted">命中即停止</span></div>
+              <div id="proxy-priority" class="arch"></div>
+              <pre class="log short" id="proxy-test-result" hidden>—</pre>
+            </div>
           </div>
         </section>
 

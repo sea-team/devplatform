@@ -9,7 +9,7 @@ const {
   safeWorkspacePath, relativeWorkspacePath,
 } = require('./core');
 const {
-  giteaApi, openlistApi, sshExec, collectStatus, publicServer, aiChat, publicProvider, httpJSON,
+  giteaApi, openlistApi, sshExec, collectStatus, publicServer, aiChat, aiProxy, publicProvider, httpJSON,
   detectLocalPrograms, runCli,
 } = require('./integrations');
 const { PROFILES, startBuild, deployBuild, opsAgent, READ_COMMANDS } = require('./engine');
@@ -21,6 +21,11 @@ const backup = require('./backup');
 const extLifecycle = require('./extLifecycle');
 const dbgateSync = require('./dbgateSync');
 const buildBackends = require('./buildBackends');
+const proxy = require('./proxy');
+const openlist = require('./openlist');
+
+// 面板里保存过的 OpenList 连接优先于 .env（不改文件、重启后仍然生效）。
+openlist.applyConfig();
 
 // 内置 HTTP 路由：本地零依赖即可启动；容器里装了 ssh2/undici 后自动启用 SSH 与代理。
 const app = createApp({ adminToken: config.adminToken, staticDir: config.publicDir });
@@ -202,6 +207,7 @@ app.get('/api/overview', wrap(async (req, res) => {
       gitSources: (state().gitSources || []).length + 1,
       backups: (state().backups || []).length,
       composeTemplates: (state().composeTemplates || []).length,
+      proxyRules: proxy.publicConfig().rules.length,
     },
     workspace: config.workspaceDir,
     executor: config.buildExecutor,
@@ -318,6 +324,132 @@ app.get('/api/storage/mounts', wrap(async (req, res) => {
   ok(res, { items: Array.isArray(data) ? data : [], webdav: openlistApi.webdavUrl() });
 }));
 
+/* -------------------- OpenList 管理（存储 / 文件页） -------------------- */
+// 平台把 OpenList 后台能力做成原生 API：连接配置、挂载存储、驱动、文件全操作，
+// 另有「打开 / 内嵌后台」入口。旧的 /api/storage/* 保持不变，供其它客户端继续调用。
+
+app.get('/api/openlist/connection', (req, res) => ok(res, openlist.connection()));
+app.put('/api/openlist/connection', wrap(async (req, res) => ok(res, openlist.setConnection(req.body || {}))));
+app.post('/api/openlist/connection/reset', (req, res) => ok(res, openlist.clearConnection()));
+
+app.get('/api/openlist/status', wrap(async (req, res) => ok(res, await openlist.status())));
+app.get('/api/openlist/settings', wrap(async (req, res) => ok(res, await openlist.settings())));
+
+app.get('/api/openlist/storages', wrap(async (req, res) => ok(res, { items: await openlist.listStorages() })));
+app.post('/api/openlist/storages', wrap(async (req, res) => ok(res, await openlist.createStorage(req.body || {}))));
+app.post('/api/openlist/storages/reload', wrap(async (req, res) => ok(res, await openlist.reloadStorages())));
+app.put('/api/openlist/storages/:id', wrap(async (req, res) => ok(res, await openlist.updateStorage({ ...(req.body || {}), id: req.params.id }))));
+app.post('/api/openlist/storages/:id/toggle', wrap(async (req, res) => ok(res, await openlist.setStorageEnabled(req.params.id, req.body && req.body.enabled !== false))));
+app.delete('/api/openlist/storages/:id', wrap(async (req, res) => ok(res, await openlist.deleteStorage(req.params.id))));
+
+app.get('/api/openlist/drivers', wrap(async (req, res) => ok(res, { items: await openlist.listDrivers() })));
+app.get('/api/openlist/drivers/info', wrap(async (req, res) => {
+  const driver = String(req.query.driver || '');
+  if (!driver) throw new Error('缺少 driver 参数');
+  ok(res, await openlist.driverInfo(driver));
+}));
+
+app.get('/api/openlist/files', wrap(async (req, res) => ok(res, await openlist.listFiles(req.query.path, {
+  page: req.query.page, perPage: req.query.perPage, refresh: req.query.refresh === '1',
+}))));
+app.post('/api/openlist/files/mkdir', wrap(async (req, res) => {
+  requireBody(req.body, ['path', 'name']);
+  ok(res, await openlist.mkdir(req.body.path, req.body.name));
+}));
+app.post('/api/openlist/files/rename', wrap(async (req, res) => {
+  requireBody(req.body, ['path', 'name']);
+  ok(res, await openlist.rename(req.body.path, req.body.name));
+}));
+app.post('/api/openlist/files/remove', wrap(async (req, res) => {
+  requireBody(req.body, ['path', 'names']);
+  ok(res, await openlist.remove(req.body.path, req.body.names));
+}));
+app.post('/api/openlist/files/move', wrap(async (req, res) => {
+  requireBody(req.body, ['srcDir', 'dstDir', 'names']);
+  ok(res, await openlist.move(req.body.srcDir, req.body.dstDir, req.body.names));
+}));
+app.post('/api/openlist/files/copy', wrap(async (req, res) => {
+  requireBody(req.body, ['srcDir', 'dstDir', 'names']);
+  ok(res, await openlist.copy(req.body.srcDir, req.body.dstDir, req.body.names));
+}));
+app.get('/api/openlist/files/link', wrap(async (req, res) => {
+  const p = String(req.query.path || '');
+  if (!p) throw new Error('缺少 path 参数');
+  ok(res, await openlist.link(p));
+}));
+app.get('/api/openlist/files/download', wrap(async (req, res) => {
+  const p = String(req.query.path || '');
+  if (!p) throw new Error('缺少 path 参数');
+  const file = await openlist.download(p);
+  res.writeHead(200, {
+    'content-type': file.contentType,
+    'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+    'content-length': String(file.buffer.length),
+    'cache-control': 'no-store',
+  });
+  res.end(file.buffer);
+}));
+app.put('/api/openlist/files/upload', wrap(async (req, res) => {
+  const p = String(req.query.path || '/');
+  const name = String(req.query.name || 'upload.bin');
+  const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  ok(res, await openlist.upload(p, name, buffer));
+}), { raw: true });
+
+/* ------------------------- 分层代理配置（§27） ------------------------- */
+// 优先级：单项代理 > (Git Host 匹配规则) > 分组代理 > 全局代理。
+// 凭据只落 state.json（600），所有输出 URL 均脱敏。
+
+app.get('/api/proxy', (req, res) => ok(res, proxy.publicConfig()));
+app.put('/api/proxy/global', wrap(async (req, res) => ok(res, proxy.setGlobal(req.body || {}))));
+app.put('/api/proxy/groups/:scope', wrap(async (req, res) => ok(res, proxy.setGroup(req.params.scope, req.body || {}))));
+app.get('/api/proxy/rules', (req, res) => ok(res, { items: proxy.publicConfig().rules }));
+app.post('/api/proxy/rules', wrap(async (req, res) => ok(res, proxy.addRule(req.body || {}))));
+app.put('/api/proxy/rules/:id', wrap(async (req, res) => ok(res, proxy.updateRule(req.params.id, req.body || {}))));
+app.delete('/api/proxy/rules/:id', wrap(async (req, res) => ok(res, proxy.removeRule(req.params.id))));
+app.get('/api/proxy/entities', wrap(async (req, res) => ok(res, await proxy.listEntities())));
+app.put('/api/proxy/overrides/:scope/:id', wrap(async (req, res) => ok(res, proxy.setOverride(req.params.scope, req.params.id, req.body || {}))));
+app.delete('/api/proxy/overrides/:scope/:id', wrap(async (req, res) => ok(res, proxy.removeOverride(req.params.scope, req.params.id))));
+// 仓库 id 常含 /（githubsrc:org/repo），路径分段装不下，允许用 query 传 id。
+app.put('/api/proxy/overrides/:scope', wrap(async (req, res) => {
+  const id = String((req.query && req.query.id) || (req.body && req.body.id) || '');
+  ok(res, proxy.setOverride(req.params.scope, id, req.body || {}));
+}));
+app.delete('/api/proxy/overrides/:scope', wrap(async (req, res) => {
+  ok(res, proxy.removeOverride(req.params.scope, String((req.query && req.query.id) || '')));
+}));
+
+// 解析预览：把命中层级逐条返回，便于确认「为什么走这个代理」。
+app.post('/api/proxy/resolve', wrap(async (req, res) => {
+  const b = req.body || {};
+  const scope = proxy.SCOPES.includes(b.scope) ? b.scope : 'git';
+  const url = String(b.url || '');
+  const r = proxy.resolve(scope, {
+    itemId: String(b.itemId || ''), url,
+    host: String(b.host || proxy.hostOf(url)),
+    inlineProxy: String(b.proxy || ''),
+  });
+  ok(res, { ...r, bypassed: Boolean(r.url && proxy.shouldBypass(url || r.url, r.noProxy)) });
+}));
+
+// 连通性测试：可传显式 proxy，也可按 scope + itemId 解析当前生效的代理。
+app.post('/api/proxy/test', wrap(async (req, res) => {
+  const b = req.body || {};
+  let raw = String(b.proxy || '');
+  let source = '手动指定';
+  if (b.global) {
+    const cfg = proxy.readConfig();
+    raw = cfg.global.enabled === false ? '' : cfg.global.url;
+    source = '全局代理';
+  } else if (!raw && b.scope) {
+    const scope = proxy.SCOPES.includes(b.scope) ? b.scope : 'git';
+    const r = proxy.resolve(scope, { itemId: String(b.itemId || ''), url: String(b.url || ''), host: String(b.host || '') });
+    raw = r.url;
+    source = r.sourceLabel;
+  }
+  ok(res, { ...(await proxy.testProxy(raw, String(b.target || 'https://github.com'))), source });
+}));
+
 /* --------------------------- 构建 / 测试 / 部署 --------------------------- */
 
 app.get('/api/profiles', (req, res) => ok(res, { items: PROFILES, executor: config.buildExecutor }));
@@ -361,16 +493,20 @@ app.post('/api/servers', wrap(async (req, res) => {
   if (!req.body.password && !req.body.privateKey && !req.body.privateKeyPath) {
     throw new Error('需要登录密码、私钥 PEM 或私钥文件路径其一');
   }
+  const previous = req.body.id ? state().servers.find((s) => s.id === req.body.id) : null;
+  const keepSecret = (value, saved) => (String(value || '').includes('******') ? (saved || '') : (value || ''));
   const server = {
     id: req.body.id || uid('srv'),
     name: String(req.body.name), host: String(req.body.host),
     port: Number(req.body.port || 22), username: String(req.body.username),
-    password: req.body.password || '',
-    privateKey: req.body.privateKey || '',
+    password: keepSecret(req.body.password, previous && previous.password),
+    privateKey: keepSecret(req.body.privateKey, previous && previous.privateKey),
     privateKeyPath: req.body.privateKeyPath || '',
-    passphrase: req.body.passphrase || '',
+    passphrase: keepSecret(req.body.passphrase, previous && previous.passphrase),
     deployDir: String(req.body.deployDir || '/data/platform'),
-    createdAt: new Date().toISOString(),
+    // 单个服务器代理：留空继承「服务器代理 → 全局代理」，填 direct 明确直连
+    proxy: proxy.validateUrl(keepSecret(req.body.proxy, previous && previous.proxy)),
+    createdAt: (previous && previous.createdAt) || new Date().toISOString(),
   };
   update((s) => {
     const index = s.servers.findIndex((x) => x.id === server.id);
@@ -519,7 +655,9 @@ app.post('/api/ai/providers', wrap(async (req, res) => {
     id: b.id || uid('ai'),
     kind,
     name: String(b.name),
-    proxy: String(b.proxy || ''),
+    // 编辑表单回显的是脱敏值，原样提交时保留已保存的真实代理地址
+    proxy: proxy.validateUrl(String(b.proxy || '').includes('******') && existing
+      ? (existing.proxy || '') : String(b.proxy || '')),
     enabled: b.enabled !== false,
   };
   let provider;
@@ -573,19 +711,20 @@ app.get('/api/ai/local/programs', wrap(async (req, res) => {
 app.post('/api/ai/local/test', wrap(async (req, res) => {
   const b = req.body || {};
   const provider = {
-    kind: 'cli', name: '临时测试',
+    id: String(b.id || ''), kind: 'cli', name: '临时测试',
     command: String(b.command || 'codex'),
     customCommand: String(b.customCommand || ''),
     runner: b.runner === 'wsl' ? 'wsl' : 'host',
     distro: String(b.distro || ''),
     extraArgs: String(b.extraArgs || ''),
     timeoutMs: Number(b.timeoutMs || 60000),
-    proxy: String(b.proxy || ''),
+    proxy: String(b.proxy || '').includes('******') ? '' : String(b.proxy || ''),
   };
   const output = await runCli(provider, String(b.prompt || '用一句话说明你是什么程序，不要执行任何操作。'));
+  const effective = aiProxy(provider);
   ok(res, {
     output, command: provider.command, runner: provider.runner,
-    distro: provider.distro, proxy: provider.proxy || '未设置',
+    distro: provider.distro, proxy: effective.masked, proxySource: effective.sourceLabel,
   });
 }));
 
@@ -594,19 +733,20 @@ app.post('/api/ai/test', wrap(async (req, res) => {
   const b = req.body || {};
   const kind = b.kind === 'cli' ? 'cli' : 'api';
   let provider;
+  const formProxy = String(b.proxy || '').includes('******') ? '' : String(b.proxy || '');
   if (kind === 'cli') {
     provider = {
-      kind, name: '临时测试', command: String(b.command || 'codex'),
+      id: String(b.id || ''), kind, name: '临时测试', command: String(b.command || 'codex'),
       customCommand: String(b.customCommand || ''),
       runner: b.runner === 'wsl' ? 'wsl' : 'host', distro: String(b.distro || ''),
       extraArgs: String(b.extraArgs || ''), timeoutMs: Number(b.timeoutMs || 60000),
-      proxy: String(b.proxy || ''),
+      proxy: formProxy,
     };
   } else {
     provider = {
-      kind, name: '临时测试', baseURL: String(b.baseURL || '').replace(/\/+$/, ''),
+      id: String(b.id || ''), kind, name: '临时测试', baseURL: String(b.baseURL || '').replace(/\/+$/, ''),
       model: String(b.model || ''), apiKey: String(b.apiKey || ''),
-      headers: b.headers || '', noKey: Boolean(b.noKey), proxy: String(b.proxy || ''),
+      headers: b.headers || '', noKey: Boolean(b.noKey), proxy: formProxy,
     };
     // 编辑已有服务时表单里的 Key 会留空，回退到已保存的 Key。
     if (!provider.apiKey && b.id) {
@@ -617,11 +757,12 @@ app.post('/api/ai/test', wrap(async (req, res) => {
   const response = await aiChat(provider, [
     { role: 'user', content: String(b.prompt || '用一句话说明你是什么，不要执行任何操作。') },
   ]);
+  const effective = aiProxy(provider);
   ok(res, {
     kind,
     answer: response.choices?.[0]?.message?.content || '',
     command: provider.command || '', runner: provider.runner || '',
-    proxy: provider.proxy || '未设置',
+    proxy: effective.masked, proxySource: effective.sourceLabel,
   });
 }));
 
@@ -646,6 +787,7 @@ app.post('/api/ai/chat', wrap(async (req, res) => {
       : provider.model,
     answer: response.choices?.[0]?.message?.content || '',
     usage: response.usage || null,
+    proxy: aiProxy(provider).masked,
   });
 }));
 

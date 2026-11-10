@@ -438,6 +438,18 @@ tr:last-child td { border-bottom: 0; }
 .docker-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; padding-bottom: 4px; }
 .docker-tab { border-color: var(--border); }
 .docker-tab.active { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); font-weight: 600; }
+/* v0.3.1：OpenList 管理工具条与代理配置页 */
+.row.wrap { justify-content: flex-start; }
+.file-toolbar {
+  margin-top: 10px; padding: 8px 0; justify-content: flex-start;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+}
+.file-toolbar .btn { margin: 2px 0; }
+#storage-breadcrumb .btn { padding: 4px 9px; }
+#proxy-groups input { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; }
+#proxy-priority .arch-row span { line-height: 1.7; }
+#openlist-frame { height: 620px; }
+
 .docker-panel { animation: panel-in .16s ease-out; }
 @keyframes panel-in { from { opacity: .5; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 

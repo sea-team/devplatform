@@ -7,23 +7,26 @@ const VIEW_META = {
   overview: ['总览', '平台各模块运行状态与关键指标'],
   repos: ['Git 仓库', '聚合平台自带与 GitHub / 自建 Gitea 等外部源，克隆后直接开发'],
   ide: ['在线 IDE', '基于 code-server 的浏览器版 VSCode，工作区与构建流水线共享'],
-  storage: ['存储 / 文件', '基于 OpenList 的多存储挂载、文件管理与 WebDAV'],
+  storage: ['存储 / 文件', 'OpenList 连接、挂载存储、驱动与全功能文件管理器'],
   builds: ['构建 · 部署', '可降级构建后端：远程 Docker / 本机 Docker / WSL2 / 本地工具链'],
   servers: ['服务器', 'SSH 连接、Web 终端、远程文件管理与实时状态'],
   extensions: ['扩展 / 数据库', '清单化安装管理数据库、备份恢复、版本升级与 DbGate'],
   gitsrc: ['Git 源', '登记 GitHub / 自建 Gitea / GitLab，凭据加密保存且不落入仓库配置'],
   docker: ['Docker 管理', '容器 / 镜像 / 卷 / 网络 / 编排模板，非平台容器只读加二次确认'],
+  proxy: ['代理配置', '全局 / 分组 / Git Host 规则 / 单项覆盖，四级优先级解析与连通性测试'],
   ai: ['AI 服务配置', 'API 服务、宿主机 / WSL 本地 AI 程序与代理'],
   ops: ['AI 运维', '让 AI 查询状态、分析日志并给出建议'],
 };
 const MODULE_ICONS = {
   overview: '◈', repos: '⑂', ide: '⌘', storage: '▤',
   builds: '⚙', servers: '▣', extensions: '▦', gitsrc: '⑃', docker: '⬡',
-  ai: '✦', ops: '◎',
+  proxy: '⇄', ai: '✦', ops: '◎',
 };
 
 let currentView = 'overview';
 let currentStoragePath = '/';
+const storageState = { files: [], selected: new Set(), storages: [], drivers: [], connection: null, editId: '' };
+const proxyState = { config: null, entities: null };
 let logTimer = null;
 let selectedBuildId = null;
 let detectedPrograms = null;
@@ -417,8 +420,9 @@ async function loadRepos() {
         <td class="muted">${esc(fmtTime(r.updatedAt))}</td>
         <td class="actions"><div class="ext-actions">
           <button class="btn btn-sm" data-ide="${esc(r.name)}">IDE 打开</button>
-          <button class="btn btn-sm" data-clone-repo="${esc(r.cloneUrl)}" data-clone-source="${esc(r.sourceId)}" data-clone-name="${esc(r.name)}">克隆</button>
+          <button class="btn btn-sm" data-clone-repo="${esc(r.cloneUrl)}" data-clone-source="${esc(r.sourceId)}" data-clone-name="${esc(r.name)}" data-clone-id="${esc(r.id)}">克隆</button>
           <button class="btn btn-sm" data-copy="${esc(r.cloneUrl || '')}">复制地址</button>
+          <button class="btn btn-sm" data-proxy-repo="${esc(r.id)}">代理</button>
         </div></td>
       </tr>`));
     $$('[data-ide]').forEach((b) => b.addEventListener('click', () => {
@@ -431,12 +435,14 @@ async function loadRepos() {
       $('#clone-form').elements.cloneUrl.value = url;
       $('#clone-form').elements.name.value = b.dataset.cloneName || '';
       $('#clone-source').value = b.dataset.cloneSource || '';
+      $('#clone-repo-id').value = b.dataset.cloneId || '';
       toast('已填入克隆表单，点击「克隆到工作区」执行');
     }));
     $$('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(b.dataset.copy); toast('克隆地址已复制'); }
       catch { toast('复制失败，请手动选择', true); }
     }));
+    $$('[data-proxy-repo]').forEach((b) => b.addEventListener('click', () => gotoProxyOverride('git', b.dataset.proxyRepo)));
     // 扩展实例的「绑定仓库」也复用这份聚合列表。
     repoState.items = d.items || [];
   } catch (e) {
@@ -473,57 +479,379 @@ function pathParent(p) {
   return parts.length ? `/${parts.join('/')}` : '/';
 }
 
-async function loadStorage() {
-  $('#storage-path').value = currentStoragePath;
-  try {
-    const [d, mounts] = await Promise.all([
-      api(`/storage?path=${encodeURIComponent(currentStoragePath)}`),
-      api('/storage/mounts'),
-    ]);
-    $('#storage-provider').textContent = `${d.provider || 'OpenList'} · ${d.total || 0} 项`;
-    $('#file-list').innerHTML = table(['名称', '大小', '类型', '修改时间', '操作'], (d.content || []).map((f) => `
-      <tr>
-        <td>${f.is_dir ? '📁' : '📄'} <b>${esc(f.name)}</b></td>
-        <td>${f.is_dir ? '-' : fmtSize(f.size)}</td>
-        <td>${f.is_dir ? '目录' : '文件'}</td>
-        <td class="muted">${esc(fmtTime(f.modified))}</td>
-        <td>${f.is_dir
-          ? `<button class="btn btn-sm" data-enter="${esc((currentStoragePath.replace(/\/+$/, '') + '/' + f.name).replace(/\/+/g, '/'))}">进入</button>`
-          : `<button class="btn btn-sm btn-danger" data-del="${esc(f.name)}">删除</button>`}</td>
-      </tr>`));
-    $$('[data-enter]').forEach((b) => b.addEventListener('click', () => { currentStoragePath = b.dataset.enter; loadStorage(); }));
-    $$('[data-del]').forEach((b) => b.addEventListener('click', async () => {
-      if (!confirm(`确认删除 ${b.dataset.del}？`)) return;
-      try {
-        await api('/storage/remove', { method: 'POST', body: { path: currentStoragePath, names: [b.dataset.del] } });
-        toast('删除请求已提交'); loadStorage();
-      } catch (e) { toast(e.message, true); }
-    }));
-    $('#mount-list').innerHTML = (mounts.items || []).length
-      ? mounts.items.map((m) => `<div class="list-item"><div><div class="title">${esc(m.mount_path || m.mountPath || '/')}</div>
-          <div class="desc">${esc(m.driver || m.driver_name || '-')} · ${esc(m.status || '-')}</div></div></div>`).join('')
-      : '<div class="empty">暂无挂载，请在 OpenList 后台添加存储驱动</div>';
-    $('#webdav-url').textContent = mounts.webdav || '-';
-  } catch (e) {
-    $('#file-list').innerHTML = errorBlock(e.message, '请配置 OPENLIST_TOKEN 或 OPENLIST_PASSWORD，并确认 OpenList 服务已启动');
-    $('#mount-list').innerHTML = errorBlock('无法读取挂载列表');
-  }
+/* ------------------- 存储 / 文件（OpenList 管理集成） ------------------- */
+
+const olJoin = (dir, name) => `${String(dir || '/').replace(/\/+$/, '')}/${String(name).replace(/^\/+/, '')}`.replace(/\/{2,}/g, '/');
+
+function olDownloadUrl(p) {
+  const token = localStorage.getItem('dp_token');
+  return `/api/openlist/files/download?path=${encodeURIComponent(p)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
 }
 
-async function uploadFile(file) {
-  if (!file) return;
+function olResult(text) {
+  const box = $('#storage-result');
+  box.textContent = text;
+  box.hidden = false;
+}
+
+function renderOpenlistStatus(status) {
+  storageState.connection = status || null;
+  const online = Boolean(status && status.online);
+  $('#openlist-status-text').textContent = online ? '● 在线' : '● 离线 / 未配置';
+  $('#openlist-status-detail').textContent = online
+    ? `${status.url} · ${status.version ? `v${status.version} · ` : ''}${status.siteTitle || 'OpenList'} · ${status.storageCount} 个挂载 · 配置来源：${status.source} · 代理：${status.effectiveProxy || '无'}`
+    : `${status ? status.url || '' : ''} ${status ? (status.hint || status.error || '') : ''}`;
+  $('#openlist-open').href = (status && status.manageUrl) || '#';
+  $('#webdav-url').textContent = (status && status.webdav) || '-';
+  if (online && !$('#openlist-frame-card').hidden) {
+    $('#openlist-frame').src = status.manageUrl;
+  }
+  const form = $('#openlist-config-form');
+  if (form && form.elements.url && !form.elements.url.value) form.elements.url.value = status.url || '';
+  if (form && form.elements.user && !form.elements.user.value) form.elements.user.value = status.user || 'admin';
+}
+
+function renderBreadcrumb(p) {
+  const parts = String(p || '/').split('/').filter(Boolean);
+  let acc = '';
+  const links = ['<button class="btn btn-ghost btn-sm" data-ol-go="/">根目录</button>'];
+  parts.forEach((part) => {
+    acc += `/${part}`;
+    links.push(`<button class="btn btn-ghost btn-sm" data-ol-go="${esc(acc)}">${esc(part)}</button>`);
+  });
+  $('#storage-breadcrumb').innerHTML = `<div class="row gap wrap">${links.join('')}</div>`;
+  $$('[data-ol-go]').forEach((b) => b.addEventListener('click', () => { currentStoragePath = b.dataset.olGo; loadStorage(); }));
+}
+
+function renderFileList(d) {
+  storageState.files = d.content || [];
+  storageState.selected.clear();
+  $('#storage-provider').textContent = `${d.provider || 'OpenList'} · ${d.total || 0} 项${d.write ? '' : ' · 只读'}`;
+  $('#file-list').innerHTML = table(['', '名称', '大小', '类型', '修改时间', '操作'], storageState.files.map((f) => {
+    const full = olJoin(currentStoragePath, f.name);
+    return `<tr>
+      <td><input type="checkbox" data-ol-file="${esc(f.name)}" /></td>
+      <td>${f.isDir ? '📁' : '📄'} <b>${esc(f.name)}</b></td>
+      <td>${f.isDir ? '-' : fmtSize(f.size)}</td>
+      <td>${f.isDir ? '目录' : '文件'}</td>
+      <td class="muted">${esc(fmtTime(f.modified))}</td>
+      <td class="actions"><div class="ext-actions">
+        ${f.isDir
+          ? `<button class="btn btn-sm" data-ol-enter="${esc(full)}">进入</button>`
+          : `<button class="btn btn-sm" data-ol-get="${esc(full)}">下载</button>
+             <button class="btn btn-sm" data-ol-link="${esc(full)}">直链</button>`}
+        <button class="btn btn-sm" data-ol-one-rename="${esc(full)}">重命名</button>
+        <button class="btn btn-sm btn-danger" data-ol-one-del="${esc(f.name)}">删除</button>
+      </div></td>
+    </tr>`;
+  }));
+  renderBreadcrumb(d.path || currentStoragePath);
+  $$('[data-ol-file]').forEach((box) => box.addEventListener('change', () => {
+    if (box.checked) storageState.selected.add(box.dataset.olFile);
+    else storageState.selected.delete(box.dataset.olFile);
+    const all = $$('[data-ol-file]');
+    $('#storage-select-all').checked = all.length > 0 && all.every((x) => x.checked);
+  }));
+  $$('[data-ol-enter]').forEach((b) => b.addEventListener('click', () => { currentStoragePath = b.dataset.olEnter; loadStorage(); }));
+  $$('[data-ol-get]').forEach((b) => b.addEventListener('click', () => { window.open(olDownloadUrl(b.dataset.olGet), '_blank', 'noopener'); }));
+  $$('[data-ol-link]').forEach((b) => b.addEventListener('click', () => olAction('link', [b.dataset.olLink])));
+  $$('[data-ol-one-rename]').forEach((b) => b.addEventListener('click', () => olAction('rename', [b.dataset.olOneRename])));
+  $$('[data-ol-one-del]').forEach((b) => b.addEventListener('click', (e) => {
+    e.preventDefault();
+    olAction('remove', [b.dataset.olOneDel]);
+  }));
+}
+
+function renderMountList(items) {
+  storageState.storages = items || [];
+  $('#mount-list').innerHTML = items.length ? items.map((m) => `
+    <div class="list-item">
+      <div><div class="title">${esc(m.mountPath)} ${m.disabled ? badge('已停用', 'gray') : badge('启用', 'green')}</div>
+        <div class="desc">${esc(m.driver)} · ${esc(m.status || '-')} · ${esc(m.remark || '')}</div></div>
+      <div class="actions ext-actions">
+        <button class="btn btn-sm" data-ol-storage-edit="${esc(m.id)}">编辑</button>
+        <button class="btn btn-sm" data-ol-storage-toggle="${esc(m.id)}" data-disabled="${m.disabled ? '1' : '0'}">${m.disabled ? '启用' : '停用'}</button>
+        <button class="btn btn-sm btn-danger" data-ol-storage-del="${esc(m.id)}">删除</button>
+      </div>
+    </div>`).join('') : '<div class="empty">暂无挂载，点「新增存储」或到 OpenList 后台添加驱动</div>';
+  $$('[data-ol-storage-edit]').forEach((b) => b.addEventListener('click', () => {
+    const item = storageState.storages.find((x) => String(x.id) === b.dataset.olStorageEdit);
+    if (!item) return;
+    const form = $('#storage-add-form');
+    form.hidden = false;
+    form.elements.mountPath.value = item.mountPath;
+    form.elements.driver.value = item.driver;
+    form.elements.addition.value = item.addition || '{}';
+    form.elements.remark.value = item.remark || '';
+    $('#ol-storage-id').value = item.id;
+    storageState.editId = item.id;
+  }));
+  $$('[data-ol-storage-toggle]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      await api(`/openlist/storages/${encodeURIComponent(b.dataset.olStorageToggle)}/toggle`, {
+        method: 'POST', body: { enabled: b.dataset.disabled === '1' },
+      });
+      toast('状态已更新'); loadStorage();
+    } catch (e) { toast(e.message, true); }
+  }));
+  $$('[data-ol-storage-del]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm('确认删除该挂载存储？不会删除底层文件，但会移除挂载点。')) return;
+    try {
+      await api(`/openlist/storages/${encodeURIComponent(b.dataset.olStorageDel)}`, { method: 'DELETE' });
+      toast('已删除'); loadStorage();
+    } catch (e) { toast(e.message, true); }
+  }));
+}
+
+function renderDriverList(items) {
+  storageState.drivers = items || [];
+  const select = $('#ol-driver');
+  if (select) {
+    const current = select.value;
+    select.innerHTML = items.length
+      ? items.map((d) => `<option value="${esc(d.driver)}">${esc(d.name || d.driver)}</option>`).join('')
+      : '<option value="">（未读取到驱动清单，可手填）</option>';
+    if (current && items.some((d) => d.driver === current)) select.value = current;
+  }
+  $('#storage-driver-list').innerHTML = items.length ? items.slice(0, 120).map((d) => `
+    <div class="list-item"><div><div class="title">${esc(d.name || d.driver)}</div>
+      <div class="desc">${esc(d.driver)}${d.description ? ` · ${esc(d.description)}` : ''}</div></div>
+      <button class="btn btn-sm" data-ol-driver="${esc(d.driver)}">选用</button>
+    </div>`).join('') : '<div class="empty">未读取到驱动清单（需要管理员权限 Token）</div>';
+  $$('[data-ol-driver]').forEach((b) => b.addEventListener('click', async () => {
+    const d = storageState.drivers.find((x) => x.driver === b.dataset.olDriver);
+    const form = $('#storage-add-form');
+    form.hidden = false;
+    form.elements.driver.value = b.dataset.olDriver;
+    $('#ol-storage-id').value = '';
+    storageState.editId = '';
+    if (d && d.config) {
+      form.elements.addition.value = typeof d.config === 'string' ? d.config : JSON.stringify(d.config, null, 2);
+    }
+    try {
+      const info = await api(`/openlist/drivers/info?driver=${encodeURIComponent(b.dataset.olDriver)}`);
+      const addition = info && (info.addition || info.config || info.common);
+      if (addition) form.elements.addition.value = JSON.stringify(addition, null, 2);
+    } catch { /* 驱动详情接口可能不存在，保留清单里的模板 */ }
+    toast(`已选用驱动 ${b.dataset.olDriver}`);
+  }));
+}
+
+async function loadStorage() {
+  $('#storage-path').value = currentStoragePath;
+  const settled = (p) => Promise.resolve(p).catch((e) => ({ error: e.message }));
+  const [status, files, mounts, drivers] = await Promise.all([
+    settled(api('/openlist/status')),
+    settled(api(`/openlist/files?path=${encodeURIComponent(currentStoragePath)}`)),
+    settled(api('/openlist/storages')),
+    settled(api('/openlist/drivers')),
+  ]);
+  renderOpenlistStatus(status);
+  if (files && !files.error) renderFileList(files);
+  else $('#file-list').innerHTML = errorBlock(files.error || '无法读取目录',
+    '请在上方「连接设置」里填写 OpenList 地址与管理员 Token / 密码，并确认服务已启动');
+  renderMountList(mounts && mounts.items || []);
+  renderDriverList(drivers && drivers.items || []);
+}
+
+function olSelected() { return Array.from(storageState.selected); }
+function olFull(name) { return olJoin(currentStoragePath, name); }
+
+async function olAction(action, forced = null) {
+  const names = forced || olSelected();
+  if (!names.length) { toast('请先勾选文件，或使用行内操作按钮', true); return; }
   try {
-    const response = await fetch(`/api/storage/upload?path=${encodeURIComponent(currentStoragePath)}&name=${encodeURIComponent(file.name)}`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/octet-stream', ...authHeaders() },
-      body: await file.arrayBuffer(),
-    });
-    const json = await response.json();
-    if (!json.ok) throw new Error(json.error);
-    toast(`已上传 ${file.name}`);
+    if (action === 'rename') {
+      const p = forced ? forced[0] : olFull(names[0]);
+      const next = prompt('新的名称（不含路径）', p.split('/').pop() || '');
+      if (!next) return;
+      await api('/openlist/files/rename', { method: 'POST', body: { path: p, name: next } });
+      toast('已重命名');
+    } else if (action === 'move' || action === 'copy') {
+      const dst = prompt(`把 ${names.length} 项${action === 'move' ? '移动' : '复制'}到哪个目录？`, '/');
+      if (!dst) return;
+      await api(`/openlist/files/${action}`, {
+        method: 'POST', body: { srcDir: currentStoragePath, dstDir: dst, names },
+      });
+      toast(action === 'move' ? '移动任务已提交' : '复制任务已提交');
+    } else if (action === 'remove') {
+      if (!confirm(`确认从 OpenList 删除 ${names.length} 项？此操作不可撤销。`)) return;
+      await api('/openlist/files/remove', { method: 'POST', body: { path: currentStoragePath, names } });
+      toast('删除请求已提交');
+    } else if (action === 'link') {
+      const p = forced ? forced[0] : olFull(names[0]);
+      const d = await api(`/openlist/files/link?path=${encodeURIComponent(p)}`);
+      olResult(`直链：${d.rawUrl || '（该存储未返回直链）'}\n文件：${d.name} · ${fmtSize(d.size)} · 代理：${d.proxy || '无'}`);
+      if (d.rawUrl && navigator.clipboard) {
+        try { await navigator.clipboard.writeText(d.rawUrl); toast('直链已复制到剪贴板'); } catch { /* noop */ }
+      }
+      return;
+    } else if (action === 'download') {
+      const p = forced ? forced[0] : olFull(names[0]);
+      window.open(olDownloadUrl(p), '_blank', 'noopener');
+      return;
+    }
     loadStorage();
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { toast(e.message, true); olResult(`操作失败：${e.message}`); }
+}
+
+async function uploadFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  for (const file of files) {
+    try {
+      const token = localStorage.getItem('dp_token');
+      const response = await fetch(`/api/openlist/files/upload?path=${encodeURIComponent(currentStoragePath)}&name=${encodeURIComponent(file.name)}${token ? `&token=${encodeURIComponent(token)}` : ''}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream', ...authHeaders() },
+        body: await file.arrayBuffer(),
+      });
+      const json = await response.json();
+      if (!json.ok) throw new Error(json.error);
+      toast(`已上传 ${file.name}`);
+    } catch (e) { toast(`${file.name} 上传失败：${e.message}`, true); }
+  }
   $('#upload-input').value = '';
+  loadStorage();
+}
+
+/* ------------------------------ 分层代理配置 ------------------------------ */
+
+const PROXY_SCOPES = ['git', 'docker', 'server', 'ai'];
+const PROXY_LABELS = { git: 'Git 仓库', docker: 'Docker / 容器', server: '服务器 / SSH', ai: 'AI 服务' };
+
+function renderProxyGlobal(cfg) {
+  $('#proxy-global-url').value = cfg.global.direct ? 'direct' : (cfg.global.url || '');
+  $('#proxy-global-no').value = cfg.global.noProxy || '';
+  $('#proxy-global-enabled').checked = cfg.global.enabled !== false;
+  $('#proxy-capability').textContent = cfg.capabilities.httpProxy
+    ? 'HTTP / SSH / SOCKS 隧道均可用'
+    : '缺少 undici：SSH 隧道可用，HTTP 代理需 npm install';
+}
+
+function renderProxyGroups(cfg) {
+  $('#proxy-groups').innerHTML = PROXY_SCOPES.map((scope) => `
+    <div class="row gap wrap" style="margin-bottom:8px">
+      <span class="muted" style="min-width:130px">${esc(PROXY_LABELS[scope])}</span>
+      <input data-proxy-group-input="${scope}" placeholder="留空继承全局代理；direct 强制直连"
+        value="${esc(cfg.groups[scope].direct ? 'direct' : (cfg.groups[scope].url || ''))}" style="flex:1;min-width:220px" />
+      <button class="btn btn-sm btn-primary" data-proxy-group-save="${scope}">保存</button>
+      <button class="btn btn-ghost btn-sm" data-proxy-group-clear="${scope}">清空</button>
+      <span class="muted small">${cfg.groups[scope].enabled ? '启用' : '停用'}</span>
+    </div>`).join('');
+  $$('[data-proxy-group-save]').forEach((b) => b.addEventListener('click', async () => {
+    const scope = b.dataset.proxyGroupSave;
+    const value = $(`[data-proxy-group-input="${scope}"]`).value.trim();
+    try {
+      await api(`/proxy/groups/${scope}`, { method: 'PUT', body: { url: value } });
+      toast(`${PROXY_LABELS[scope]}代理已保存`); loadProxy();
+    } catch (e) { toast(e.message, true); }
+  }));
+  $$('[data-proxy-group-clear]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      await api(`/proxy/groups/${b.dataset.proxyGroupClear}`, { method: 'PUT', body: { url: '' } });
+      toast('已清空，恢复继承全局'); loadProxy();
+    } catch (e) { toast(e.message, true); }
+  }));
+}
+
+function renderProxyRules(cfg) {
+  const items = cfg.rules || [];
+  $('#proxy-rules').innerHTML = table(['Host 匹配规则', '代理', '备注', '状态', '操作'], items.map((r) => `
+    <tr>
+      <td><b>${esc(r.pattern)}</b></td>
+      <td>${esc(r.url || '继承')}</td>
+      <td class="muted">${esc(r.note || '-')}</td>
+      <td>${r.enabled === false ? badge('停用', 'gray') : badge('启用', 'green')}</td>
+      <td class="actions"><div class="ext-actions">
+        <button class="btn btn-sm" data-proxy-rule-toggle="${esc(r.id)}" data-enabled="${r.enabled === false ? '0' : '1'}">${r.enabled === false ? '启用' : '停用'}</button>
+        <button class="btn btn-sm btn-danger" data-proxy-rule-del="${esc(r.id)}">删除</button>
+      </div></td>
+    </tr>`));
+  $$('[data-proxy-rule-toggle]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      await api(`/proxy/rules/${encodeURIComponent(b.dataset.proxyRuleToggle)}`, {
+        method: 'PUT', body: { enabled: b.dataset.enabled === '0' },
+      });
+      loadProxy();
+    } catch (e) { toast(e.message, true); }
+  }));
+  $$('[data-proxy-rule-del]').forEach((b) => b.addEventListener('click', async () => {
+    try { await api(`/proxy/rules/${encodeURIComponent(b.dataset.proxyRuleDel)}`, { method: 'DELETE' }); toast('规则已删除'); loadProxy(); }
+    catch (e) { toast(e.message, true); }
+  }));
+}
+
+function renderProxyOverrides(cfg) {
+  const rows = [];
+  for (const scope of PROXY_SCOPES) {
+    for (const item of cfg.overrides[scope] || []) rows.push({ scope, ...item });
+  }
+  $('#proxy-overrides').innerHTML = table(['作用域', '对象标识', '代理', '操作'], rows.map((r) => `
+    <tr>
+      <td>${esc(PROXY_LABELS[r.scope] || r.scope)}</td>
+      <td><b>${esc(r.id)}</b></td>
+      <td>${esc(r.direct ? '直接连接' : r.url)}</td>
+      <td><button class="btn btn-sm btn-danger" data-proxy-override-del="${esc(`${r.scope}|${r.id}`)}">删除覆盖</button></td>
+
+    </tr>`));
+  $$('[data-proxy-override-del]').forEach((b) => b.addEventListener('click', async () => {
+    const at = b.dataset.proxyOverrideDel.indexOf('|');
+    const scope = b.dataset.proxyOverrideDel.slice(0, at);
+    const id = b.dataset.proxyOverrideDel.slice(at + 1);
+    try {
+      await api(`/proxy/overrides/${encodeURIComponent(scope)}?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      toast('覆盖已删除'); loadProxy();
+    } catch (e) { toast(e.message, true); }
+  }));
+}
+
+function renderProxyPriority(cfg) {
+  $('#proxy-priority').innerHTML = (cfg.priority || []).map((p) => `
+    <div class="arch-row"><b>${esc(PROXY_LABELS[p.scope] || p.scope)}</b>
+      <span>${p.chain.map((c, i) => `${i + 1}. ${esc(c)}`).join('　›　')}</span></div>`).join('');
+}
+
+function renderProxyEntities() {
+  const scope = $('#proxy-override-scope').value || 'git';
+  const items = (proxyState.entities && proxyState.entities[scope]) || [];
+  $('#proxy-override-id').innerHTML = items.length
+    ? `<option value="">（选择已登记对象）</option>${items.map((x) => `<option value="${esc(x.id)}">${esc(x.label)}</option>`).join('')}`
+    : '<option value="">（暂无对象，请在下方手填标识）</option>';
+}
+
+/** 从 Git / Docker / 服务器 / AI 页面一键跳到代理页并预填对象标识。 */
+async function gotoProxyOverride(scope, id) {
+  switchView('proxy');
+  try {
+    await loadProxy();
+    $('#proxy-override-scope').value = scope;
+    renderProxyEntities();
+    $('#proxy-override-custom').value = id || '';
+    const input = $('#proxy-override-form').elements.url;
+    if (input && input.focus) input.focus();
+    toast(`已选中 ${PROXY_LABELS[scope]} · ${id}，填写代理地址后点「保存覆盖」`);
+  } catch (e) { toast(e.message, true); }
+}
+
+async function loadProxy() {
+  try {
+    const [cfg, entities] = await Promise.all([
+      api('/proxy'),
+      api('/proxy/entities').catch(() => ({ items: {} })),
+    ]);
+    proxyState.config = cfg;
+    proxyState.entities = entities.items || {};
+    renderProxyGlobal(cfg);
+    renderProxyGroups(cfg);
+    renderProxyRules(cfg);
+    renderProxyOverrides(cfg);
+    renderProxyPriority(cfg);
+    renderProxyEntities();
+  } catch (e) {
+    toast(e.message, true);
+    $('#proxy-capability').textContent = `读取失败：${e.message}`;
+  }
 }
 
 /* ------------------------------- 构建 / 部署 ------------------------------ */
@@ -614,6 +942,7 @@ async function loadServers() {
           <button class="btn btn-sm" data-files="${esc(s.id)}">文件管理</button>
           <button class="btn btn-sm" data-status="${esc(s.id)}">检查状态</button>
           <button class="btn btn-sm" data-test="${esc(s.id)}">测试连接</button>
+          <button class="btn btn-sm" data-server-proxy="${esc(s.id)}">代理</button>
           <button class="btn btn-sm btn-danger" data-remove="${esc(s.id)}">删除</button>
         </div>
       </div>`).join('') : '<div class="card"><div class="empty">还没有服务器，先用上方表单添加</div></div>';
@@ -631,6 +960,7 @@ async function loadServers() {
       try { const r = await api(`/servers/${b.dataset.test}/test`, { method: 'POST', body: {} }); toast(r.online ? `连接正常：${r.output}` : `连接失败：${r.error}`, !r.online); }
       catch (e) { toast(e.message, true); }
     }));
+    $$('[data-server-proxy]').forEach((b) => b.addEventListener('click', () => gotoProxyOverride('server', b.dataset.serverProxy)));
     $$('[data-remove]').forEach((b) => b.addEventListener('click', async () => {
       if (!confirm('确认删除这台服务器？')) return;
       try { await api(`/servers/${b.dataset.remove}`, { method: 'DELETE' }); toast('已删除'); loadServers(); }
@@ -1317,6 +1647,7 @@ async function loadAI() {
           <div class="desc">${providerSummary(p)}</div></div>
         <div class="actions">
           <button class="btn btn-sm" data-edit="${esc(p.id)}">编辑</button>
+          <button class="btn btn-sm" data-ai-proxy="${esc(p.id)}">代理</button>
           <button class="btn btn-sm btn-danger" data-delprovider="${esc(p.id)}">删除</button>
         </div>
       </div>`).join('') : '<div class="empty">还没有配置 AI 服务</div>';
@@ -1350,6 +1681,7 @@ async function loadAI() {
         toast(`正在编辑 ${p.name}`);
       } catch (e) { toast(e.message, true); }
     }));
+    $$('[data-ai-proxy]').forEach((b) => b.addEventListener('click', () => gotoProxyOverride('ai', b.dataset.aiProxy)));
     $$('[data-delprovider]').forEach((b) => b.addEventListener('click', async () => {
       try { await api(`/ai/providers/${b.dataset.delprovider}`, { method: 'DELETE' }); toast('已删除'); loadAI(); }
       catch (e) { toast(e.message, true); }
@@ -1649,11 +1981,12 @@ async function loadDocker() {
 function renderDockerContainers() {
   const d = dockerState.data || {};
   const rows = (d.containers || []).map((c) => {
-    const meta = `data-dk-id="${esc(c.id)}" data-dk-owned="${c.owned ? 1 : 0}"`;
+    const meta = `data-dk-id="${esc(c.id)}" data-dk-owned="${c.owned ? 1 : 0}" data-dk-name="${esc(c.name || '')}"`;
     const ops = [
       `<button class="btn btn-sm" data-dk-op="logs" ${meta}>日志</button>`,
       `<button class="btn btn-sm" data-dk-op="inspect" ${meta}>详情</button>`,
       `<button class="btn btn-sm" data-dk-op="stats" ${meta}>资源</button>`,
+      `<button class="btn btn-sm" data-dk-op="proxy" ${meta}>代理</button>`,
     ];
     if (!/running|up/i.test(c.state)) ops.push(`<button class="btn btn-sm" data-dk-op="start" ${meta}>启动</button>`);
     else {
@@ -1742,7 +2075,7 @@ function switchDockerTab(tab) {
 const loaders = {
   overview: loadOverview, repos: loadRepos, ide: loadIde, storage: loadStorage,
   builds: loadBuilds, servers: loadServers, extensions: loadExtensions,
-  gitsrc: loadGitSources, docker: loadDocker,
+  gitsrc: loadGitSources, docker: loadDocker, proxy: loadProxy,
   dbgate: loadExtExtras, backups: loadExtExtras,
   ai: loadAI, ops: loadOps,
 };
@@ -2143,7 +2476,11 @@ $('#view-docker').addEventListener('click', async (e) => {
   const ref = button.dataset.dkRef || '';
   const owned = button.dataset.dkOwned === '1';
   const label = { start: '启动', stop: '停止', restart: '重启', remove: '删除容器',
-    rmi: '删除镜像', rmvol: '删除存储卷', rmnet: '删除网络', rmtpl: '删除模板' }[op] || op;
+    rmi: '删除镜像', rmvol: '删除存储卷', rmnet: '删除网络', rmtpl: '删除模板', proxy: '设置单个容器代理' }[op] || op;
+  if (op === 'proxy') {
+    gotoProxyOverride('docker', button.dataset.dkName || id);
+    return;
+  }
   try {
     if (['start', 'stop', 'restart'].includes(op)) {
       if (!dockerNeedConfirm(label, owned)) return;
@@ -2286,14 +2623,150 @@ $('#storage-path-form').addEventListener('submit', (e) => {
   loadStorage();
 });
 $('#storage-up').addEventListener('click', () => { currentStoragePath = pathParent(currentStoragePath); loadStorage(); });
+$('#storage-refresh').addEventListener('click', () => loadStorage());
+$('#openlist-refresh').addEventListener('click', () => loadStorage());
+$('#storage-select-all').addEventListener('change', (e) => {
+  $$('[data-ol-file]').forEach((box) => {
+    box.checked = e.target.checked;
+    if (e.target.checked) storageState.selected.add(box.dataset.olFile);
+    else storageState.selected.delete(box.dataset.olFile);
+  });
+});
+$$('[data-ol-action]').forEach((b) => b.addEventListener('click', () => olAction(b.dataset.olAction)));
 $('#mkdir-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    await api('/storage/mkdir', { method: 'POST', body: { path: currentStoragePath, name: e.target.elements.name.value } });
+    await api('/openlist/files/mkdir', { method: 'POST', body: { path: currentStoragePath, name: e.target.elements.name.value } });
     toast('目录已创建'); e.target.reset(); loadStorage();
   } catch (err) { toast(err.message, true); }
 });
-$('#upload-input').addEventListener('change', (e) => uploadFile(e.target.files[0]));
+$('#upload-input').addEventListener('change', (e) => uploadFiles(e.target.files));
+$('#openlist-config-toggle').addEventListener('click', () => {
+  const form = $('#openlist-config-form');
+  form.hidden = !form.hidden;
+  if (!form.hidden && storageState.connection) {
+    form.elements.url.value = storageState.connection.url || '';
+    form.elements.user.value = storageState.connection.user || 'admin';
+  }
+});
+$('#openlist-embed-toggle').addEventListener('click', () => {
+  const card = $('#openlist-frame-card');
+  card.hidden = !card.hidden;
+  if (!card.hidden && storageState.connection) {
+    $('#openlist-frame').src = storageState.connection.manageUrl || '#';
+  }
+});
+$('#openlist-frame-close').addEventListener('click', () => {
+  $('#openlist-frame-card').hidden = true;
+  $('#openlist-frame').src = 'about:blank';
+});
+$('#openlist-config-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/openlist/connection', { method: 'PUT', body: formData(e.target) });
+    e.target.elements.token.value = '';
+    e.target.elements.password.value = '';
+    toast('连接已保存，正在重新检测'); loadStorage();
+  } catch (err) { toast(err.message, true); }
+});
+$('#openlist-config-reset').addEventListener('click', async () => {
+  if (!confirm('恢复使用 .env / 环境变量里的 OpenList 配置？')) return;
+  try { await api('/openlist/connection/reset', { method: 'POST', body: {} }); toast('已恢复环境配置'); loadStorage(); }
+  catch (err) { toast(err.message, true); }
+});
+$('#webdav-copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('#webdav-url').textContent.trim()); toast('WebDAV 地址已复制'); }
+  catch { toast('复制失败，请手动选择', true); }
+});
+$('#storage-storages-reload').addEventListener('click', () => loadStorage());
+$('#storage-drivers-reload').addEventListener('click', () => loadStorage());
+$('#storage-add-toggle').addEventListener('click', () => {
+  const form = $('#storage-add-form');
+  form.hidden = !form.hidden;
+  if (!form.hidden) { $('#ol-storage-id').value = ''; storageState.editId = ''; }
+});
+$('#storage-add-cancel').addEventListener('click', () => {
+  $('#storage-add-form').hidden = true;
+  $('#ol-storage-id').value = '';
+});
+$('#storage-add-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = formData(e.target);
+  try {
+    JSON.parse(body.addition || '{}');
+  } catch { toast('驱动配置必须是合法 JSON', true); return; }
+  const id = body.id || $('#ol-storage-id').value;
+  delete body.id;
+  try {
+    await api(id ? `/openlist/storages/${encodeURIComponent(id)}` : '/openlist/storages', {
+      method: id ? 'PUT' : 'POST', body,
+    });
+    toast(id ? '存储已更新' : '存储已创建');
+    e.target.reset(); $('#ol-storage-id').value = '';
+    $('#storage-add-form').hidden = true;
+    loadStorage();
+  } catch (err) { toast(err.message, true); }
+});
+
+/* ------------------------------ 代理配置事件 ------------------------------ */
+$('#proxy-global-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/proxy/global', { method: 'PUT', body: {
+      url: e.target.elements.url.value.trim(),
+      noProxy: e.target.elements.noProxy.value.trim(),
+      enabled: e.target.elements.enabled.checked,
+    } });
+    toast('全局代理已保存'); loadProxy();
+  } catch (err) { toast(err.message, true); }
+});
+$('#proxy-test-global').addEventListener('click', async () => {
+  const box = $('#proxy-test-result');
+  box.hidden = false; box.textContent = '测试中…';
+  try {
+    const d = await api('/proxy/test', { method: 'POST', body: { global: true, target: 'https://github.com' } });
+    box.textContent = `✔ ${d.source} · ${d.proxy || '直连'} · ${d.ms} ms${d.status ? ` · HTTP ${d.status}` : ''} · 目标 ${d.target}`;
+  } catch (err) { box.textContent = `✖ ${err.message}`; }
+});
+$('#proxy-rule-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/proxy/rules', { method: 'POST', body: formData(e.target) });
+    toast('Host 规则已添加'); e.target.reset(); loadProxy();
+  } catch (err) { toast(err.message, true); }
+});
+$('#proxy-override-scope').addEventListener('change', renderProxyEntities);
+$('#proxy-entities-reload').addEventListener('click', () => loadProxy());
+$('#proxy-override-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = formData(e.target);
+  const id = String(body.customId || '').trim() || String(body.id || '').trim();
+  if (!id) { toast('请选择对象或手填对象标识', true); return; }
+  try {
+    await api(`/proxy/overrides/${encodeURIComponent(body.scope)}?id=${encodeURIComponent(id)}`, {
+      method: 'PUT', body: { url: body.url || '' },
+    });
+    toast(body.url ? '单项覆盖已保存' : '单项覆盖已删除');
+    e.target.elements.url.value = '';
+    e.target.elements.customId.value = '';
+    loadProxy();
+  } catch (err) { toast(err.message, true); }
+});
+$('#proxy-resolve-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = formData(e.target);
+  try {
+    const d = await api('/proxy/resolve', { method: 'POST', body });
+    $('#proxy-resolve-result').textContent = [
+      `最终代理：${d.masked || '无'}`,
+      `命中层级：${d.sourceLabel}`,
+      d.bypassed ? '目标命中 NO_PROXY，将绕过代理直连' : '',
+      `NO_PROXY：${d.noProxy}`,
+      '',
+      ...d.chain.map((c) => `  ${c.label.padEnd(22, ' ')} ${c.mode === 'custom' ? c.url : (c.mode === 'direct' ? '明确直连' : '未设置，继续继承')}`),
+    ].filter(Boolean).join('\n');
+  } catch (err) { $('#proxy-resolve-result').textContent = `解析失败：${err.message}`; }
+});
 
 $('#auto-deploy').addEventListener('change', (e) => { $('#deploy-fields').hidden = !e.target.checked; });
 $('#build-form').addEventListener('submit', async (e) => {

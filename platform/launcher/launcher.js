@@ -41,7 +41,16 @@ const DEFAULT_ENV = [
   'OPENLIST_URL=http://localhost:5244',
   'OPENLIST_TOKEN=',
   'OPENLIST_USER=admin',
+  'OPENLIST_PASSWORD=',
   'CODE_SERVER_URL=http://localhost:8080',
+  '# 分层代理也可以在控制台「代理配置」页设置；这里仅是首次启动默认值（§27）。',
+  '# DP_PROXY_GLOBAL=http://127.0.0.1:7890',
+  '# DP_PROXY_GIT=http://127.0.0.1:7890',
+  '# DP_PROXY_DOCKER=http://127.0.0.1:7890',
+  '# DP_PROXY_SERVER=http://127.0.0.1:7890',
+  '# DP_PROXY_AI=http://127.0.0.1:7890',
+  '# DP_PROXY_NO=localhost,127.0.0.1,::1,10.0.0.0/8',
+  '# DP_PROXY_GIT_RULES=github.com=http://127.0.0.1:7890;gitlab.internal=direct',
   '# ADMIN_TOKEN=',
 ].join('\n') + '\n';
 

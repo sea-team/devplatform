@@ -3,24 +3,21 @@
 const fs = require('fs');
 const { spawn, spawnSync } = require('child_process');
 const { config } = require('./core');
+const proxyModule = require('./proxy');
 
-// 可选依赖：本地零依赖也能跑控制台；安装依赖后自动启用 SSH 与代理能力。
+// 可选依赖：本地零依赖也能跑控制台；安装依赖后自动启用 SSH 与 HTTP 代理转发。
+// undici 的 ProxyAgent 由 src/proxy.js 统一加载并做能力探测，此处不再重复 require。
 let Client = null;
-let ProxyAgent = null;
 try { ({ Client } = require('ssh2')); } catch { Client = null; }
-try { ({ ProxyAgent } = require('undici')); } catch { ProxyAgent = null; }
 
 const requireSSH = () => {
   if (!Client) throw new Error('缺少 ssh2 依赖：请执行 npm install 或使用 docker compose 启动完整环境');
-};
-const requireProxy = () => {
-  if (!ProxyAgent) throw new Error('代理功能需要 undici 依赖：请执行 npm install 或使用 docker compose 启动完整环境');
 };
 
 const REQUEST_TIMEOUT_MS = 10000;
 
 async function httpJSON(url, options = {}) {
-  const { method = 'GET', headers = {}, body, proxy, timeout = REQUEST_TIMEOUT_MS } = options;
+  const { method = 'GET', headers = {}, body, timeout = REQUEST_TIMEOUT_MS } = options;
   const init = {
     method,
     headers: { ...headers },
@@ -32,7 +29,12 @@ async function httpJSON(url, options = {}) {
       init.headers['content-type'] = 'application/json';
     }
   }
-  if (proxy) { requireProxy(); init.dispatcher = new ProxyAgent(proxy); }
+  // 未显式指定时走「全局代理」；localhost / 内网由 NO_PROXY 自动绕过。
+  // scope 相关链路（Git / AI）会显式传入该作用域解析出的代理，优先级更高。
+  const chosen = options.proxy !== undefined
+    ? String(options.proxy || '')
+    : proxyModule.forGlobal(url).proxy;
+  if (chosen) init.dispatcher = proxyModule.dispatcher(chosen);
 
   const response = await fetch(url, init);
   const text = await response.text();
@@ -44,16 +46,28 @@ async function httpJSON(url, options = {}) {
 
 /* ------------------------------ Git / Gitea ------------------------------ */
 
+/** 内置 Gitea 走 git 作用域链：单项 > Host 规则 > Git 分组 > 全局。 */
+function gitHttpProxy(url) {
+  return proxyModule.forHttp(url, 'git', {
+    host: proxyModule.hostOf(config.giteaUrl), itemId: 'builtin-gitea', url,
+  }).proxy;
+}
+
 async function gitea(pathname, options = {}) {
   if (!config.giteaToken) throw new Error('未配置 GITEA_TOKEN');
-  return httpJSON(`${config.giteaUrl}/api/v1${pathname}`, {
+  const url = `${config.giteaUrl}/api/v1${pathname}`;
+  return httpJSON(url, {
     ...options,
+    proxy: gitHttpProxy(url),
     headers: { Authorization: `token ${config.giteaToken}`, ...(options.headers || {}) },
   });
 }
 
 const giteaApi = {
-  version: () => httpJSON(`${config.giteaUrl}/api/v1/version`),
+  version: () => {
+    const url = `${config.giteaUrl}/api/v1/version`;
+    return httpJSON(url, { proxy: gitHttpProxy(url) });
+  },
   listRepos: () => gitea('/user/repos?limit=100'),
   createRepo: (payload) => gitea('/user/repos', { method: 'POST', body: payload }),
   listBranches: (owner, repo) => gitea(`/repos/${owner}/${repo}/branches`),
@@ -82,16 +96,23 @@ async function openlistToken() {
 
 async function openlist(pathname, options = {}) {
   const token = await openlistToken();
-  return httpJSON(`${config.openlistUrl}${pathname}`, {
+  const url = `${config.openlistUrl}${pathname}`;
+  return httpJSON(url, {
     ...options,
+    proxy: proxyModule.forGlobal(url).proxy,
     headers: { Authorization: token, ...(options.headers || {}) },
   });
 }
 
+/** 界面更新 OpenList 连接配置后必须清掉缓存 token，否则仍拿旧服务的令牌去请求。 */
+function resetOpenlistToken() { _openlistToken = ''; }
+
 async function openlistUpload(remotePath, buffer) {
   const token = await openlistToken();
-  return httpJSON(`${config.openlistUrl}/api/fs/put`, {
+  const url = `${config.openlistUrl}/api/fs/put`;
+  return httpJSON(url, {
     method: 'PUT',
+    proxy: proxyModule.forGlobal(url).proxy,
     headers: {
       Authorization: token,
       'File-Path': encodeURIComponent(remotePath),
@@ -104,15 +125,41 @@ async function openlistUpload(remotePath, buffer) {
 }
 
 const openlistApi = {
+  // 通用入口：openlist.js 的存储管理 / 文件 ops 都从这里走，避免多套 token 逻辑。
+  request: (pathname, options = {}) => openlist(pathname, options),
+  resetToken: resetOpenlistToken,
+  token: openlistToken,
   health: () => openlist('/api/public/settings'),
-  list: (p = '/') => openlist('/api/fs/list', {
+  list: (p = '/', options = {}) => openlist('/api/fs/list', {
     method: 'POST',
-    body: { path: p, password: '', page: 1, per_page: 200, refresh: false },
+    body: {
+      path: p, password: options.password || '', page: Number(options.page || 1),
+      per_page: Number(options.perPage || 200), refresh: Boolean(options.refresh),
+    },
+    timeout: 20000,
+  }),
+  get: (p, password = '') => openlist('/api/fs/get', {
+    method: 'POST', body: { path: p, password }, timeout: 20000,
   }),
   mkdir: (p) => openlist('/api/fs/mkdir', { method: 'POST', body: { path: p } }),
   remove: (dir, names) => openlist('/api/fs/remove', { method: 'POST', body: { dir, names } }),
   rename: (pathName, name) => openlist('/api/fs/rename', { method: 'POST', body: { path: pathName, name } }),
+  move: (srcDir, dstDir, names) => openlist('/api/fs/move', {
+    method: 'POST', body: { src_dir: srcDir, dst_dir: dstDir, names }, timeout: 60000,
+  }),
+  copy: (srcDir, dstDir, names) => openlist('/api/fs/copy', {
+    method: 'POST', body: { src_dir: srcDir, dst_dir: dstDir, names }, timeout: 60000,
+  }),
   mounts: () => openlist('/api/admin/storage/list'),
+  drivers: () => openlist('/api/admin/driver/list'),
+  driverInfo: (driver) => openlist(`/api/admin/driver/info?driver=${encodeURIComponent(driver)}`),
+  adminSettings: () => openlist('/api/admin/setting/list'),
+  saveStorage: (body, isUpdate) => openlist(isUpdate ? '/api/admin/storage/update' : '/api/admin/storage/create', {
+    method: 'POST', body, timeout: 30000,
+  }),
+  storageAction: (action, id) => openlist(`/api/admin/storage/${action}`, {
+    method: 'POST', body: action === 'delete' ? { id } : { id }, timeout: 30000,
+  }),
   upload: openlistUpload,
   webdavUrl: () => `${config.openlistUrl.replace(/^http:\/\/openlist/, 'http://localhost')}/dav/`,
 };
@@ -140,6 +187,23 @@ function sshOptions(server) {
   if (server.passphrase) options.passphrase = server.passphrase;
   if (server.password) options.password = server.password;
   return options;
+}
+
+/**
+ * 建立 SSH 连接。代理链：单个服务器代理 > 服务器代理 > 全局代理。
+ * 命中代理时用 HTTP CONNECT / SOCKS5 隧道作为 ssh2 的 sock，凭据不写入任何文件。
+ */
+async function sshConnect(server, conn) {
+  const host = String(server.host);
+  const resolved = proxyModule.resolve('server', {
+    itemId: server.id, host, entity: server,
+  });
+  const options = sshOptions(server);
+  if (resolved.url && !proxyModule.shouldBypass(host, resolved.noProxy)) {
+    options.sock = await proxyModule.openTunnel(resolved.url, host, Number(server.port || 22));
+  }
+  conn.connect(options);
+  return resolved.masked;
 }
 
 function sshExec(server, command, timeout = 20000) {
@@ -173,7 +237,7 @@ function sshExec(server, command, timeout = 20000) {
         stream.on('close', (code) => finish(resolve, { code, stdout: stdout.trim(), stderr: stderr.trim() }));
       });
     });
-    conn.connect(sshOptions(server));
+    sshConnect(server, conn).catch((err) => finish(reject, err));
   });
 }
 
@@ -181,19 +245,21 @@ function sftpPut(server, localPath, remotePath) {
   requireSSH();
   return new Promise((resolve, reject) => {
     const conn = new Client();
-    conn.on('error', reject);
+    let settled = false;
+    const fail = (err) => { if (settled) return; settled = true; conn.end(); reject(err); };
+    conn.on('error', fail);
     conn.on('ready', () => {
       conn.sftp((err, sftp) => {
-        if (err) { conn.end(); return reject(err); }
+        if (err) return fail(err);
         const writer = sftp.createWriteStream(remotePath);
         const reader = fs.createReadStream(localPath);
-        writer.on('error', (e) => { conn.end(); reject(e); });
-        writer.on('close', () => { conn.end(); resolve(); });
-        reader.on('error', (e) => { conn.end(); reject(e); });
+        writer.on('error', fail);
+        writer.on('close', () => { if (settled) return; settled = true; conn.end(); resolve(); });
+        reader.on('error', fail);
         reader.pipe(writer);
       });
     });
-    conn.connect(sshOptions(server));
+    sshConnect(server, conn).catch(fail);
   });
 }
 
@@ -258,6 +324,9 @@ const publicServer = (s) => ({
   privateKeyPath: s.privateKeyPath || '',
   hasPassphrase: Boolean(s.passphrase),
   deployDir: s.deployDir || '/data/platform',
+  proxy: s.proxy ? proxyModule.maskUrl(s.proxy) : '',
+  // 实际生效的代理（含分组 / 全局继承），仅用于展示，不含凭据。
+  effectiveProxy: proxyModule.resolve('server', { itemId: s.id, host: s.host, entity: s }).masked,
 });
 
 /* ------------------- 本地 AI 程序（宿主机 / WSL） ------------------------ */
@@ -345,14 +414,22 @@ function detectLocalPrograms(force = false) {
   return _programCache;
 }
 
-function proxyEnvironment(proxy) {
-  if (!proxy) return {};
-  const noProxy = process.env.NO_PROXY || process.env.no_proxy || 'localhost,127.0.0.1,::1';
-  return {
-    HTTP_PROXY: proxy, HTTPS_PROXY: proxy, ALL_PROXY: proxy,
-    http_proxy: proxy, https_proxy: proxy, all_proxy: proxy,
-    NO_PROXY: noProxy, no_proxy: noProxy,
-  };
+/** 单个 AI 服务代理 > AI 服务代理 > 全局代理。 */
+function aiProxy(provider) {
+  return proxyModule.resolve('ai', {
+    itemId: provider.id || '',
+    host: proxyModule.hostOf(provider.baseURL),
+    url: provider.baseURL || '',
+    entity: provider,
+  });
+}
+
+// 兼容旧调用：既可传解析结果，也可传单个 URL 字符串。
+function proxyEnvironment(value) {
+  const resolved = value && typeof value === 'object'
+    ? value
+    : proxyModule.resolve('ai', { entity: { proxy: String(value || '') } });
+  return proxyModule.envFor(resolved);
 }
 
 function buildCliInvocation(provider, prompt) {
@@ -397,15 +474,17 @@ function runCli(provider, prompt) {
     catch (error) { return reject(error); }
 
     const timeoutMs = Math.max(5000, Number(provider.timeoutMs || 180000));
-    const env = { ...process.env, ...proxyEnvironment(provider.proxy) };
+    const resolved = aiProxy(provider);
+    const env = { ...process.env, ...proxyEnvironment(resolved) };
     let child;
 
     if (provider.runner === 'wsl') {
       if (process.platform !== 'win32') return reject(new Error('WSL 运行位置仅适用于 Windows 宿主机'));
       const distroArgs = provider.distro ? ['-d', provider.distro] : [];
-      const proxyPrefix = provider.proxy
-        ? `export HTTP_PROXY=${shq(provider.proxy)} HTTPS_PROXY=${shq(provider.proxy)} ALL_PROXY=${shq(provider.proxy)} NO_PROXY=${shq(env.NO_PROXY)}; `
-        : '';
+      // direct 时显式清空代理变量，避免 WSL 继承宿主机环境后仍然走代理。
+      const proxyPrefix = resolved.url
+        ? `export HTTP_PROXY=${shq(resolved.url)} HTTPS_PROXY=${shq(resolved.url)} ALL_PROXY=${shq(resolved.url)} NO_PROXY=${shq(resolved.noProxy)}; `
+        : (resolved.direct ? 'unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; ' : '');
       const commandLine = [invocation.command, ...invocation.args].map(shq).join(' ');
       child = spawn('wsl.exe', [...distroArgs, '--', 'bash', '-lc', `${proxyPrefix}${commandLine}`], {
         env, windowsHide: true,
@@ -487,7 +566,10 @@ async function aiChat(provider, messages, tools = []) {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(120000),
   };
-  if (provider.proxy) { requireProxy(); init.dispatcher = new ProxyAgent(provider.proxy); }
+  const resolved = aiProxy(provider);
+  if (resolved.url && !proxyModule.shouldBypass(url, resolved.noProxy)) {
+    init.dispatcher = proxyModule.dispatcher(resolved.url);
+  }
 
   const response = await fetch(url, init);
   const text = await response.text();
@@ -501,10 +583,12 @@ async function aiChat(provider, messages, tools = []) {
 const publicProvider = (p) => ({
   ...p,
   apiKey: p.apiKey ? `${String(p.apiKey).slice(0, 4)}****${String(p.apiKey).slice(-4)}` : '',
+  proxy: p.proxy ? proxyModule.maskUrl(p.proxy) : '',
+  effectiveProxy: aiProxy(p).masked,
 });
 
 module.exports = {
   httpJSON, giteaApi, openlistApi,
-  sshExec, sftpPut, collectStatus, sshOptions, publicServer,
-  aiChat, publicProvider, detectLocalPrograms, runCli, proxyEnvironment, CLI_CANDIDATES,
+  sshExec, sshConnect, sftpPut, collectStatus, sshOptions, publicServer,
+  aiChat, aiProxy, publicProvider, detectLocalPrograms, runCli, proxyEnvironment, CLI_CANDIDATES,
 };

@@ -96,6 +96,15 @@ services:
       # 平台在容器内时，扩展容器绑在宿主机上、连接串也要写宿主机 IP（§19.6）。
       DP_EXT_HOST: ${DP_EXT_HOST:-127.0.0.1}
       DP_EXT_BIND_IP: ${DP_EXT_BIND_IP:-127.0.0.1}
+      # 分层代理首次启动默认值；后续在控制台「代理配置」页修改并写入 state.json（§27）。
+      DP_PROXY_GLOBAL: ${DP_PROXY_GLOBAL:-}
+      DP_PROXY_GIT: ${DP_PROXY_GIT:-}
+      DP_PROXY_DOCKER: ${DP_PROXY_DOCKER:-}
+      DP_PROXY_SERVER: ${DP_PROXY_SERVER:-}
+      DP_PROXY_AI: ${DP_PROXY_AI:-}
+      DP_PROXY_NO: ${DP_PROXY_NO:-}
+      DP_PROXY_GIT_RULES: ${DP_PROXY_GIT_RULES:-}
+      DP_PROXY_ENABLED: ${DP_PROXY_ENABLED:-1}
     volumes:
       - ./workspace:/workspace
       - ./data/platform:/app/data

@@ -6,7 +6,7 @@
  */
 const crypto = require('crypto');
 const path = require('path');
-const { sshOptions } = require('./integrations');
+const { sshConnect } = require('./integrations');
 const fileTypes = require('./fileTypes');
 
 let Client = null;
@@ -68,7 +68,7 @@ function withSftp(server, fn) {
         Promise.resolve(fn(sftp)).then((v) => finish(null, v), (e) => finish(e));
       });
     });
-    conn.connect(sshOptions(server));
+    sshConnect(server, conn).catch((e) => finish(e));
   });
 }
 
@@ -328,7 +328,7 @@ async function openTerminal(server, options = {}) {
         }
       });
     });
-    conn.connect(sshOptions(server));
+    sshConnect(server, conn).catch(fail);
   });
 }
 

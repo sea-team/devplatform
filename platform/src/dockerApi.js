@@ -7,6 +7,7 @@
  */
 const http = require('http');
 const fs = require('fs');
+const proxyModule = require('./proxy');
 
 const SOCKET_PATH = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
 const DOCKER_HOST = process.env.DOCKER_HOST || '';
@@ -43,8 +44,18 @@ function request(method, path, body, { stream = false, binary = false, timeout =
     }
     const options = { path, method, headers };
     const ep = endpoint();
-    if (ep.socketPath) options.socketPath = ep.socketPath;
-    else { options.host = ep.host; options.port = ep.port; }
+    if (ep.socketPath) {
+      options.socketPath = ep.socketPath;
+    } else {
+      options.host = ep.host;
+      options.port = ep.port;
+      // DOCKER_HOST=tcp://... 时按「Docker 代理 → 全局代理」链决定是否走 CONNECT 隧道。
+      const resolved = proxyModule.resolve('docker', { itemId: 'docker-engine', host: ep.host });
+      if (resolved.url && !proxyModule.shouldBypass(ep.host, resolved.noProxy)
+        && /^https?:\/\//i.test(resolved.url)) {
+        options.agent = proxyModule.tunnelAgent(resolved.url, ep.host, ep.port);
+      }
+    }
     const req = http.request(options, (res) => {
       const collect = () => {
         const chunks = [];
