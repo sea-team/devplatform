@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261110e" />
+  <link rel="stylesheet" href="/style.css?v=20261110f" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -30,6 +30,7 @@
         <button class="nav-item" data-view="gitsrc"><span class="ico">⑃</span>Git 源</button>
         <button class="nav-item" data-view="docker"><span class="ico">⬡</span>Docker 管理</button>
         <button class="nav-item" data-view="proxy"><span class="ico">⇄</span>代理配置</button>
+        <button class="nav-item" data-view="environment"><span class="ico">⌬</span>环境适配</button>
         <button class="nav-item" data-view="ai"><span class="ico">✦</span>AI 服务配置</button>
         <button class="nav-item" data-view="ops"><span class="ico">◎</span>AI 运维</button>
       </nav>
@@ -146,8 +147,9 @@
             <button class="subnav-btn" data-open-view="gitsrc">外部 Git 源</button>
           </div>
           <div class="card" style="margin-bottom:14px">
-            <div class="card-head"><h2>Git 运行时</h2><span class="muted">克隆依赖 Git；缺失时自动改用 SSH 宿主机</span></div>
+            <div class="card-head"><h2>Git 运行时</h2><span class="muted">克隆依赖 Git；执行通道由「环境适配」自动选择</span><button class="btn btn-sm" type="button" data-open-view="environment">环境适配 / 自动处置</button></div>
             <div id="git-runtime-status" class="hint">正在检测当前运行环境的 Git…</div>
+            <div id="git-runtime-env" class="hint" style="margin-top:6px">正在读取环境档案…</div>
             <form id="git-runtime-form" class="form" style="margin-top:12px">
               <div class="grid-2">
                 <label>Git 可执行文件（可选）<input name="bin" id="git-runtime-bin" placeholder="留空自动探测；如 /usr/bin/git 或 C:\Program Files\Git\cmd\git.exe" autocomplete="off" /></label>
@@ -968,6 +970,72 @@
             </div>
           </div>
         </section>
+
+        <!-- 环境适配中心（v0.3.4）：换机器 / 换部署方式时自动检查处理 -->
+        <section class="page" id="view-environment">
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-head"><h2>当前环境</h2><span class="muted">指纹变化即判定为环境切换，启动时自动重检</span></div>
+            <div id="env-summary" class="hint">正在体检当前运行环境…</div>
+          </div>
+
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2>环境档案与策略</h2><span class="muted">.env 的 DP_* 优先于本页设置</span></div>
+              <form id="env-config-form" class="form">
+                <label>执行档案<select name="activeProfile" id="env-profile"></select></label>
+                <div id="env-profile-desc" class="hint">—</div>
+                <div class="grid-2">
+                  <label>克隆通道<select name="gitClone" id="env-git-clone"></select></label>
+                  <label>构建后端<select name="buildExecutor" id="env-build-executor"></select></label>
+                  <label>缺失 Git 时联网安装<select name="gitInstall" id="env-git-install"></select></label>
+                  <label>SSH 宿主机兜底<select name="sshFallback" id="env-ssh-fallback"></select></label>
+                </div>
+                <label class="check"><input type="checkbox" name="autoHeal" id="env-auto-heal" /> 启动时按体检结果自动处置</label>
+                <label class="check"><input type="checkbox" name="checkOnStartup" id="env-check-startup" /> 启动时自动体检</label>
+                <div class="form-actions">
+                  <button class="btn btn-primary" type="submit">保存策略</button>
+                  <button class="btn" type="button" id="env-switch-apply">切换档案并应用</button>
+                </div>
+              </form>
+              <div class="notice" style="margin-top:10px">
+                <b>优先级</b>：<code>.env / compose 的 DP_ENV_*</code> &gt; 本页策略微调 &gt; 环境档案预设 &gt; 自动推导。<br />
+                <b>切换环境</b>：把平台部署到另一台机器时，环境指纹变化会自动触发体检与处置；若想固定策略，在目标机 <code>.env</code> 写 <code>DP_ENV_PROFILE=container-lite</code> 后重新 deploy 即可，旧 <code>state.json</code> 不会锁死新环境。<br />
+                <b>自动处置边界</b>：只做刷新探测、切换克隆通道、开关 SSH 兜底、降级构建后端、按显式授权安装 Git；<b>不改凭据、不重启容器、不删数据</b>。
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>自定义档案</h2><span class="muted">把一套策略存成可一键切换的方案</span></div>
+              <form id="env-profile-form" class="form">
+                <div class="grid-2">
+                  <label>档案 ID<input name="id" id="env-profile-id" placeholder="如 offline-lab" required /></label>
+                  <label>显示名称<input name="name" id="env-profile-name" placeholder="如 内网精简环境" /></label>
+                </div>
+                <label>说明<input name="description" id="env-profile-desc-input" placeholder="可选，记录这套策略适用的机器" /></label>
+                <div class="form-actions"><button class="btn" type="submit">按当前表单另存档案</button></div>
+              </form>
+              <div id="env-profile-list" class="hint" style="margin-top:10px">—</div>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <div class="card-head">
+              <h2>自动体检</h2>
+              <span class="muted"><button class="btn btn-sm" type="button" id="env-check">重新体检（含 SSH 实测）</button> <button class="btn btn-sm btn-primary" type="button" id="env-heal">应用自动处置</button></span>
+            </div>
+            <div id="env-checks">—</div>
+          </div>
+
+          <div class="grid-2" style="margin-top:14px">
+            <div class="card">
+              <div class="card-head"><h2>处置日志</h2><span class="muted">最近 20 条</span></div>
+              <pre class="log short" id="env-history">—</pre>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>部署期环境声明</h2><span class="muted">当前进程读到的 DP_*</span></div>
+              <div id="env-overrides" class="hint">—</div>
+            </div>
+          </div>
+        </section>
       </div>
     </main>
   </div>
@@ -977,6 +1045,6 @@
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261110e"></script>
+  <script src="/app.js?v=20261110f"></script>
 </body>
 </html>

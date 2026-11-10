@@ -27,6 +27,7 @@ const VIEW_META = {
   'docker-networks': ['Docker · 网络', '容器网络的创建、驱动与作用域'],
   'docker-compose': ['Docker · 编排', 'Compose YAML 模板登记（不在平台内执行）'],
   proxy: ['代理配置', '全局 / 分组 / Git Host 规则 / 单项覆盖，四级优先级解析与连通性测试'],
+  environment: ['环境适配', '自动识别环境、体检、切换档案与自动处置，换机器无需改代码'],
   ai: ['AI 服务配置', 'API 服务、宿主机 / WSL 本地 AI 程序与代理'],
   ops: ['AI 运维', '让 AI 查询状态、分析日志并给出建议'],
 };
@@ -37,7 +38,7 @@ const MODULE_ICONS = {
   servers: '▣', 'server-new': '＋', extensions: '▦', gitsrc: '⑃',
   docker: '⬡', 'docker-containers': '▣', 'docker-images': '◫', 'docker-volumes': '⛁',
   'docker-networks': '⌘', 'docker-compose': '▦',
-  proxy: '⇄', ai: '✦', ops: '◎',
+  proxy: '⇄', environment: '⌬', ai: '✦', ops: '◎',
 };
 // 子页面归属：侧边栏主项保持高亮，标签栏仍显示各自的子页标题。
 const NAV_GROUP = {
@@ -498,9 +499,109 @@ async function loadGitRuntime() {
     box.innerHTML = `${stateBadge} <span class="muted">${channel}</span><div style="margin-top:6px">${lines}</div>`;
     if ($('#git-runtime-bin')) $('#git-runtime-bin').value = d.configuredBin || '';
     if ($('#git-runtime-fallback')) $('#git-runtime-fallback').value = fb.enabled === false ? 'off' : 'on';
+    // v0.3.4：显示当前环境档案与「实际生效」的克隆通道，异常时引导去环境适配页处置。
+    api('/environment').then((env) => {
+      const envBox = $('#git-runtime-env');
+      if (!envBox) return;
+      const name = env.profile.derived ? `${env.profile.name} → ${env.profile.derived}` : env.profile.name;
+      const channel = env.applied.gitClone || env.strategies.gitClone;
+      envBox.innerHTML = `环境档案 <b>${esc(name)}</b> · 生效克隆通道 <b>${esc(channel || '自动')}</b>`
+        + (env.environmentChanged ? ` ${badge('环境已切换，建议重新体检', 'amber')}` : '')
+        + ' · 可在「环境适配」页切换策略或应用自动处置';
+    }).catch(() => { if ($('#git-runtime-env')) $('#git-runtime-env').textContent = '环境档案读取失败，请打开「环境适配」页查看'; });
   } catch (e) {
     box.textContent = `Git 运行时检测失败：${e.message}`;
   }
+}
+
+/* ---------------------- 环境适配中心（v0.3.4） ---------------------- */
+// 决策（识别 / 体检 / 自动处置）都在后端 environment.js，这里只做展示与配置。
+let envReport = null;
+
+const ENV_OPTION_LABELS = {
+  gitClone: { auto: '自动（按体检结果）', local: '本机 / 当前容器', 'ssh-host': 'SSH 宿主机', disabled: '禁用克隆' },
+  buildExecutor: { auto: '自动降级', local: '本机工具链', docker: 'Docker Engine', ssh: '远程 SSH', wsl: 'WSL' },
+  gitInstall: { never: '不自动安装（推荐）', auto: '允许自动安装（需联网）' },
+  sshFallback: { auto: '跟随档案', on: '强制开启', off: '强制关闭' },
+};
+
+function envOptions(key, current, effective) {
+  const values = ['', ...((envReport && envReport.options && envReport.options[key]) || []).filter((v) => v !== '')];
+  return values.map((v) => {
+    const label = v === ''
+      ? `跟随档案（当前生效：${effective || '保持现有'}）`
+      : ((ENV_OPTION_LABELS[key] || {})[v] || v);
+    return `<option value="${esc(v)}"${String(v) === String(current || '') ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+}
+
+function renderEnvironment(d) {
+  envReport = d;
+  const info = d.info || {};
+  const cfg = d.config || {};
+  const profileName = d.profile.derived ? `${d.profile.name} → ${d.profile.derived}` : d.profile.name;
+  const activeChannel = d.applied.gitClone || d.strategies.gitClone;
+  const box = $('#env-summary');
+  if (box) {
+    box.innerHTML = `${badge(info.container ? '容器内' : '宿主机', 'green')} ${badge(`Node ${esc(info.node || '')}`, 'gray')}`
+      + `${d.environmentChanged ? badge('检测到环境切换', 'amber') : badge('环境未变化', 'green')}`
+      + `${badge(`克隆 ${esc(activeChannel || '自动')}`, activeChannel === 'none' || activeChannel === 'disabled' ? 'red' : 'green')}`
+      + `<div style="margin-top:8px">档案 <b>${esc(profileName)}</b> · 指纹 <code>${esc(d.fingerprint)}</code> · 体检 ${d.summary.ok} 正常 / ${d.summary.warn} 提醒 / ${d.summary.error} 异常</div>`
+      + `<div>工作区 <code>${esc(info.workspaceDir)}</code>${info.hostWorkspaceDir ? ` · 宿主机映射 <code>${esc(info.hostWorkspaceDir)}</code>` : ''}</div>`
+      + `<div class="muted">检查时间 ${esc(fmtTime(d.checkedAt))}${d.cached ? '（缓存）' : ''}${info.runtimeImage ? ` · 镜像 ${esc(info.runtimeImage)}` : ''}</div>`;
+  }
+  const profileSelect = $('#env-profile');
+  if (profileSelect) {
+    profileSelect.innerHTML = (d.profiles || []).map((p) =>
+      `<option value="${esc(p.id)}"${p.id === cfg.activeProfile ? ' selected' : ''}>${esc(p.name)}${p.builtin ? '' : '（自定义）'}</option>`).join('');
+  }
+  const current = (d.profiles || []).find((p) => p.id === (d.profile && d.profile.id));
+  if ($('#env-profile-desc')) {
+    $('#env-profile-desc').textContent = current
+      ? `${current.description}｜策略来源：${(d.strategySources || {}).gitClone || '档案预设'}`
+      : '—';
+  }
+  const selects = {
+    gitClone: '#env-git-clone', buildExecutor: '#env-build-executor',
+    gitInstall: '#env-git-install', sshFallback: '#env-ssh-fallback',
+  };
+  for (const [key, selector] of Object.entries(selects)) {
+    const el = $(selector);
+    if (el) el.innerHTML = envOptions(key, (cfg.strategies || {})[key] || '', (d.strategies || {})[key]);
+  }
+  if ($('#env-auto-heal')) $('#env-auto-heal').checked = cfg.autoHeal !== false;
+  if ($('#env-check-startup')) $('#env-check-startup').checked = cfg.checkOnStartup !== false;
+
+  const customs = (d.profiles || []).filter((p) => !p.builtin);
+  if ($('#env-profile-list')) {
+    $('#env-profile-list').innerHTML = customs.length
+      ? customs.map((p) => `<div class="row" style="justify-content:space-between;margin:4px 0"><span><b>${esc(p.name)}</b> <code>${esc(p.id)}</code> · ${esc(p.description)}</span><button class="btn btn-sm" type="button" data-env-del="${esc(p.id)}">删除</button></div>`).join('')
+      : '<span class="muted">暂无自定义档案；内置档案已覆盖本机 / 完整容器 / 精简容器 / 远程部署</span>';
+  }
+  if ($('#env-checks')) {
+    const tones = { ok: 'green', warn: 'amber', error: 'red', info: 'gray' };
+    const labels = { ok: '正常', warn: '提醒', error: '异常', info: '提示' };
+    $('#env-checks').innerHTML = table(['状态', '检查项', '详情', '建议 / 自动动作'], (d.checks || []).map((c) =>
+      `<tr><td>${badge(labels[c.level] || c.level, tones[c.level] || 'gray')}</td><td><b>${esc(c.label)}</b></td>`
+      + `<td>${esc(c.detail)}</td><td>${esc(c.advice)}${c.autoAction ? `<div class="muted">可自动：${esc(c.autoAction)}</div>` : ''}</td></tr>`));
+  }
+  if ($('#env-history')) {
+    const hist = d.history || [];
+    $('#env-history').textContent = hist.length
+      ? hist.map((h) => `[${fmtTime(h.at)}] ${h.level === 'warn' ? '⚠' : h.level === 'error' ? '✖' : '✔'} ${h.action}${h.detail ? ` · ${h.detail}` : ''}`).join('\n')
+      : '暂无处置记录；点「应用自动处置」后会记录每一步';
+  }
+  if ($('#env-overrides')) {
+    const ov = Object.entries(cfg.envOverrides || {});
+    $('#env-overrides').innerHTML = ov.length
+      ? ov.map(([k, v]) => `<div><code>${esc(k)}</code> = ${esc(v.value)} <span class="muted">→ ${esc(v.key)}</span></div>`).join('')
+      : '<span class="muted">未声明 DP_*；当前完全按档案 / 自动推导运行</span>';
+  }
+}
+
+async function loadEnvironment() {
+  try { renderEnvironment(await api('/environment')); }
+  catch (e) { if ($('#env-summary')) $('#env-summary').textContent = `环境体检失败：${e.message}`; }
 }
 
 /* ---------------------------------- IDE ---------------------------------- */
@@ -2245,7 +2346,7 @@ const loaders = {
   'docker-volumes': loadDocker, 'docker-networks': loadDocker, 'docker-compose': loadDocker,
   proxy: loadProxy,
   dbgate: loadExtExtras, backups: loadExtExtras,
-  ai: loadAI, ops: loadOps,
+  ai: loadAI, ops: loadOps, environment: loadEnvironment,
 };
 
 /* 每个独立页顶部的子导航：点按钮打开对应标签，而不是把功能堆在一页里。 */
@@ -2857,6 +2958,85 @@ $('#git-runtime-refresh').addEventListener('click', async () => {
     await api('/git/runtime/refresh', { method: 'POST', body: {} });
     await loadGitRuntime();
     toast('已重新检测 Git 运行时');
+  } catch (err) { toast(err.message, true); }
+});
+
+/* ----------------- 环境适配中心：配置 / 体检 / 处置（v0.3.4） ----------------- */
+const envConfigForm = $('#env-config-form');
+if (envConfigForm) envConfigForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/environment/config', { method: 'PUT', body: {
+      activeProfile: $('#env-profile').value,
+      strategies: {
+        gitClone: $('#env-git-clone').value,
+        buildExecutor: $('#env-build-executor').value,
+        gitInstall: $('#env-git-install').value,
+        sshFallback: $('#env-ssh-fallback').value,
+      },
+      autoHeal: $('#env-auto-heal').checked,
+      checkOnStartup: $('#env-check-startup').checked,
+    } });
+    toast('环境策略已保存');
+    await loadEnvironment();
+  } catch (err) { toast(err.message, true); }
+});
+
+const envCheckBtn = $('#env-check');
+if (envCheckBtn) envCheckBtn.addEventListener('click', async () => {
+  try {
+    renderEnvironment(await api('/environment/check', { method: 'POST', body: {} }));
+    toast('已完成深度体检（含 SSH 宿主机实测）');
+  } catch (err) { toast(err.message, true); }
+});
+
+const envHealBtn = $('#env-heal');
+if (envHealBtn) envHealBtn.addEventListener('click', async () => {
+  try {
+    const d = await api('/environment/heal', { method: 'POST', body: {} });
+    toast(`自动处置完成：${(d.actions || []).length} 个动作，克隆通道 ${d.applied.gitClone}`);
+    await loadEnvironment();
+  } catch (err) { toast(err.message, true); }
+});
+
+const envSwitchBtn = $('#env-switch-apply');
+if (envSwitchBtn) envSwitchBtn.addEventListener('click', async () => {
+  try {
+    const d = await api('/environment/switch', { method: 'POST', body: { id: $('#env-profile').value } });
+    toast(`已切换到「${d.profile.name}」并应用：克隆通道 ${d.applied.gitClone}`);
+    await loadEnvironment();
+  } catch (err) { toast(err.message, true); }
+});
+
+const envProfileForm = $('#env-profile-form');
+if (envProfileForm) envProfileForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/environment/profiles', { method: 'POST', body: {
+      id: e.target.elements.id.value,
+      name: e.target.elements.name.value,
+      description: e.target.elements.description.value,
+      strategies: {
+        gitClone: $('#env-git-clone').value,
+        buildExecutor: $('#env-build-executor').value,
+        gitInstall: $('#env-git-install').value,
+        sshFallback: $('#env-ssh-fallback').value,
+      },
+    } });
+    toast('已另存为自定义环境档案');
+    e.target.reset();
+    await loadEnvironment();
+  } catch (err) { toast(err.message, true); }
+});
+
+// 自定义档案删除按钮是动态渲染的，用文档级委托。
+document.addEventListener('click', async (e) => {
+  const btn = e.target && e.target.closest ? e.target.closest('[data-env-del]') : null;
+  if (!btn) return;
+  try {
+    await api(`/environment/profiles/${encodeURIComponent(btn.dataset.envDel)}`, { method: 'DELETE' });
+    toast('自定义档案已删除');
+    await loadEnvironment();
   } catch (err) { toast(err.message, true); }
 });
 

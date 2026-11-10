@@ -320,6 +320,9 @@ async function startInContainer(server, target, host) {
     // 平台通过 docker.sock 直接调 Docker Engine API 做隔离构建，不需要宿主机 docker CLI。
     '-v /var/run/docker.sock:/var/run/docker.sock',
     '-e PORT=9000 -e DATA_DIR=/app/data -e WORKSPACE_DIR=/workspace',
+    // v0.3.4：把「平台跑在这个镜像的容器里」作为环境事实告诉平台，
+    // 环境适配中心据此生成指纹、自动推导档案，换机器时无需手工改配置。
+    `-e DP_RUNTIME_KIND=container -e DP_RUNTIME_IMAGE=${image}`,
     ...envArgs,
     '-w /app', image, 'node src/server.js',
   ].join(' ');
@@ -413,6 +416,29 @@ async function cmdDeploy(host, rawTarget = '/data/platform') {
   }
 
   await bootstrapRemote(host, server);
+
+  // v0.3.4：部署收尾立刻跑一次深度体检 + 自动处置，把新环境的能力与所选通道
+  // 直接打印在部署日志里；这样「换机器部署」不需要登录控制台再排查一遍。
+  try {
+    console.log('\n▶ 环境体检与自动处置');
+    // 用 quiet 避免把整包 JSON 刷进部署日志，下面只打印人可读的摘要。
+    const envRaw = await quiet(server,
+      `curl -s --max-time 90 -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:9000/api/environment/heal`,
+      120000);
+    const env = JSON.parse((envRaw.stdout || '').trim());
+    if (env.ok && env.data) {
+      const d = env.data;
+      console.log(`\n▶ 环境：${d.info.kind}${d.info.runtimeImage ? ` (${d.info.runtimeImage})` : ''} · 指纹 ${d.fingerprint}${d.environmentChanged ? ' · 检测到环境切换' : ''}`);
+      console.log(`▶ 档案：${d.profile.name}${d.profile.derived ? ` → 推导为 ${d.profile.derived}` : ''} · 克隆通道 ${d.applied.gitClone}`);
+      console.log(`▶ 体检：${d.summary.ok} 正常 / ${d.summary.warn} 提醒 / ${d.summary.error} 异常`);
+      (d.actions || []).forEach((a) => console.log(`   ${a.level === 'warn' ? '⚠' : '✔'} ${a.action}${a.detail ? ` · ${a.detail}` : ''}`));
+      (d.checks || []).filter((c) => c.level === 'error').forEach((c) => console.log(`   ✖ ${c.label}：${c.detail} → ${c.advice}`));
+    } else {
+      console.log('⚠ 环境体检未返回有效结果，可在控制台「环境适配」页手动重检');
+    }
+  } catch (e) {
+    console.log(`⚠ 环境体检调用失败（不影响部署）：${e.message}`);
+  }
 
   await run(server, `docker inspect -f '{{.State.Status}}' ${SERVICE_NAME} 2>/dev/null || systemctl is-active ${SERVICE_NAME} 2>/dev/null || echo unknown`, 30000, '服务状态');
   console.log(`\n✔ 部署完成：http://${host}:9000  （代码与数据位于 ${target}）`);

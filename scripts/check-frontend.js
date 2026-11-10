@@ -31,9 +31,10 @@ const sections = [...html.matchAll(/class="page" id="view-([a-z0-9-]+)"/g)].map(
 const SUBPAGES = ['repo-new', 'repo-clone', 'storage-conn', 'storage-mounts', 'storage-drivers',
   'build-start', 'deploys', 'server-new', 'docker-containers', 'docker-images',
   'docker-volumes', 'docker-networks', 'docker-compose'];
-note(sections.length === 25 && sections.includes('gitsrc') && sections.includes('docker')
-  && sections.includes('proxy') && SUBPAGES.every((v) => sections.includes(v)),
-'25 个独立页面（12 主模块 + 13 个子功能页）均已转为可标签化的 .page', sections.join(', '));
+note(sections.length === 26 && sections.includes('gitsrc') && sections.includes('docker')
+  && sections.includes('proxy') && sections.includes('environment')
+  && SUBPAGES.every((v) => sections.includes(v)),
+'26 个独立页面（13 主模块 + 13 个子功能页）均已转为可标签化的 .page', sections.join(', '));
 note(['/git-sources', '/docker/overview', '/extensions/backups', '/extensions/dbgate', '/builds/backends']
   .every((p) => app.includes(p)) && app.includes('function loadGitSources') && app.includes('function loadDocker'),
 'Git 源 / Docker 管理 / 备份 / DbGate / 构建后端接口已全部接线');
@@ -81,7 +82,22 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
-note(html.includes('?v=20261110e'), '静态资源版本已升到 20261110e');
+note(html.includes('?v=20261110f'), '静态资源版本已升到 20261110f');
+
+// v0.3.4：环境适配中心（自动识别 / 体检 / 自动处置 / 档案切换）。
+note(sections.includes('environment') && html.includes('data-view="environment"')
+  && ['env-summary', 'env-config-form', 'env-checks', 'env-history', 'env-overrides', 'env-profile-list']
+    .every((id) => html.includes(`id="${id}"`)),
+'环境适配独立页：环境摘要、策略表单、体检结果、处置日志与环境声明齐全');
+note(['/environment/check', '/environment/heal', '/environment/config', '/environment/switch',
+  '/environment/profiles'].every((s) => app.includes(s))
+  && app.includes('function loadEnvironment') && app.includes('function renderEnvironment')
+  && app.includes('environment: loadEnvironment')
+  && html.includes('data-open-view="environment"'),
+'环境体检 / 自动处置 / 策略保存 / 档案切换 / 自定义档案接口全部接线');
+note(html.includes('DP_ENV_PROFILE=container-lite') && html.includes('环境指纹变化会自动触发体检')
+  && html.includes('id="git-runtime-env"') && app.includes("api('/environment')"),
+'克隆页 Git 卡片联动环境档案，界面写明换环境固定策略的方法');
 
 const scripts = [...html.matchAll(/<script src="\/vendor\/([^"]+)"/g)].map((m) => m[1]);
 const cmIndex = scripts.indexOf('codemirror.js');

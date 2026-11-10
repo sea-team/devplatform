@@ -1901,3 +1901,93 @@ Git 作用域额外支持 Host 规则（`github.com`、`*.gitea.internal`、完�
 | 自检 | `npm run check` 22 个模块、`check-frontend.js` 39 项、`smoke-proxy-openlist.js` 60 项、`smoke-git-runtime.js` 31 项全通过 |
 
 > 本机 `9000` 上的旧实例未覆盖；如需同步，重启该实例或按 §30.6 重新部署即可。
+
+## 31. v0.3.4：环境适配中心（切换环境自动检查处理）
+
+### 31.1 解决什么问题
+
+§30 只修好了「容器里没有 Git」这一个点，但同一份代码还会跑在本机单文件 exe、完整 compose 容器、`node:*-alpine` 精简容器、远程 SSH 部署等不同环境里：有的没有 Git、有的 Docker socket 不可达、有的软件源不通、有的必须借宿主机执行。每换一次环境都要人工排查、改参数、重新部署。
+
+v0.3.4 把这件事收敛成 **识别 → 体检 → 按档案自动处置**：平台启动时（以及每次 `remote.js deploy` 收尾）自动识别当前环境、生成指纹、重跑体检，并按可配置策略把克隆通道 / 构建后端 / SSH 兜底调整到当前环境可用的组合。环境换了但没改任何配置，也能直接工作。
+
+### 31.2 三层配置与优先级
+
+| 层级 | 位置 | 用途 |
+|---|---|---|
+| 部署期声明（最高） | `.env` / compose / `docker run -e` 的 `DP_*` | 换机器时**覆盖旧 state**，避免被上一台机器的配置锁死 |
+| 控制台策略微调 | 「环境适配」页，存 `state.json` | 日常手工固定某一项；留空 = 跟随档案 |
+| 环境档案 | 内置 5 套 + 自定义档案 | 一套环境一套策略，一键切换 |
+| 自动推导（最低） | `auto` 档案 | 按体检结果推导，默认行为 |
+
+**默认全部留空即全自动**，无需任何配置。`DP_*` 变量清单见 `.env.example` 的「环境适配」段。
+
+### 31.3 内置档案
+
+| id | 适用环境 | 克隆通道 | 其它 |
+|---|---|---|---|
+| `auto` | 默认；按能力推导 | 随推导结果 | 指纹变化时自动重算 |
+| `native` | 本机 / 单文件 exe | `local` | 不联网装 Git |
+| `container` | 自带 Git 的完整镜像 | `local` | 不联网装 Git |
+| `container-lite` | `alpine` / `slim` 等无 Git 镜像 | `ssh-host` | 强制开启 SSH 宿主机兜底 |
+| `remote` | 远程 SSH 部署 | `ssh-host` | 构建后端 `auto` |
+
+自定义档案可在控制台「另存档案」，把四个策略项存成一个 id，随时用 `DP_ENV_PROFILE=<id>` 或「切换档案并应用」一键套用。
+
+四个策略项：`gitClone`（`auto` / `local` / `ssh-host` / `disabled`）、`buildExecutor`（`auto` / `local` / `docker` / `ssh` / `wsl`）、`gitInstall`（`never` / `auto`）、`sshFallback`（`auto` / `on` / `off`）。
+
+### 31.4 自动体检的 8 项
+
+运行时（Node 版本 / 平台 / 容器 / 镜像）、Git 可执行文件、SSH 宿主机兜底（深度体检会真连一次，验证宿主机 Git 与目录可写）、工作区可写与挂载映射、Docker / 构建能力、集成服务连通性（Gitea / OpenList / code-server，1.5 秒超时）、策略与环境是否冲突、环境漂移（指纹变化）。每项都有状态、详情、建议，以及「是否可自动处置」。
+
+### 31.5 自动处置边界（重要）
+
+会做：刷新 Git 探测缓存、按档案开关 SSH 兜底、把不可用的通道自动降级（`local` 无 Git → `ssh-host`；`ssh-host` 无兜底 → `local`）、构建后端在 `docker` / `ssh` 不可用时降级为 `auto`、按**显式授权**联网安装 Git（`gitInstall=auto`，45 秒硬超时）。
+
+**不会做**：改任何凭据、重启容器、删除数据、替换运行镜像。默认 `gitInstall=never`——内网机器 `apk` / `apt` 源常常不可达，开启会把部署挂住，所以自动安装必须显式打开。所有动作写入 `state.environment.history`，控制台可回看。
+
+### 31.6 新增接口
+
+| 接口 | 作用 |
+|---|---|
+| `GET /api/environment` | 完整报告：环境事实 / 档案 / 策略来源 / 8 项体检 / 处置日志 / DP_* 声明（30 秒缓存） |
+| `POST /api/environment/check` | 强制深度重检（含 SSH 宿主机实测） |
+| `POST /api/environment/heal` | 按策略执行自动处置，返回动作列表与生效通道 |
+| `PUT /api/environment/config` | 保存档案、策略微调、体检 / 处置开关 |
+| `POST /api/environment/switch` | 切换档案并立即体检 + 处置 |
+| `GET/POST /api/environment/profiles`、`DELETE /api/environment/profiles/:id` | 自定义档案增删查 |
+| `GET /api/health` | 新增 `environment.{profile,derived,channel,fingerprint,kind,autoHeal}`，部署脚本 / 监控无需登录即可读 |
+
+`POST /api/repos/clone` 现在按 `environment.gitStrategy()` 调度，并多返回 `strategy` / `profile`；策略设为 `disabled` 时会明确拒绝，不会静默换通道。
+
+### 31.7 换环境的三种典型用法
+
+1. **什么都不配（推荐）**：`node scripts/remote.js deploy <新机器> /data/platform` → 部署收尾自动跑深度体检 + 处置，日志直接打印「环境 / 档案 / 克隆通道 / 体检统计 / 每个动作」；平台启动也会因指纹变化自动重检。
+2. **固定目标环境策略**：在新机器 `.env` 写 `DP_ENV_PROFILE=container-lite`（或自定义档案 id），重新 deploy。环境变量优先级高于 `state.json`，旧配置不生效。
+3. **临时排障**：控制台「环境适配」页 → 重新体检（含 SSH 实测）→ 应用自动处置；或手动改某一项后点「切换档案并应用」。克隆页「Git 运行时」卡片会同步显示当前档案与生效通道。
+
+### 31.8 验证结果
+
+| 项目 | 结果 |
+|---|---|
+| 后端自检 | `npm run check` 23 个模块全通过 |
+| 前端自检 | `scripts/check-frontend.js` 42 项全通过（26 个独立页） |
+| 端到端冒烟 | `smoke-proxy-openlist.js` 60 项、`smoke-git-runtime.js` 31 项 |
+| 环境专项冒烟 | `scripts/smoke-environment.js` 28 项全通过：自动推导 `container-lite`、策略降级、DP_* 优先级、漂移触发、档案增删改切、禁用策略真实阻止克隆 |
+| 远端实测 | 见下方 31.9 |
+
+### 31.9 远端实测（`10.0.0.246`）
+
+| 项目 | 结果 |
+|---|---|
+| 部署 | `remote.js deploy 10.0.0.246 /data/platform` 自动注入 `DP_RUNTIME_KIND=container` / `DP_RUNTIME_IMAGE=node:20-alpine`；收尾自动跑深度体检，日志直接打印环境 / 档案 / 通道 / 统计 / 处置动作 |
+| 自动识别 | `/api/health` → `0.3.4` · `kind=container` · `profile=auto` → `derived=container-lite` · `channel=ssh-host` · 指纹 `b60920e38bba` |
+| 体检 | 8 项：7 正常 / 1 提醒（容器内无 Git）/ 0 异常；SSH 宿主机实测「Git 可用 / 目录可写」；Gitea / OpenList / code-server 分别 200 / 200 / 302 |
+| 自动降级 | 强制切到 `native`（要求 `local`）→ 自动降级 `local → ssh-host` 并写入日志；切回 `auto` 立即恢复 `container-lite` |
+| 环境切换 | 把 `environment.lastFingerprint` 改成旧值后重启容器，启动日志出现「已检测到环境切换」并自动重检，`history` 留下「触发环境切换体检」 |
+| health 实时性 | 切到 `native` 后 `/api/health.environment.profile=native`，切回后为 `auto`（档案不被缓存） |
+| 策略优先级 | 控制台设 `gitClone=auto` → 生效值与来源均变为「控制台策略微调」；清空后恢复档案预设 |
+| 真实克隆 | 内置 Gitea 临时仓库 → `channel:ssh-host` · `strategy:ssh-host` · `authenticated:true` · `gitVersion: git 2.11.0` |
+| 凭据安全 | `.git/config` 仅含 `[core] / [remote "origin"] / [branch "main"]`，无 `extraheader` / Token |
+| 清理 | 测试仓库删除返回 204，工作区只剩原有 `smoke-test`；`state.json` 权限仍为 600 |
+
+> v0.3.4 未打 tag、未触发 Release；本机 `9000` 的旧实例仍未覆盖。

@@ -54,6 +54,15 @@ const config = {
   buildServerId: env('DP_BUILD_SERVER_ID'),
   // 远程 docker 数据的暂存目录（镜像 tar、备份文件）。
   remoteTmpDir: env('DP_REMOTE_TMP_DIR', '/tmp/devplatform'),
+  // v0.3.4 环境适配：这些是「部署时声明的环境事实」，优先级高于控制台保存的策略，
+  // 换一台机器 / 换一种部署方式时只要改 .env 就能覆盖旧环境遗留的配置。
+  envProfile: env('DP_ENV_PROFILE'),
+  envAutoHeal: env('DP_AUTO_HEAL'),
+  envGitCloneStrategy: env('DP_GIT_CLONE_STRATEGY'),
+  envGitInstall: env('DP_GIT_INSTALL'),
+  envCheckOnStartup: env('DP_ENV_CHECK_ON_STARTUP'),
+  runtimeImage: env('DP_RUNTIME_IMAGE'),
+  runtimeKind: env('DP_RUNTIME_KIND'),
 };
 
 function defaultState() {
@@ -76,6 +85,13 @@ function defaultState() {
     // openlistActiveId 指向当前生效项；切换时由 openlist.applyConfig() 写回运行时 config。
     openlistConnections: [],
     openlistActiveId: '',
+    // v0.3.4 环境适配中心：档案、策略微调、自动处置结果与历史。
+    // 默认全部留空 = 完全自动推导，换环境时不会被旧配置锁死。
+    environment: {
+      activeProfile: 'auto', autoHeal: true, checkOnStartup: true,
+      strategies: {}, profiles: {}, applied: {},
+      lastFingerprint: '', lastCheckAt: '', lastProfile: '', history: [],
+    },
   };
 }
 
@@ -84,7 +100,12 @@ let _state = null;
 function loadState() {
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-    return { ...defaultState(), ...parsed };
+    const base = defaultState();
+    return {
+      ...base, ...parsed,
+      // 嵌套对象要逐层补齐，避免旧 state.json 缺字段导致策略读取为 undefined。
+      environment: { ...base.environment, ...(parsed.environment || {}) },
+    };
   } catch {
     return defaultState();
   }

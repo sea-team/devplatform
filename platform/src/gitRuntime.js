@@ -159,6 +159,7 @@ function missingMessage() {
     fb.ready
       ? `5) 已检测到 SSH 宿主机兜底（${fb.serverName} · ${fb.hostWorkspaceDir}），本次克隆会自动在宿主机执行。`
       : '5) 或登记一台已装 Git 的 SSH 宿主机并配置 HOST_WORKSPACE_DIR，平台会自动在宿主机执行克隆。',
+    '6) 或在「环境适配」页切换档案 / 点「应用自动处置」，由平台按当前环境自动重检并选择通道。',
   ].join('\n');
 }
 

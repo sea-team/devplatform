@@ -11,13 +11,18 @@
  *  4. 所有仓库按统一结构归一化，前端只认一种形状；
  *  5. v0.3.3：Git 可执行文件由 src/gitRuntime.js 统一解析（支持 GIT_BIN / 控制台
  *     指定路径 / 常见安装路径）。容器镜像不含 Git 时自动降级到已登记的 SSH 宿主机，
- *     借 HOST_WORKSPACE_DIR 这个 bind mount 执行 clone，不再抛 spawn git ENOENT。
+ *     借 HOST_WORKSPACE_DIR 这个 bind mount 执行 clone，不再抛 spawn git ENOENT；
+ *  6. v0.3.4：克隆通道由 src/environment.js 的环境档案决定（auto / local /
+ *     ssh-host / disabled）。换机器时平台自动体检并切换，无需改代码；
+ *  7. 临时凭据用 `git -c ... clone`（`-c` 必须在 clone 之前），否则会被写进
+ *     .git/config 的 http.extraheader，造成 Token 落盘。
  */
 const fs = require('fs');
 const path = require('path');
 const { config, state, update, uid, safeWorkspacePath, relativeWorkspacePath } = require('./core');
 const { httpJSON, sshExec } = require('./integrations');
 const proxyModule = require('./proxy');
+const environment = require('./environment');
 const gitRuntime = require('./gitRuntime');
 
 const BUILTIN_ID = 'builtin-gitea';
@@ -409,11 +414,22 @@ async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId,
   // 每次克隆重新探测：容器里后续装了 git、或用户在控制台保存了路径，无需重启即可生效。
   gitRuntime.refresh();
   const runtime = gitRuntime.describe();
-  let channel = 'local';
-  let channelLabel = '本机 / 当前容器';
+  // v0.3.4：通道由环境档案决定。auto 已由 environment.heal() 按体检结果落到具体通道，
+  // 因此这里只会拿到 local / ssh-host / disabled / none 四种确定值。
+  const strategy = environment.gitStrategy();
+  let channel = strategy === 'ssh-host' ? 'ssh-host' : 'local';
+  let channelLabel = channel === 'ssh-host' ? 'SSH 宿主机' : '本机 / 当前容器';
   let gitVersion = runtime.version;
 
-  if (runtime.available) {
+  if (strategy === 'disabled') {
+    throw new Error('克隆功能已被当前环境档案禁用：请在「环境适配」页把「克隆通道」改为 auto / local / ssh-host，或切换档案。');
+  }
+  if (strategy === 'none') throw new Error(gitRuntime.missingMessage());
+
+  if (strategy === 'local') {
+    if (!runtime.available) {
+      throw new Error(`当前环境档案要求在本机执行克隆，但本机没有 Git。\n${gitRuntime.missingMessage()}\n也可在「环境适配」页切换档案或点「应用自动处置」自动降级通道。`);
+    }
     const result = await gitRuntime.exec([...args, target], { env, timeoutMs: 300000 });
     if (result.code !== 0) {
       throw new Error(`git clone 失败：${scrub(result.output.slice(-600), allSecrets)}`);
@@ -438,6 +454,7 @@ async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId,
     credentialSource: inline ? '本次填写' : (source ? `Git 源「${source.label}」` : '无（公开仓库 / SSH 密钥）'),
     proxy: proxyModule.maskUrl(proxyUrl), proxySource: resolved.sourceLabel,
     channel, channelLabel, gitVersion,
+    strategy, profile: environment.profile().name,
   };
 }
 

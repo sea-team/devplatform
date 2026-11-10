@@ -17,6 +17,7 @@ const remoteOps = require('./remoteOps');
 const extensions = require('./extensions');
 const gitSources = require('./gitSources');
 const gitRuntime = require('./gitRuntime');
+const environment = require('./environment');
 const dockerPanel = require('./dockerPanel');
 const backup = require('./backup');
 const extLifecycle = require('./extLifecycle');
@@ -31,12 +32,22 @@ openlist.applyConfig();
 // 内置 HTTP 路由：本地零依赖即可启动；容器里装了 ssh2/undici 后自动启用 SSH 与代理。
 const app = createApp({ adminToken: config.adminToken, staticDir: config.publicDir });
 app.disable('x-powered-by');
-app.get('/api/health', (req, res) => ok(res, {
-  name: 'devplatform', version: localVersion().version, time: new Date().toISOString(),
-  mode: 'normal', executor: config.buildExecutor, workspace: config.workspaceDir,
-  // 容器镜像缺 Git 时这里会直接显示降级通道，便于远程排障（v0.3.3）。
-  git: { available: gitRuntime.resolve().available, channel: gitRuntime.describe().channel },
-}));
+app.get('/api/health', (req, res) => {
+  // 档案可在控制台热切换，必须每次请求实时读取，不能在模块加载时缓存。
+  const envProfile = environment.profile();
+  ok(res, {
+    name: 'devplatform', version: localVersion().version, time: new Date().toISOString(),
+    mode: 'normal', executor: config.buildExecutor, workspace: config.workspaceDir,
+    // 容器镜像缺 Git 时这里会直接显示降级通道，便于远程排障（v0.3.3）。
+    git: { available: gitRuntime.resolve().available, channel: gitRuntime.describe().channel },
+    // v0.3.4：环境档案与自动处置结果，部署脚本 / 监控可直接读，不必登录控制台。
+    environment: {
+      profile: envProfile.id, derived: envProfile.derived,
+      channel: environment.gitStrategy(), fingerprint: environment.fingerprint(),
+      kind: environment.detect().kind, autoHeal: environment.autoHealEnabled(),
+    },
+  });
+});
 // 鉴权由 mini.js 在分发层统一处理（/api/health 除外）。
 // 正常模式：外部服务未就绪时直接返回真实错误，不注入任何演示数据。
 
@@ -261,6 +272,35 @@ app.put('/api/git/runtime', wrap(async (req, res) => {
   if (has('sshFallback')) gitRuntime.setFallback(body.sshFallback !== false && body.sshFallback !== 'off');
   ok(res, gitRuntime.describe());
 }));
+
+/* ------------------------ 环境适配中心（v0.3.4） ------------------------ */
+// 换机器 / 换部署方式时：自动识别 → 体检 → 按档案自动处置，全部可通过控制台或 .env 配置。
+app.get('/api/environment', wrap(async (req, res) => ok(res, await environment.report())));
+
+app.post('/api/environment/check', wrap(async (req, res) =>
+  ok(res, await environment.report({ deep: true, force: true }))));
+
+app.post('/api/environment/heal', wrap(async (req, res) =>
+  ok(res, await environment.heal({ deep: true, trigger: '控制台' }))));
+
+app.put('/api/environment/config', wrap(async (req, res) => {
+  environment.setConfig(req.body || {});
+  ok(res, await environment.report({ force: true }));
+}));
+
+app.post('/api/environment/switch', wrap(async (req, res) => {
+  const id = String((req.body || {}).id || (req.body || {}).activeProfile || '').trim();
+  if (!id) throw new Error('缺少环境档案 id');
+  ok(res, await environment.switchProfile(id));
+}));
+
+app.get('/api/environment/profiles', (req, res) => ok(res, environment.listProfiles()));
+
+app.post('/api/environment/profiles', wrap(async (req, res) =>
+  ok(res, environment.saveProfile(req.body || {}))));
+
+app.delete('/api/environment/profiles/:id', wrap(async (req, res) =>
+  ok(res, environment.deleteProfile(req.params.id))));
 
 /* --------------------------- 外部 Git 源管理 --------------------------- */
 // 凭据只存 state.json（600），列表脱敏；clone 用临时 http.extraHeader，不落到 .git/config。
@@ -1092,6 +1132,8 @@ const server = app.listen(config.port, () => {
   fs.mkdirSync(config.workspaceDir, { recursive: true });
   console.log(`[devplatform] 控制台已启动: http://localhost:${config.port}`);
   console.log(`[devplatform] 工作区: ${config.workspaceDir} | 运行模式: 正常（无演示数据）`);
+  // 环境体检是异步的，不阻塞 HTTP 监听；失败也只记录日志，不影响平台启动。
+  environment.boot().catch((e) => console.log(`[env] 启动体检异常：${e.message}`));
 });
 
 // 引导器 reload / 更新时发 SIGTERM：先停止接新请求，SSE 长连接最多等 2s 后退出，
