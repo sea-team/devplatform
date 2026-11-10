@@ -47,8 +47,9 @@ try {
 }
 
 $hash = (Get-FileHash -LiteralPath $Output -Algorithm SHA256).Hash.ToLower()
+# 统一写 LF，保证 sha256sum -c 在 Git Bash / WSL / Linux 下可直接读取。
 $sumFile = Join-Path $outDir 'SHA256SUMS.txt'
-[IO.File]::WriteAllText($sumFile, "$hash  $([IO.Path]::GetFileName($Output))`r`n", (New-Object 'System.Text.UTF8Encoding' $false))
+[IO.File]::WriteAllText($sumFile, "$hash  $([IO.Path]::GetFileName($Output))`n", (New-Object 'System.Text.UTF8Encoding' $false))
 $size = [Math]::Round((Get-Item -LiteralPath $Output).Length / 1MB, 1)
 Write-Host "[pack] $Output ($size MB)" -ForegroundColor Green
 Write-Host "[pack] SHA256 $hash" -ForegroundColor DarkGray

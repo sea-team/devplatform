@@ -1268,12 +1268,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File windows\pack-release.ps1 -In
 
 `fetch-services.ps1` 会校验 PE 头、写 `services-manifest.json`（版本 / 来源 / SHA256）与 `THIRD-PARTY.txt`；`pack-release.ps1 -IncludeServices` 调用 `pack-dist.ps1` 生成组件包，用 `windows\release\` 模板组装**全量包与轻量包**，另产出 `devplatform-services.zip`，并把五个文件的哈希写入 `SHA256SUMS.txt`。GitHub Actions (`.github/workflows/release.yml`) 用的就是这两个命令，CI 里还有 `actions/cache` 缓存二进制。不加 `-IncludeServices` 时保持旧行为（只产一个不含服务的 `devplatform-windows.zip`）；可用 `-Dist` / `-ServicesDir` 指定程序与二进制来源。
 
-校验：
+校验（Windows PowerShell）：
 
 ```powershell
 Get-FileHash .\devplatform-windows.zip -Algorithm SHA256
 # 与 SHA256SUMS.txt 比对
 ```
+
+Git Bash / WSL / Linux 可直接 `sha256sum -c SHA256SUMS.txt`。**v0.3.1 及更早版本**的清单由 Windows CI 以 CRLF 写出，`\r` 会被 `sha256sum` 当成文件名的一部分而全部报 `FAILED open or read`，需先规范化换行：
+
+```bash
+tr -d '\r' < SHA256SUMS.txt | sha256sum -c -
+```
+
+仓库主分支的 `pack-dist.ps1` / `pack-release.ps1` 已统一改为 LF（无 BOM），PowerShell `Get-Content` / `Get-FileHash` 与 `sha256sum -c` 均可直接使用；已发布的旧资产内容不变，按上面的命令处理即可。
 
 内网机器把整个 `devplatform-windows.zip` 拷过去解压即可，不需要访问 GitHub；解压后同样记得区分 `START.bat`（只启动控制台）与 `INSTALL.bat`（连集成服务一起装，**三项程序已在包内**）。已有轻量包 / clone 安装的机器，只需把 `devplatform-services.zip` 拷进 `windows\bootstrap\` 即可升级成离线全量；clone 方式取程序包则把 `devplatform-dist.zip` 也放进 `windows\bootstrap\`（§18.11.2）。
 
@@ -1289,6 +1297,7 @@ Get-FileHash .\devplatform-windows.zip -Algorithm SHA256
 | 单 exe 提示「无法释放 bundle.cjs」 | exe 放在只读目录 | 移到可写目录（如 `D:\devplatform\`）再运行 |
 | `INSTALL.bat` 仍在联网下载 / 提示下载超时 | 用的是轻量包或 `git clone` 安装，包内没有三个二进制 | 换全量包 `devplatform-windows.zip`；或把 `devplatform-services.zip` 放进 `windows\bootstrap\` 后重跑（§18.10.3） |
 | 下载到的文件大小明显不对 | 代理返回了 504 页面 / 下载被截断 | 用 `SHA256SUMS.txt` 校验，换 `ghfast.top` 加速源或重新下载 |
+| `sha256sum -c` 全部报 `FAILED open or read` | v0.3.1 及更早的清单是 CRLF，`\r` 被当成文件名的一部分 | `tr -d '\r' < SHA256SUMS.txt \| sha256sum -c -`，或改用 PowerShell `Get-FileHash` |
 
 ---
 

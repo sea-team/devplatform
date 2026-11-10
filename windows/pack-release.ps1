@@ -176,8 +176,10 @@ foreach ($f in $assets) {
   $hash = (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLower()
   $lines += "$hash  $([IO.Path]::GetFileName($f))"
 }
+# 统一写 LF：sha256sum -c 在 Git Bash / WSL / Linux 下会把 CRLF 的 \r 当成文件名的一部分。
+# 清单无 BOM；PowerShell 的 Get-Content / Get-FileHash 同样能正常读取 LF。
 $sums = Join-Path $OutputDir 'SHA256SUMS.txt'
-[IO.File]::WriteAllText($sums, ($lines -join "`r`n") + "`r`n", (New-Object 'System.Text.UTF8Encoding' $false))
+[IO.File]::WriteAllText($sums, ($lines -join "`n") + "`n", (New-Object 'System.Text.UTF8Encoding' $false))
 
 $release = Get-Content -LiteralPath (Join-Path $Dist 'release.json') -Raw | ConvertFrom-Json
 Write-Host "[release] 版本 v$($release.version) · 输出目录 $OutputDir" -ForegroundColor Green
