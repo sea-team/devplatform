@@ -6,7 +6,7 @@ const { spawn } = require('child_process');
 const { createApp } = require('./mini');
 const {
   config, state, update, uid, ok, fail, wrap, appRoot,
-  safeWorkspacePath, relativeWorkspacePath,
+  safeWorkspacePath, relativeWorkspacePath, badRequest, notFound, inferStatus,
 } = require('./core');
 const {
   giteaApi, openlistApi, sshExec, collectStatus, publicServer, aiChat, aiProxy, publicProvider, httpJSON,
@@ -30,7 +30,7 @@ const openlist = require('./openlist');
 openlist.applyConfig();
 
 // 内置 HTTP 路由：本地零依赖即可启动；容器里装了 ssh2/undici 后自动启用 SSH 与代理。
-const app = createApp({ adminToken: config.adminToken, staticDir: config.publicDir });
+const app = createApp({ adminToken: config.adminToken, staticDir: config.publicDir, errorStatus: inferStatus });
 app.disable('x-powered-by');
 app.get('/api/health', (req, res) => {
   // 档案可在控制台热切换，必须每次请求实时读取，不能在模块加载时缓存。
@@ -148,10 +148,35 @@ app.post('/api/system/rollback', wrap(async (req, res) => {
 const requireBody = (body, keys) => {
   for (const key of keys) {
     if (body[key] === undefined || body[key] === null || body[key] === '') {
-      throw new Error(`缺少参数：${key}`);
+      throw badRequest(`缺少参数：${key}`);
     }
   }
 };
+
+/**
+ * 只读列表接口的降级包装（v0.3.5）。
+ * 某个集成服务（OpenList / Gitea / Docker）挂掉时，过去整个接口抛 500，
+ * 前端一次并发好几个这样的请求，看起来就是「大多功能都报 500」。
+ * 现在返回 HTTP 200 + 空数据 + degraded 诊断，页面能照常渲染并给出修复指引；
+ * 写操作不降级，仍返回 502 明确告诉用户「上游不可用，操作未执行」。
+ */
+const isUpstreamError = (e) => Boolean(e && (e.upstream || e.errorCode));
+const tolerant = (handler, empty) => wrap(async (req, res) => {
+  try {
+    await handler(req, res);
+  } catch (e) {
+    if (!isUpstreamError(e)) throw e;
+    const base = typeof empty === 'function' ? empty(req) : empty;
+    ok(res, {
+      ...base,
+      degraded: true,
+      unavailable: true,
+      error: String((e && e.message) || e),
+      hint: (e && e.hint) || openlist.hintFor(e),
+      upstreamStatus: Number(e && e.status) || 502,
+    });
+  }
+});
 
 /* ------------------------------- 总览面板 -------------------------------- */
 
@@ -323,9 +348,9 @@ app.post('/api/git-sources/:id/test', wrap(async (req, res) => {
   ok(res, await gitSources.testSource(req.params.id));
 }));
 
-app.get('/api/git-sources/:id/repos', wrap(async (req, res) => {
+app.get('/api/git-sources/:id/repos', tolerant(async (req, res) => {
   ok(res, { items: await gitSources.listReposOf(gitSources.findSource(req.params.id)) });
-}));
+}, { items: [] }));
 
 app.get('/api/git-sources/:id/branches', wrap(async (req, res) => {
   ok(res, await gitSources.listBranches(req.params.id, String(req.query.repo || '')));
@@ -356,12 +381,12 @@ app.post('/api/ide/open', wrap(async (req, res) => {
 
 const joinPath = (parent, name) => `${String(parent || '/').replace(/\/+$/, '')}/${String(name).replace(/^\/+/, '')}`;
 
-app.get('/api/storage', wrap(async (req, res) => {
+app.get('/api/storage', tolerant(async (req, res) => {
   const p = String(req.query.path || '/');
   const raw = await openlistApi.list(p);
   const d = raw.data || raw;
   ok(res, { path: p, content: d.content || [], total: d.total || 0, provider: d.provider, write: d.write });
-}));
+}, (req) => ({ path: String(req.query.path || '/'), content: [], total: 0, provider: 'OpenList', write: false })));
 
 app.post('/api/storage/mkdir', wrap(async (req, res) => {
   requireBody(req.body, ['path', 'name']);
@@ -387,11 +412,11 @@ app.put('/api/storage/upload', wrap(async (req, res) => {
   ok(res, { path: full, size: buffer.length });
 }), { raw: true });
 
-app.get('/api/storage/mounts', wrap(async (req, res) => {
+app.get('/api/storage/mounts', tolerant(async (req, res) => {
   const raw = await openlistApi.mounts();
   const data = raw.data || raw;
   ok(res, { items: Array.isArray(data) ? data : [], webdav: openlistApi.webdavUrl() });
-}));
+}, { items: [], webdav: openlistApi.webdavUrl() }));
 
 /* -------------------- OpenList 管理（存储 / 文件页） -------------------- */
 // 平台把 OpenList 后台能力做成原生 API：连接配置、挂载存储、驱动、文件全操作，
@@ -409,25 +434,46 @@ app.delete('/api/openlist/connections/:id', wrap(async (req, res) => ok(res, ope
 app.post('/api/openlist/connections/:id/activate', wrap(async (req, res) => ok(res, openlist.activateConnection(req.params.id))));
 
 app.get('/api/openlist/status', wrap(async (req, res) => ok(res, await openlist.status())));
-app.get('/api/openlist/settings', wrap(async (req, res) => ok(res, await openlist.settings())));
+app.get('/api/openlist/settings', tolerant(
+  async (req, res) => ok(res, await openlist.settings()),
+  { items: [], note: 'OpenList 当前不可用，站点设置暂无法读取' },
+));
 
-app.get('/api/openlist/storages', wrap(async (req, res) => ok(res, { items: await openlist.listStorages() })));
+app.get('/api/openlist/storages', tolerant(
+  async (req, res) => ok(res, { items: await openlist.listStorages() }),
+  { items: [] },
+));
 app.post('/api/openlist/storages', wrap(async (req, res) => ok(res, await openlist.createStorage(req.body || {}))));
 app.post('/api/openlist/storages/reload', wrap(async (req, res) => ok(res, await openlist.reloadStorages())));
 app.put('/api/openlist/storages/:id', wrap(async (req, res) => ok(res, await openlist.updateStorage({ ...(req.body || {}), id: req.params.id }))));
 app.post('/api/openlist/storages/:id/toggle', wrap(async (req, res) => ok(res, await openlist.setStorageEnabled(req.params.id, req.body && req.body.enabled !== false))));
 app.delete('/api/openlist/storages/:id', wrap(async (req, res) => ok(res, await openlist.deleteStorage(req.params.id))));
 
-app.get('/api/openlist/drivers', wrap(async (req, res) => ok(res, { items: await openlist.listDrivers() })));
-app.get('/api/openlist/drivers/info', wrap(async (req, res) => {
+app.get('/api/openlist/drivers', tolerant(
+  async (req, res) => ok(res, { items: await openlist.listDrivers() }),
+  { items: [] },
+));
+app.get('/api/openlist/drivers/info', tolerant(async (req, res) => {
   const driver = String(req.query.driver || '');
-  if (!driver) throw new Error('缺少 driver 参数');
+  if (!driver) throw badRequest('缺少 driver 参数');
   ok(res, await openlist.driverInfo(driver));
-}));
+}, (req) => ({ driver: String(req.query.driver || ''), config: null })));
 
-app.get('/api/openlist/files', wrap(async (req, res) => ok(res, await openlist.listFiles(req.query.path, {
-  page: req.query.page, perPage: req.query.perPage, refresh: req.query.refresh === '1',
-}))));
+app.get('/api/openlist/files', tolerant(
+  async (req, res) => {
+    const data = await openlist.listFiles(req.query.path, {
+      page: req.query.page, perPage: req.query.perPage, refresh: req.query.refresh === '1',
+    });
+    ok(res, data);
+  },
+  (req) => {
+    const p = String(req.query.path || '/');
+    return {
+      path: p, parent: p === '/' ? '/' : `/${p.split('/').filter(Boolean).slice(0, -1).join('/')}`,
+      content: [], total: 0, provider: 'OpenList', write: false, readme: '',
+    };
+  },
+));
 app.post('/api/openlist/files/mkdir', wrap(async (req, res) => {
   requireBody(req.body, ['path', 'name']);
   ok(res, await openlist.mkdir(req.body.path, req.body.name));

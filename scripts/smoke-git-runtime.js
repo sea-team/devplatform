@@ -199,7 +199,7 @@ async function testApi() {
     const health = await api('/health');
     note(typeof health.git.available === 'boolean' && ['local', 'ssh-host', 'none'].includes(health.git.channel),
       '/api/health 暴露 git.available 与 git.channel', `${health.git.available} / ${health.git.channel}`);
-    note(health.version === '0.3.4', '源码模式版本号已升到 0.3.4', health.version);
+    note(health.version === '0.3.5', '源码模式版本号已升到 0.3.5', health.version);
 
     const d = await api('/git/runtime');
     note(Boolean(d.hint) && Boolean(d.fallback) && Array.isArray(d.tried)

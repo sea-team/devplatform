@@ -145,9 +145,47 @@ function auth(req, res, next) {
   next();
 }
 
+/**
+ * 带 HTTP 状态码的错误（v0.3.5）。
+ * 以前所有异常都被 wrap() 包成 500：参数写错、对象不存在、上游服务挂了
+ * 都长一个样，前端满屏「500」，也分不清是配置问题还是程序 bug。
+ * 现在：客户端错误 4xx、外部服务不可用 502、只有未预期的代码异常才是 500。
+ */
+class HttpError extends Error {
+  constructor(status, message, extra = {}) {
+    super(message);
+    this.name = 'HttpError';
+    this.status = Number(status) || 500;
+    Object.assign(this, extra);
+  }
+}
+const badRequest = (message) => new HttpError(400, message);
+const notFound = (message) => new HttpError(404, message);
+const upstream = (message, extra = {}) => new HttpError(502, message, {
+  errorCode: 'UPSTREAM_UNAVAILABLE', upstream: true, ...extra,
+});
+
+/**
+ * 兜底推断：只认明确的短语，其余一律保持 500，避免把真实的代码异常
+ * 误判成「用户输入错误」而掩盖问题。显式 status / HttpError 始终优先。
+ */
+function inferStatus(error) {
+  const msg = String((error && error.message) || error || '');
+  if (/不存在|未找到|未知环境档案|未知档案|No such (container|image|volume|network|object)/i.test(msg)) return 404;
+  if (/缺少|请填写|未配置|不能为空|不可为空|需要二次确认|请二次确认|避免误伤|不是平台创建的|请选择或填写|不可删除|由 \.env 配置|至少需要保留|不支持的代理协议|不支持的操作|名称不合法|文件名不合法|路径中不允许|路径越界|路径必须以|取值不合法|上传内容为空|无法识别项目类型|未知扩展清单|镜像标识不合法|服务地址必须|必须是 http\(s\):\/\/|参数不合法/.test(msg)) return 400;
+  if (/OpenList \/api\/|OpenList 登录|OpenList .*返回 code=|Docker API |无法连接 Docker|connect ENOENT|本地 AI 程序|HTTP 4\d\d:|HTTP 5\d\d:|fetch failed|ECONNREFUSED|ETIMEDOUT|ECONNRESET|登录失败|record not found|返回了非预期数据|不是合法 JSON/i.test(msg)) return 502;
+  return 500;
+}
+
 const ok = (res, data) => res.json({ ok: true, data });
-const fail = (res, error, code = 500) =>
-  res.status(code).json({ ok: false, error: String((error && error.message) || error) });
+const fail = (res, error, code = undefined) => {
+  const status = Number(code) || Number(error && error.status) || inferStatus(error);
+  const message = String((error && error.message) || error);
+  const payload = { ok: false, error: message, status };
+  if (error && error.errorCode) payload.code = error.errorCode;
+  if (error && error.hint) payload.hint = error.hint;
+  res.status(status).json(payload);
+};
 
 const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => fail(res, e));
 
@@ -169,4 +207,5 @@ function relativeWorkspacePath(abs) {
 module.exports = {
   config, state, save, update, uid, auth, ok, fail, wrap, appRoot: ROOT,
   safeWorkspacePath, relativeWorkspacePath, defaultState,
+  HttpError, badRequest, notFound, upstream, inferStatus,
 };

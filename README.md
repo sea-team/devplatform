@@ -1991,3 +1991,86 @@ v0.3.4 把这件事收敛成 **识别 → 体检 → 按档案自动处置**：�
 | 清理 | 测试仓库删除返回 204，工作区只剩原有 `smoke-test`；`state.json` 权限仍为 600 |
 
 > v0.3.4 未打 tag、未触发 Release；本机 `9000` 的旧实例仍未覆盖。
+
+## 32. v0.3.5：全接口巡检与错误分类治理（修复「大多接口报 500」）
+
+### 32.1 现象与三个根因
+
+用户反馈「大多功能接口都返回 500」。对 156 条路由逐条探测后确认，**不是大面积代码崩溃**，而是三类问题叠加：
+
+| # | 根因 | 典型表现 |
+|---|---|---|
+| ① | 外部集成服务凭据失效 | 远端 OpenList 数据库里 `admin` 用户被删（只剩一个 disabled 的 `guest`），Token / 密码登录都失败，`/api/fs/*`、`/api/admin/*` 全部返回 `code=500 record not found`。平台把这类上游错误统一包成 HTTP 500，存储/文件页一次并发 4~6 个这样的请求，看起来就是「一片 500」 |
+| ② | 错误状态码没有分层 | 参数写错、对象不存在、上游服务挂了、真的代码异常，全部走 `wrap → fail(res, e)` 默认 500。连「缺少参数：name」都是 500 |
+| ③ | 只读接口没有降级 | 列表类接口遇到上游异常直接抛错，前端整块渲染红色错误块，而不是空态 + 修复提示 |
+
+### 32.2 修复一：统一 HTTP 错误模型（`core.js` / `mini.js` / `integrations.js`）
+
+- 新增 `HttpError` 与 `badRequest()` / `notFound()` / `upstream()`；`fail()` 输出 `{ ok:false, error, status, code?, hint? }`。
+- `wrap()` 与 `mini.js` 的顶层 catch 共用 `inferStatus()` 兜底推断（**只匹配明确短语，其余一律保持 500**，避免把真实 bug 伪装成用户输入错误）：参数/校验 → 400，对象不存在 → 404，外部服务不可用 → 502，未预期异常 → 500。
+- `httpJSON()` 的网络异常、非 2xx 响应与 OpenList 的「HTTP 200 + `code != 200`」统一打上 `upstream:true` + 可操作 `hint`；登录失败、`record not found` 单独提示「admin 用户可能被删除」。
+- 前端 `api()` 按 400 / 404 / 502 / 500 生成带分类前缀的错误，并把 `hint` 一并展示。
+
+### 32.3 修复二：只读列表优雅降级（`server.js`）
+
+新增 `tolerant(handler, empty)` 包装，覆盖 `/api/storage`、`/api/storage/mounts`、`/api/openlist/{settings,storages,drivers,drivers/info,files}`、`/api/git-sources/:id/repos`：
+
+- 上游不可用时返回 **HTTP 200 + `degraded:true` + 空数组/空对象 + `error` + `hint`**，页面照常渲染；
+- 前端「存储/文件」页新增 `#storage-degraded` 黄色提示区，显示原因、修复建议与「前往连接管理」按钮；
+- **写操作不降级**，仍返回 502 明确告知「上游不可用，操作未执行」，避免静默成功。
+
+### 32.4 修复三：恢复远端 OpenList（`10.0.0.246`）
+
+在 `/data/platform/data/openlist/` 上：
+
+1. 先备份 `data.db` → `data.db.bak-20261110`；
+2. 官方 CLI `openlist admin set` 只更新不创建（日志 `failed get admin user: record not found`），因此先补一条 `admin` 占位行（role=2、enabled），再由 CLI 写入 `.env` 里**已有的那个密码**——没有改动任何凭据值、没有重置密码；
+3. 重启 `dp-openlist`，`/api/auth/login` / `/api/me` / `/api/admin/storage/list` 全部 `code=200`；
+4. 通过平台自身 `POST /api/openlist/storages` 新增 `/workspace` Local 挂载（顺带验证写接口），`/api/openlist/files?path=/` 开始返回真实目录；
+5. 新建的 admin 用户 `permission=0` 会让 `/api/fs/mkdir|remove|rename` 返回 `code=403 permission denied`，把权限掩码设为全开（`2147483647`）并重启后，文件写操作恢复 200。
+
+> 备份与变更只在平台自己部署的 `dp-openlist` 容器数据目录内；宿主 `/opt/openlist` 的另一实例与其它服务未改动。凭据沿用 `.env` 原有值，没有重置 / 轮换任何密码或 Token。
+
+### 32.5 全接口巡检工具（`scripts/api-sweep.js`）
+
+```bash
+# 对运行中的实例跑一遍全部 156 条路由
+node scripts/api-sweep.js --base http://10.0.0.246:9000
+# 额外做 CRUD 循环（临时实体带 __sweep_ 前缀，结束自动清理）
+node scripts/api-sweep.js --base http://127.0.0.1:9000 --full
+# 机器可读报告，便于接 CI
+node scripts/api-sweep.js --base http://10.0.0.246:9000 --json
+```
+
+- 路由直接从 `server.js` 提取，**新增接口自动纳入巡检**；
+- 写接口一律使用不存在的 id，保证巡检不会误删 / 误改真实数据；会重启服务、执行远程命令、上传文件或建立 SSE 长连接的路由显式跳过；
+- 断言：**500 必须为 0**、无超时、只读列表降级正常、所有错误响应带结构化 `status`；
+- Windows 本机加 `--skip-probe` 跳过「构建后端 / 本地 AI 程序」探测（否则会尝试启动 `wsl.exe`）；
+- 也可用 `npm run sweep -- --base ...` 调用。
+
+### 32.6 验证结果
+
+| 项目 | 结果 |
+|---|---|
+| 后端自检 | `npm run check` 含新增 `api-sweep.js` / `smoke-api-status.js` 语法校验，全通过 |
+| 前端自检 | `check-frontend.js` 44 项全通过（含降级提示区与 api() 错误分类） |
+| 错误模型专项 | `scripts/smoke-api-status.js` 33 项全通过：分类表、结构化响应、6 个只读接口降级、写操作 502、400 / 404 归类 |
+| 既有冒烟 | `smoke-proxy-openlist.js` 60 项、`smoke-git-runtime.js` 31 项、`smoke-environment.js` 28 项 |
+| 本地全接口巡检 | 142 项 · 0 个 500 / 0 超时 / 0 降级异常；`--full` 149 项同样全绿 |
+| 远端全接口巡检 | 见下方 32.7 |
+
+### 32.7 远端实测（`10.0.0.246`）
+
+| 项目 | 结果 |
+|---|---|
+| 部署 | `remote.js deploy 10.0.0.246 /data/platform` 成功；`/api/health` → `0.3.5` · `environment=auto → container-lite` · 克隆通道 `ssh-host`；启动体检 7 正常 / 1 提醒 / 0 异常 |
+| 修复前基线 | 主 GET 接口 6 个 500（全部 OpenList）、带参 GET 另有 5 个 500、写接口 20 余个 500，参数错误与对象不存在也被包成 500 |
+| 全接口巡检 | `api-sweep.js --base http://10.0.0.246:9000 --full`：156 条路由 / 实测 147 项 / 跳过 24 个有副作用或长连接路由 → **83 个 200、62 个 4xx、1 个 502、0 个 500**、0 超时、0 降级异常、0 错误体缺 status；`failures: []` |
+| 剩余 1 个 502 | 巡检故意请求不存在路径 `/__sweep_missing__` 触发 OpenList `failed get storage`，属预期上游响应，带 hint，不是程序错误 |
+| 页面并发接口 | 总览 / 仓库 / Git 源 / 存储 / 挂载 / 文件 / 驱动 / 设置 / 连接 / 代理 / Docker / 扩展 / 服务器 / AI / 环境共 16 个接口全部 200，无红错 |
+| OpenList 状态 | `online=true` · `admin=true` · `write=true` · `storageCount=1` · `adminError=''` · v4.2.9 |
+| 文件 CRUD | `mkdir → list → rename → list → remove` 全部 200；最终工作区只剩原有 `smoke-test`，测试目录已清理 |
+| 前端资源 | `?v=20261110g`，页面含 `#storage-degraded` 降级提示区 |
+
+> **本机 `127.0.0.1:9000` 仍是 0.2.0 的旧 `platform/dist/devplatform.exe`**（SEA 单文件把 bundle 注入在 exe 内，外部 `bundle.cjs` 更新不影响它）。对它跑同一巡检仍有 17 个 500 / 113 个错误体缺结构化 status。若日常访问的是本机地址，需要 `npm run build` 重新生成 exe 并重启该进程；远端实例已不受影响。
+> v0.3.5 未打 tag、未触发 Release。

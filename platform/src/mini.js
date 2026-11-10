@@ -76,15 +76,15 @@ function serveStatic(staticDir, pathname, res) {
   const root = path.resolve(staticDir);
   const target = path.resolve(root, `.${pathname === '/' ? '/index.html' : pathname}`);
   if (target !== root && !target.startsWith(root + path.sep)) {
-    return sendJSON(res, 403, { ok: false, error: '禁止访问' });
+    return sendJSON(res, 403, { ok: false, error: '禁止访问', status: 403 });
   }
   if (fs.existsSync(target) && fs.statSync(target).isFile()) return res.sendFile(target);
   const index = path.join(root, 'index.html');
   if (fs.existsSync(index)) return res.sendFile(index);
-  return sendJSON(res, 404, { ok: false, error: '控制台文件不存在' });
+  return sendJSON(res, 404, { ok: false, error: '控制台文件不存在', status: 404 });
 }
 
-function createApp({ adminToken = '', staticDir = '' } = {}) {
+function createApp({ adminToken = '', staticDir = '', errorStatus = null } = {}) {
   const routes = [];
   let staticRoot = staticDir;
 
@@ -112,7 +112,7 @@ function createApp({ adminToken = '', staticDir = '' } = {}) {
     decorateResponse(res);
     let parsed;
     try { parsed = new URL(req.url, `http://${req.headers.host || 'localhost'}`); }
-    catch { return sendJSON(res, 400, { ok: false, error: '非法请求路径' }); }
+    catch { return sendJSON(res, 400, { ok: false, error: '非法请求路径', status: 400 }); }
     const pathname = decodeURIComponent(parsed.pathname);
 
     if (!pathname.startsWith('/api/')) return serveStatic(staticRoot, pathname, res);
@@ -122,7 +122,7 @@ function createApp({ adminToken = '', staticDir = '' } = {}) {
       const header = req.headers.authorization || '';
       const queryToken = parsed.searchParams.get('token') || '';
       if (header !== `Bearer ${adminToken}` && queryToken !== adminToken) {
-        return sendJSON(res, 401, { ok: false, error: '未授权：需要 Bearer ADMIN_TOKEN' });
+        return sendJSON(res, 401, { ok: false, error: '未授权：需要 Bearer ADMIN_TOKEN', status: 401 });
       }
     }
 
@@ -141,11 +141,16 @@ function createApp({ adminToken = '', staticDir = '' } = {}) {
           : {};
         await route.handler(req, res);
       } catch (error) {
-        sendJSON(res, 500, { ok: false, error: String((error && error.message) || error) });
+        // 未经过 wrap() 的同步处理器也走同一套状态码推断，避免「明明是参数错误」却报 500。
+        const status = Number(error && error.status) || (errorStatus ? errorStatus(error) : 500);
+        const payload = { ok: false, error: String((error && error.message) || error), status };
+        if (error && error.errorCode) payload.code = error.errorCode;
+        if (error && error.hint) payload.hint = error.hint;
+        sendJSON(res, status, payload);
       }
       return;
     }
-    return sendJSON(res, 404, { ok: false, error: `接口不存在：${req.method} ${pathname}` });
+    return sendJSON(res, 404, { ok: false, error: `接口不存在：${req.method} ${pathname}`, status: 404 });
   }
 
   return app;

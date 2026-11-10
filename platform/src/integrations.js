@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const { spawn, spawnSync } = require('child_process');
-const { config } = require('./core');
+const { config, HttpError } = require('./core');
 const proxyModule = require('./proxy');
 
 // 可选依赖：本地零依赖也能跑控制台；安装依赖后自动启用 SSH 与 HTTP 代理转发。
@@ -15,6 +15,18 @@ const requireSSH = () => {
 };
 
 const REQUEST_TIMEOUT_MS = 10000;
+
+/**
+ * 外部服务异常统一带上 upstream 标记：server.js 的 tolerant() 据此把只读列表
+ * 降级成「空数据 + 诊断提示」，而不是让整个页面因为一个集成服务挂掉报 500。
+ */
+function httpProblem(status, message, hint) {
+  return new HttpError(status === 404 ? 404 : 502, message, {
+    errorCode: status === 404 ? 'UPSTREAM_NOT_FOUND' : 'UPSTREAM_UNAVAILABLE',
+    upstream: true,
+    hint,
+  });
+}
 
 async function httpJSON(url, options = {}) {
   const { method = 'GET', headers = {}, body, timeout = REQUEST_TIMEOUT_MS } = options;
@@ -36,11 +48,22 @@ async function httpJSON(url, options = {}) {
     : proxyModule.forGlobal(url).proxy;
   if (chosen) init.dispatcher = proxyModule.dispatcher(chosen);
 
-  const response = await fetch(url, init);
+  let response;
+  try {
+    response = await fetch(url, init);
+  } catch (e) {
+    throw httpProblem(502, `无法连接上游服务：${String(e.message || e).slice(0, 180)}`,
+      '检查目标服务是否启动、地址在平台容器内是否可达、以及代理 / NO_PROXY 配置');
+  }
   const text = await response.text();
   let payload;
   try { payload = JSON.parse(text); } catch { payload = text; }
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
+  if (!response.ok) {
+    throw httpProblem(response.status, `上游服务 HTTP ${response.status}: ${text.slice(0, 200)}`,
+      response.status === 401 || response.status === 403
+        ? '凭据无效或权限不足：在对应集成服务里重新生成 Token / 检查管理员权限'
+        : '上游服务返回错误，请检查服务状态与请求参数');
+  }
   return payload;
 }
 
@@ -82,13 +105,17 @@ let _openlistToken = '';
 async function openlistToken() {
   if (config.openlistToken) return config.openlistToken;
   if (_openlistToken) return _openlistToken;
-  if (!config.openlistPassword) throw new Error('未配置 OPENLIST_TOKEN 或 OPENLIST_PASSWORD');
+  if (!config.openlistPassword) {
+    throw httpProblem(502, '未配置 OPENLIST_TOKEN 或 OPENLIST_PASSWORD',
+      '在「存储/文件 → 连接管理」填写 Token 或管理员密码；也可改 .env 后完全重启');
+  }
   const result = await httpJSON(`${config.openlistUrl}/api/auth/login`, {
     method: 'POST',
     body: { username: config.openlistUser, password: config.openlistPassword },
   });
   if (!result || !result.data || !result.data.token) {
-    throw new Error('OpenList 登录失败：请检查管理员账号密码');
+    throw httpProblem(502, 'OpenList 登录失败：管理员账号或密码不正确',
+      '在「连接管理」里更新管理员密码；若该 OpenList 的 admin 用户被删除，需用官方 CLI 恢复');
   }
   _openlistToken = result.data.token;
   return _openlistToken;
@@ -105,9 +132,25 @@ async function openlist(pathname, options = {}) {
   // OpenList 用「HTTP 200 + body.code != 200」表达业务错误（token 失效时返回
   // code:500 record not found）。不检查会被 asList() 当成空列表，前端误报成功。
   if (raw && typeof raw === 'object' && 'code' in raw && Number(raw.code) !== 200) {
-    const err = new Error(`OpenList ${pathname} 返回 code=${raw.code}：${raw.message || '未知错误'}`);
-    err.code = Number(raw.code);
-    err.openlistMessage = String(raw.message || '');
+    const detail = String(raw.message || '未知错误');
+    const code = Number(raw.code);
+    // OpenList 用 body.code 表达业务错误：400/404 是请求本身的问题（对外仍应是 4xx），
+    // 500 / 401 / 403 才是凭据失效或服务异常（502 上游不可用）。
+    const clientError = code === 400 || code === 404 || code === 403;
+    const err = clientError
+      ? new HttpError(code === 403 ? 403 : 400, `OpenList ${pathname} 返回 code=${code}：${detail}`, {
+        errorCode: 'UPSTREAM_BAD_REQUEST', upstream: true,
+        hint: '请求参数有误或对象不存在：检查存储 id / 路径 / 驱动名是否正确',
+      })
+      : httpProblem(502, `OpenList ${pathname} 返回 code=${code}：${detail}`);
+    err.code = code;
+    err.openlistMessage = detail;
+    // 最常见的两种：admin 用户/记录被删、Token 对应的用户查不到。给出可操作指引。
+    if (!clientError && /record not found|token|401|user/i.test(detail)) {
+      err.hint = 'OpenList 当前凭据找不到对应管理员用户：在「连接管理」里更新 Token / 密码；若 admin 用户被删除，需在该 OpenList 容器内执行 openlist admin set <密码> 恢复';
+    } else if (!clientError && !err.hint) {
+      err.hint = '检查 OpenList 服务日志与当前连接的管理员权限';
+    }
     throw err;
   }
   return raw;

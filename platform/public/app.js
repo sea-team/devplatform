@@ -104,7 +104,20 @@ async function api(path, options = {}) {
   const response = await fetch(`/api${path}`, init);
   let json;
   try { json = await response.json(); } catch { throw new Error('服务端返回内容不是 JSON'); }
-  if (!json.ok) throw new Error(json.error || `请求失败 (${response.status})`);
+  if (!json.ok) {
+    const status = Number(json.status || response.status);
+    const prefix = status === 502 ? '上游服务不可用'
+      : status === 404 ? '资源不存在'
+        : status === 400 ? '请求参数有误'
+          : status >= 500 ? '服务端异常' : '请求失败';
+    const hint = json.hint ? `（${String(json.hint).slice(0, 140)}）` : '';
+    const err = new Error(`${prefix}：${json.error || `HTTP ${status}`}${hint}`);
+    err.status = status;
+    err.code = json.code || '';
+    err.hint = json.hint || '';
+    err.rawError = json.error || '';
+    throw err;
+  }
   return json.data;
 }
 
@@ -867,11 +880,26 @@ async function loadStorage() {
   ]);
   renderOpenlistStatus(status);
   renderOpenlistConnections(connections);
+  renderStorageDegraded([files, mounts, drivers]);
   if (files && !files.error) renderFileList(files);
   else $('#file-list').innerHTML = errorBlock(files.error || '无法读取目录',
     '请到「连接管理」切换到一个可用的 OpenList，或修复当前连接的管理员凭据');
   renderMountList(mounts && mounts.items || []);
   renderDriverList(drivers && drivers.items || []);
+}
+
+/** 集成服务不可用时列表接口会返回 degraded 空数据：给一条可操作的黄色提示，而不是满屏 500。 */
+function renderStorageDegraded(parts) {
+  const box = $('#storage-degraded');
+  if (!box) return;
+  const bad = parts.filter((x) => x && x.degraded);
+  if (!bad.length) { box.hidden = true; box.textContent = '—'; return; }
+  const first = bad[0];
+  box.hidden = false;
+  box.innerHTML = `<b>⚠ ${bad.length} 项数据暂不可用（列表已安全置空，不影响其它功能）</b>`
+    + `<div>${esc(first.error || '')}</div>`
+    + `<div>处理建议：${esc(first.hint || '检查集成服务状态')}</div>`
+    + `<div style="margin-top:6px"><button class="btn btn-sm" data-open-view="storage-conn">前往「连接管理」修复</button></div>`;
 }
 
 function olSelected() { return Array.from(storageState.selected); }

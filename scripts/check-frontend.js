@@ -82,7 +82,7 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
-note(html.includes('?v=20261110f'), '静态资源版本已升到 20261110f');
+note(html.includes('?v=20261110g'), '静态资源版本已升到 20261110g');
 
 // v0.3.4：环境适配中心（自动识别 / 体检 / 自动处置 / 档案切换）。
 note(sections.includes('environment') && html.includes('data-view="environment"')
@@ -98,6 +98,15 @@ note(['/environment/check', '/environment/heal', '/environment/config', '/enviro
 note(html.includes('DP_ENV_PROFILE=container-lite') && html.includes('环境指纹变化会自动触发体检')
   && html.includes('id="git-runtime-env"') && app.includes("api('/environment')"),
 '克隆页 Git 卡片联动环境档案，界面写明换环境固定策略的方法');
+
+// v0.3.5：上游服务不可用时前端展示降级提示，并把 4xx / 502 与 500 区分开。
+note(html.includes('id="storage-degraded"') && app.includes('function renderStorageDegraded')
+  && app.includes('renderStorageDegraded([files, mounts, drivers])')
+  && app.includes('data-open-view="storage-conn"'),
+'存储页有降级提示区：列表置空 + 修复建议 + 直达连接管理');
+note(app.includes("status === 502 ? '上游服务不可用'") && app.includes('err.status = status')
+  && app.includes('err.hint = json.hint') && app.includes('json.error'),
+'api() 按 400 / 404 / 502 / 500 分类错误并保留 hint，不再统一显示 500');
 
 const scripts = [...html.matchAll(/<script src="\/vendor\/([^"]+)"/g)].map((m) => m[1]);
 const cmIndex = scripts.indexOf('codemirror.js');

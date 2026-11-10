@@ -1,6 +1,6 @@
 {
   "name": "devplatform-console",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "description": "统一 Web 开发管理平台控制台与 API 网关",
   "main": "src/server.js",
@@ -12,7 +12,9 @@
     "build:bundle": "node build.mjs --bundle-only",
     "smoke:git": "node ../scripts/smoke-git-runtime.js",
     "smoke:env": "node ../scripts/smoke-environment.js",
-    "check": "node --check src/server.js && node --check src/core.js && node --check src/integrations.js && node --check src/proxy.js && node --check src/openlist.js && node --check src/engine.js && node --check src/fileTypes.js && node --check src/remoteOps.js && node --check src/dockerApi.js && node --check src/catalog.js && node --check src/extensions.js && node --check src/extRuntime.js && node --check src/gitSources.js && node --check src/gitRuntime.js && node --check src/environment.js && node --check src/remoteDocker.js && node --check src/backup.js && node --check src/dbgateSync.js && node --check src/extLifecycle.js && node --check src/dockerPanel.js && node --check src/buildBackends.js && node --check src/mini.js && node --check launcher/launcher.js"
+    "smoke:api": "node ../scripts/smoke-api-status.js",
+    "sweep": "node ../scripts/api-sweep.js",
+    "check": "node --check src/server.js && node --check src/core.js && node --check src/integrations.js && node --check src/proxy.js && node --check src/openlist.js && node --check src/engine.js && node --check src/fileTypes.js && node --check src/remoteOps.js && node --check src/dockerApi.js && node --check src/catalog.js && node --check src/extensions.js && node --check src/extRuntime.js && node --check src/gitSources.js && node --check src/gitRuntime.js && node --check src/environment.js && node --check src/remoteDocker.js && node --check src/backup.js && node --check src/dbgateSync.js && node --check src/extLifecycle.js && node --check src/dockerPanel.js && node --check src/buildBackends.js && node --check src/mini.js && node --check ../scripts/api-sweep.js && node --check ../scripts/smoke-api-status.js && node --check launcher/launcher.js"
   },
   "engines": {
     "node": ">=20"
