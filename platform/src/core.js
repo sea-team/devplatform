@@ -31,6 +31,11 @@ const config = {
   openlistUser: env('OPENLIST_USER', 'admin'),
   openlistPassword: env('OPENLIST_PASSWORD'),
   workspaceDir: env('WORKSPACE_DIR', path.join(ROOT, 'workspace')),
+  // Git 可执行文件：容器镜像 / Windows 单文件 exe 未把 git 放进 PATH 时，可显式指定。
+  // 优先级低于控制台「Git 运行时」里保存的路径（见 src/gitRuntime.js）。
+  gitBin: env('GIT_BIN'),
+  // 容器内无 Git 时，借哪台已登记的 SSH 宿主机执行 clone；留空则自动挑选。
+  gitFallbackServerId: env('DP_GIT_FALLBACK_SERVER_ID'),
   // 容器化构建：平台自身跑在容器里时，docker.sock 属于宿主机，
   // 必须把容器内 /workspace/... 映射成宿主机上的真实路径，否则挂载的是空目录。
   hostWorkspaceDir: env('HOST_WORKSPACE_DIR'),
@@ -59,6 +64,8 @@ function defaultState() {
     deploys: [],
     extensions: [],
     gitSources: [],
+    // Git 运行时：手工指定 git 路径 + 是否允许「容器内无 Git 时借 SSH 宿主机执行」。
+    git: { bin: '', sshFallback: 'auto' },
     backups: [],
     composeTemplates: [],
     // 分层代理：全局 / 分组 / Git Host 规则 / 单项覆盖（见 src/proxy.js）

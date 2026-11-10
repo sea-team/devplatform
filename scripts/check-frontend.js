@@ -73,6 +73,16 @@ note(html.includes('id="storage-current-conn"') && html.includes('id="view-serve
   && html.includes('id="view-deploys"'),
 '服务器 / 存储 / 构建部署的表单与列表已拆到独立页');
 
+// v0.3.3：克隆前可见的 Git 运行时状态、路径配置、兜底开关与执行通道提示。
+note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"',
+  'id="git-runtime-fallback"', 'id="git-runtime-refresh"', 'spawn git ENOENT',
+  'HOST_WORKSPACE_DIR'].every((s) => html.includes(s)),
+'Git 运行时状态卡片、路径配置与 ENOENT 说明已加入克隆页');
+note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
+  'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
+'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
+note(html.includes('?v=20261110e'), '静态资源版本已升到 20261110e');
+
 const scripts = [...html.matchAll(/<script src="\/vendor\/([^"]+)"/g)].map((m) => m[1]);
 const cmIndex = scripts.indexOf('codemirror.js');
 const modesIndex = scripts.indexOf('cm-modes.js');

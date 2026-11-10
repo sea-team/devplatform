@@ -1,0 +1,238 @@
+'use strict';
+
+/**
+ * Git 运行时探测与执行（v0.3.3）。
+ *
+ * 背景：cloneRepo() 原先直接 `spawn('git', ...)`，一旦平台跑在不含 Git 的镜像里
+ * （例如 remote.js 复用的 node:20-alpine），或 Windows 单文件 exe 所在机器没把
+ * Git 加进 PATH，就会抛出难以理解的 `spawn git ENOENT`。
+ *
+ * 本模块统一解决：
+ *  1. 按「控制台配置 > GIT_BIN > PATH > 平台常见安装路径」解析可执行文件；
+ *  2. 用绝对路径 spawn，并把 ENOENT 转成带修复指引的中文错误；
+ *  3. 向 /api/git/runtime 暴露诊断信息，让克隆页在点击前就能看到 Git 是否就绪；
+ *  4. 描述「SSH 宿主机兜底」是否可用（容器内无 Git 时由 gitSources 在宿主机执行 clone）。
+ */
+const fs = require('fs');
+const path = require('path');
+const { spawn, spawnSync } = require('child_process');
+const { config, state, update } = require('./core');
+
+const WINDOWS_CANDIDATES = () => {
+  const local = process.env.LOCALAPPDATA || '';
+  const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
+  const pfX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+  return [
+    path.join(programFiles, 'Git', 'cmd', 'git.exe'),
+    path.join(programFiles, 'Git', 'bin', 'git.exe'),
+    path.join(pfX86, 'Git', 'cmd', 'git.exe'),
+    path.join(pfX86, 'Git', 'bin', 'git.exe'),
+    path.join(local || 'C:\\Users\\Default\\AppData\\Local', 'Programs', 'Git', 'cmd', 'git.exe'),
+    path.join(process.env.USERPROFILE || 'C:\\Users\\Default', 'scoop', 'apps', 'git', 'current', 'cmd', 'git.exe'),
+    'C:\\ProgramData\\chocolatey\\bin\\git.exe',
+    'C:\\tools\\git\\cmd\\git.exe',
+  ];
+};
+
+const UNIX_CANDIDATES = [
+  '/usr/bin/git', '/usr/local/bin/git', '/bin/git',
+  '/opt/homebrew/bin/git', '/usr/local/opt/git/bin/git',
+  '/snap/bin/git', '/usr/lib/git-core/git',
+];
+
+/** 控制台里手工指定的路径优先于 .env，方便不重启就修正 PATH 问题。 */
+function configuredBin() {
+  const saved = state().git && state().git.bin ? String(state().git.bin).trim() : '';
+  if (saved) return { bin: saved, source: '控制台配置' };
+  if (config.gitBin) return { bin: String(config.gitBin).trim(), source: 'GIT_BIN' };
+  return null;
+}
+
+function probe(bin) {
+  try {
+    const r = spawnSync(bin, ['--version'], {
+      timeout: 8000, encoding: 'utf8', windowsHide: true, shell: false,
+      env: process.env, maxBuffer: 1024 * 256,
+    });
+    const text = `${r.stdout || ''}${r.stderr || ''}`;
+    const m = text.match(/git version\s+([\w.]+)/i);
+    if (r.status === 0 && m) return { ok: true, version: m[1] };
+    return { ok: false, reason: text.trim().slice(0, 160) || `exit=${r.status}` };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+}
+
+let cache = null;
+
+function resolve(force = false) {
+  if (cache && !force) return cache;
+  const configured = configuredBin();
+  const candidates = [];
+  if (configured) candidates.push({ ...configured, explicit: true });
+  candidates.push({ bin: 'git', source: 'PATH', explicit: false });
+  for (const bin of (process.platform === 'win32' ? WINDOWS_CANDIDATES() : UNIX_CANDIDATES)) {
+    candidates.push({ bin, source: '常见安装路径', explicit: true });
+  }
+
+  const tried = [];
+  for (const c of candidates) {
+    if (c.explicit && !fs.existsSync(c.bin)) {
+      tried.push(`${c.bin}: 文件不存在`);
+      continue;
+    }
+    const r = probe(c.bin);
+    if (r.ok) {
+      cache = { available: true, bin: c.bin, version: r.version, source: c.source, tried };
+      return cache;
+    }
+    tried.push(`${c.bin}: ${r.reason || '不可用'}`);
+  }
+  cache = { available: false, bin: '', version: '', source: '', tried };
+  return cache;
+}
+
+function refresh() { cache = null; return resolve(true); }
+
+function setBin(value) {
+  const bin = String(value || '').trim().slice(0, 300);
+  update((s) => {
+    if (!s.git) s.git = { bin: '' };
+    s.git.bin = bin;
+  });
+  return refresh();
+}
+
+/**
+ * SSH 宿主机兜底：平台容器没有 Git 时，借已登记的 SSH 服务器在宿主机上执行 clone。
+ * 工作区是 bind mount，宿主机写进去的文件容器内立即可见。
+ * 只有明确知道「容器内 WORKSPACE_DIR 对应宿主机哪个目录」时才允许启用，
+ * 否则会把仓库克隆到一台与平台无关机器上，造成看似成功实则不可见。
+ */
+function fallback() {
+  const servers = state().servers || [];
+  const preferred = config.gitFallbackServerId || config.buildServerId || '';
+  const dir = String(config.hostWorkspaceDir || '').replace(/\/+$/, '');
+  const guessed = (s) => {
+    const base = String((s && s.deployDir) || '').replace(/\/+$/, '');
+    return base ? `${base}/workspace` : '';
+  };
+  const server = servers.find((s) => s.id === preferred)
+    || servers.find((s) => guessed(s) && guessed(s) === dir)
+    || servers.find((s) => Boolean(guessed(s)))
+    || servers[0]
+    || null;
+  const hostWorkspaceDir = dir || guessed(server);
+  const enabled = state().git ? state().git.sshFallback !== 'off' : true;
+  const ready = Boolean(enabled && server && hostWorkspaceDir);
+  return {
+    enabled, ready,
+    serverId: server ? server.id : '',
+    serverName: server ? server.name : '',
+    serverHost: server ? server.host : '',
+    hostWorkspaceDir,
+    source: dir ? 'HOST_WORKSPACE_DIR' : (server && server.deployDir ? '服务器部署目录 + /workspace 推导' : ''),
+    reason: !enabled ? '已在控制台关闭 SSH 宿主机兜底'
+      : !server ? '未登记可用的 SSH 服务器'
+        : !hostWorkspaceDir ? '未配置 HOST_WORKSPACE_DIR，且服务器没有部署目录，无法确定宿主机工作区路径'
+          : '',
+  };
+}
+
+function setFallback(enabled) {
+  update((s) => {
+    if (!s.git) s.git = { bin: '' };
+    s.git.sshFallback = enabled ? 'auto' : 'off';
+  });
+  return fallback();
+}
+
+function missingMessage() {
+  const fb = fallback();
+  return [
+    '未找到可执行的 Git（原始错误：spawn git ENOENT）：当前运行环境（容器 / 本机）没有安装 Git，或 Git 不在 PATH 中。',
+    '修复方式：',
+    '1) 在本页「Git 运行时」填写可执行文件绝对路径（Linux 如 /usr/bin/git；Windows 如 C:\\Program Files\\Git\\cmd\\git.exe）并保存；',
+    '2) 或在 .env 设置 GIT_BIN=<git 路径> 后重启平台；',
+    '3) 或重新执行 node scripts/remote.js deploy <host>，新版部署脚本会自动准备自带 Git 的运行时镜像；',
+    '4) 或在容器内执行 apk add git / apt-get install -y git 后重启平台；',
+    fb.ready
+      ? `5) 已检测到 SSH 宿主机兜底（${fb.serverName} · ${fb.hostWorkspaceDir}），本次克隆会自动在宿主机执行。`
+      : '5) 或登记一台已装 Git 的 SSH 宿主机并配置 HOST_WORKSPACE_DIR，平台会自动在宿主机执行克隆。',
+  ].join('\n');
+}
+
+/** 统一包装 spawn 错误，避免把 ENOENT 原样抛给前端。 */
+function friendlyError(err, context = '执行 Git') {
+  const message = String((err && err.message) || err);
+  if (err && (err.code === 'ENOENT' || /ENOENT/.test(message))) {
+    return new Error(`${context}失败：${missingMessage()}`);
+  }
+  return new Error(`${context}失败：${message}`);
+}
+
+/** 用解析出的绝对路径执行 git；返回 { code, output }，不因非零码直接抛错。 */
+function exec(args, { env = process.env, timeoutMs = 300000, onData = null } = {}) {
+  const r = resolve();
+  if (!r.available) return Promise.reject(new Error(missingMessage()));
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(r.bin, args, {
+      shell: false, env, windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    let settled = false;
+    const timer = timeoutMs > 0 ? setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGKILL');
+      reject(new Error('Git 执行超时'));
+    }, timeoutMs) : null;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      fn(value);
+    };
+    const collect = (chunk) => {
+      const text = chunk.toString();
+      output += text;
+      if (onData) onData(text);
+    };
+    child.stdout.on('data', collect);
+    child.stderr.on('data', collect);
+    child.on('error', (e) => finish(reject, friendlyError(e)));
+    child.on('close', (code) => finish(resolvePromise, { code, output }));
+  });
+}
+
+function describe() {
+  const r = resolve();
+  const fb = fallback();
+  return {
+    available: r.available,
+    bin: r.bin,
+    version: r.version,
+    source: r.source,
+    tried: r.tried,
+    configuredBin: configuredBin() ? configuredBin().bin : '',
+    platform: process.platform,
+    workspaceDir: config.workspaceDir,
+    hostWorkspaceDir: config.hostWorkspaceDir,
+    channel: r.available ? 'local' : (fb.ready ? 'ssh-host' : 'none'),
+    fallback: fb,
+    hint: r.available
+      ? `Git ${r.version} 可用（${r.source}），克隆将在本机 / 当前容器执行。`
+      : (fb.ready
+        ? `当前环境没有 Git，克隆将自动改用 SSH 宿主机 ${fb.serverName}（${fb.serverHost}）执行，工作区映射 ${fb.hostWorkspaceDir}。`
+        : missingMessage()),
+    installHint: process.platform === 'win32'
+      ? '安装 Git for Windows 后重启平台，或填写 git.exe 绝对路径。'
+      : '容器内：apk add --no-cache git / apt-get install -y git；宿主机：安装发行版 git 包。',
+  };
+}
+
+module.exports = {
+  resolve, refresh, describe, exec, probe, fallback,
+  setBin, setFallback, missingMessage, friendlyError,
+};

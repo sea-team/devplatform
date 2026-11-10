@@ -311,6 +311,11 @@ async function api(pathname, options = {}) {
     const clone = gitSources.cloneArgs({ type: 'github', token: 'tok' }, 'https://github.com/a/b.git', cloneCfg);
     note(clone.args.includes(`http.proxy=${cloneCfg.url}`) && clone.env.HTTP_PROXY === cloneCfg.url,
       'git clone 注入 http.proxy 与子进程代理环境变量');
+    // v0.3.3：git clone -c 会把配置写进 .git/config（凭据落盘），必须是 git -c ... clone。
+    const credArgs = gitSources.cloneArgs({ type: 'github', token: 'tok' }, 'https://github.com/a/b.git').args;
+    note(credArgs.indexOf('clone') > 0 && credArgs[0] === '-c'
+      && credArgs.slice(0, credArgs.indexOf('clone')).some((a) => String(a).startsWith('http.extraHeader=')),
+    '克隆凭据作为 clone 之前的临时 -c 参数，不写入 .git/config');
 
     /* ---------- 3. OpenList 管理 ---------- */
     const conn = await api('/openlist/connection');

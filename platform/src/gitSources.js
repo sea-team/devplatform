@@ -8,14 +8,17 @@
  *  2. 凭据（token）只写 state.json（600 权限），列表/详情一律脱敏；
  *  3. clone 时用 `git -c http.extraHeader=...` 临时传递凭据，不把 token 写进
  *     .git/config 的 remote URL，也不落到工作区任何文件里；
- *  4. 所有仓库按统一结构归一化，前端只认一种形状。
+ *  4. 所有仓库按统一结构归一化，前端只认一种形状；
+ *  5. v0.3.3：Git 可执行文件由 src/gitRuntime.js 统一解析（支持 GIT_BIN / 控制台
+ *     指定路径 / 常见安装路径）。容器镜像不含 Git 时自动降级到已登记的 SSH 宿主机，
+ *     借 HOST_WORKSPACE_DIR 这个 bind mount 执行 clone，不再抛 spawn git ENOENT。
  */
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
 const { config, state, update, uid, safeWorkspacePath, relativeWorkspacePath } = require('./core');
-const { httpJSON } = require('./integrations');
+const { httpJSON, sshExec } = require('./integrations');
 const proxyModule = require('./proxy');
+const gitRuntime = require('./gitRuntime');
 
 const BUILTIN_ID = 'builtin-gitea';
 const TYPES = ['github', 'gitea', 'gitlab', 'generic'];
@@ -291,7 +294,10 @@ function cloneCredential(source) {
 }
 
 function cloneArgs(source, cloneUrl, resolved = null) {
-  const args = ['clone'];
+  // 关键：`-c` 必须放在 `clone` 子命令之前。
+  // `git clone -c key=value` 会把配置持久化到新仓库的 .git/config（凭据随之落盘）；
+  // `git -c key=value clone` 只是本次进程的临时配置，不会写任何文件。
+  const args = [];
   let env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
   const url = String(cloneUrl || '').trim();
   if (!/^(https?:\/\/|git@|ssh:\/\/)/.test(url)) throw new Error('cloneUrl 必须是 http(s)/ssh/git 地址');
@@ -319,6 +325,7 @@ function cloneArgs(source, cloneUrl, resolved = null) {
     // 只让凭据出现在本次进程参数里，不写入 .git/config，也不让 git 打印到日志。
     args.push('-c', 'http.extraHeaderRedact=true');
   }
+  args.push('clone');
   args.push(url);
   return { args, env, auth: Boolean(cred), proxyUrl, secrets: cred ? cred.secrets : [] };
 }
@@ -327,6 +334,42 @@ function scrub(text, secrets = []) {
   let out = String(text);
   for (const secret of secrets.filter(Boolean)) out = out.split(secret).join('******');
   return out.replace(/(Basic\s+)[A-Za-z0-9+/=]{8,}/gi, '$1******');
+}
+
+/** shell 单引号转义：把 git 参数原样送到 SSH 宿主机，不经过本地 shell。 */
+function shQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * 容器内没有 Git 时的降级通道：借已登记的 SSH 宿主机执行同一条 git clone。
+ * 工作区是 bind mount（HOST_WORKSPACE_DIR），宿主机写入后容器内立即可见。
+ * 凭据沿用 -c http.extraHeader（不写 .git/config），错误输出统一脱敏。
+ */
+async function cloneViaSshHost({ args, resolved, secrets, hostTarget, server }) {
+  const probe = await sshExec(server,
+    'command -v git >/dev/null 2>&1 && git --version || { echo GIT_MISSING; exit 2; }', 20000);
+  if (probe.code !== 0 || /GIT_MISSING/.test(`${probe.stdout}${probe.stderr}`)) {
+    throw new Error(`SSH 宿主机「${server.name}」上也没有 Git：请在宿主机安装 git，或改用自带 Git 的平台镜像`);
+  }
+  const proxyEnv = proxyModule.envFor(resolved) || {};
+  const envPrefix = [
+    'GIT_TERMINAL_PROMPT=0',
+    ...Object.entries(proxyEnv)
+      .filter(([, v]) => typeof v === 'string')
+      .map(([k, v]) => `${k}=${shQuote(v)}`),
+  ].join(' ');
+  const command = [
+    `test ! -e ${shQuote(hostTarget)} || { echo "TARGET_EXISTS"; exit 3; }`,
+    `${envPrefix} git ${args.map(shQuote).join(' ')} 2>&1`,
+  ].join('; ');
+  const result = await sshExec(server, command, 300000);
+  const text = scrub(`${result.stdout || ''}${result.stderr || ''}`.trim(), secrets);
+  if (result.code !== 0) {
+    if (/TARGET_EXISTS/.test(text)) throw new Error(`目录已存在：${hostTarget}`);
+    throw new Error(`宿主机 git clone 失败（exit=${result.code}）：${text.slice(-800) || '无输出'}`);
+  }
+  return { gitVersion: probe.stdout.trim(), output: text.slice(-200) };
 }
 
 async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId,
@@ -361,29 +404,46 @@ async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId,
   });
   const { args, env, auth, proxyUrl, secrets } = cloneArgs(effective, url, resolved);
   if (branch && /^[A-Za-z0-9._/-]{1,120}$/.test(String(branch))) args.splice(args.length - 1, 0, '-b', String(branch));
-  args.push(target);
 
   const allSecrets = [...secrets, source && source.token, source && source.password].filter(Boolean);
-  await new Promise((resolve, reject) => {
-    const child = spawn('git', args, { shell: false, env });
-    let stderr = '';
-    child.stderr.on('data', (c) => { stderr += c.toString(); });
-    child.on('error', reject);
-    child.on('close', (code) => (code === 0
-      ? resolve()
-      : reject(new Error(`git clone 失败：${scrub(stderr.slice(-600), allSecrets)}`))));
-  });
+  // 每次克隆重新探测：容器里后续装了 git、或用户在控制台保存了路径，无需重启即可生效。
+  gitRuntime.refresh();
+  const runtime = gitRuntime.describe();
+  let channel = 'local';
+  let channelLabel = '本机 / 当前容器';
+  let gitVersion = runtime.version;
+
+  if (runtime.available) {
+    const result = await gitRuntime.exec([...args, target], { env, timeoutMs: 300000 });
+    if (result.code !== 0) {
+      throw new Error(`git clone 失败：${scrub(result.output.slice(-600), allSecrets)}`);
+    }
+  } else {
+    const fb = gitRuntime.fallback();
+    if (!fb.ready) throw new Error(gitRuntime.missingMessage());
+    const server = (state().servers || []).find((s) => s.id === fb.serverId);
+    if (!server) throw new Error(gitRuntime.missingMessage());
+    const hostTarget = path.posix.join(fb.hostWorkspaceDir, repoName);
+    const remote = await cloneViaSshHost({
+      args: [...args, hostTarget], resolved, secrets: allSecrets, hostTarget, server,
+    });
+    channel = 'ssh-host';
+    channelLabel = `SSH 宿主机 ${server.name}（${server.host}）`;
+    gitVersion = remote.gitVersion;
+  }
+
   return {
     name: repoName, path: relativeWorkspacePath(target), cloneUrl: url,
     sourceId: sourceId || '', authenticated: auth,
     credentialSource: inline ? '本次填写' : (source ? `Git 源「${source.label}」` : '无（公开仓库 / SSH 密钥）'),
     proxy: proxyModule.maskUrl(proxyUrl), proxySource: resolved.sourceLabel,
+    channel, channelLabel, gitVersion,
   };
 }
 
 module.exports = {
   BUILTIN_ID, TYPES, listSources, createSource, updateSource, removeSource,
   listAllRepos, listReposOf, listBranches, createRepo, testSource,
-  cloneRepo, cloneArgs, cloneCredential, hasCreds,
+  cloneRepo, cloneArgs, cloneCredential, hasCreds, shQuote,
   allSources, findSource, publicSource, gitProxyFor,
 };

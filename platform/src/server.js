@@ -16,6 +16,7 @@ const { PROFILES, startBuild, deployBuild, opsAgent, READ_COMMANDS } = require('
 const remoteOps = require('./remoteOps');
 const extensions = require('./extensions');
 const gitSources = require('./gitSources');
+const gitRuntime = require('./gitRuntime');
 const dockerPanel = require('./dockerPanel');
 const backup = require('./backup');
 const extLifecycle = require('./extLifecycle');
@@ -33,6 +34,8 @@ app.disable('x-powered-by');
 app.get('/api/health', (req, res) => ok(res, {
   name: 'devplatform', version: localVersion().version, time: new Date().toISOString(),
   mode: 'normal', executor: config.buildExecutor, workspace: config.workspaceDir,
+  // 容器镜像缺 Git 时这里会直接显示降级通道，便于远程排障（v0.3.3）。
+  git: { available: gitRuntime.resolve().available, channel: gitRuntime.describe().channel },
 }));
 // 鉴权由 mini.js 在分发层统一处理（/api/health 除外）。
 // 正常模式：外部服务未就绪时直接返回真实错误，不注入任何演示数据。
@@ -240,6 +243,23 @@ app.post('/api/repos', wrap(async (req, res) => {
 
 app.post('/api/repos/clone', wrap(async (req, res) => {
   ok(res, await gitSources.cloneRepo(req.body || {}));
+}));
+
+/* ------------------------- Git 运行时（v0.3.3） ------------------------- */
+// 容器 / Windows exe 未把 git 放进 PATH 时，提供诊断、手工指定路径与重新探测。
+app.get('/api/git/runtime', (req, res) => ok(res, gitRuntime.describe()));
+
+app.post('/api/git/runtime/refresh', (req, res) => {
+  gitRuntime.refresh();
+  ok(res, gitRuntime.describe());
+});
+
+app.put('/api/git/runtime', wrap(async (req, res) => {
+  const body = req.body || {};
+  const has = (k) => Object.prototype.hasOwnProperty.call(body, k);
+  if (has('bin')) gitRuntime.setBin(body.bin);
+  if (has('sshFallback')) gitRuntime.setFallback(body.sshFallback !== false && body.sshFallback !== 'off');
+  ok(res, gitRuntime.describe());
 }));
 
 /* --------------------------- 外部 Git 源管理 --------------------------- */

@@ -1814,3 +1814,90 @@ Git 作用域额外支持 Host 规则（`github.com`、`*.gitea.internal`、完�
 | `scripts/check-frontend.js` / `scripts/smoke-proxy-openlist.js` | 页面数与新接口断言、端到端覆盖 |
 
 验证：`npm run check`（21 个后端模块）、`scripts/check-frontend.js`（**30 项全通过**，25 个页面 + DOM stub boot）、`scripts/smoke-proxy-openlist.js`（**59 项全通过**，含账号密码登记 / 脱敏 / 切换清理、三种克隆凭据头、多连接增改切删与最后一条保护、原有 45 项代理 / OpenList 回归）。前端资源版本升至 `?v=20261110d`，`package.json` / `package-lock.json` 升到 `0.3.2`。
+
+## 30. v0.3.3：Git 运行时自愈（修复 `spawn git ENOENT`）
+
+### 30.1 现象与根因
+
+在「Git 仓库 → 克隆到工作区」点击克隆，返回：
+
+```json
+{"ok":false,"error":"spawn git ENOENT"}
+```
+
+根因不在 Git 源、凭据或代理，而是**运行平台代码的进程里根本没有 `git` 可执行文件**。旧实现直接 `spawn('git', args, { shell: false })`，完全依赖 PATH。典型触发场景：
+
+| 场景 | 说明 |
+|---|---|
+| `remote.js` 部署到无宿主 Node 的机器 | 复用 `node:20-alpine` 镜像，Alpine 基础镜像不含 git；宿主机虽有 `/usr/bin/git`，但容器看不到 |
+| Windows 单文件 exe | 机器没装 Git for Windows，或 `git.exe` 不在启动进程的 PATH（系统服务 / 计划任务常见） |
+| 精简镜像 | `node:*-slim`、`*-alpine` 一律不带 git；只有 `node:*-bookworm` 等完整镜像自带 |
+
+本次在 `10.0.0.246` 实测确认：平台容器 `node:20-alpine` 内 `command -v git` 为 `GIT_MISSING`，宿主机 `/usr/bin/git` 正常。
+
+### 30.2 三层修复
+
+**① 统一探测（`platform/src/gitRuntime.js`）**：按「控制台配置 → `GIT_BIN` → PATH → 平台常见安装路径」解析可执行文件，用绝对路径 spawn；Windows 覆盖 Git for Windows / Scoop / Chocolatey / 便携版，Linux 覆盖 `/usr/bin/git`、`/usr/local/bin/git`、Homebrew 等。所有 ENOENT 被转成带 5 条修复指引的中文错误，不再抛出原始 `spawn git ENOENT`。每次克隆重新探测，装完 git 或改完配置无需重启。
+
+**② 自动降级（SSH 宿主机通道）**：当前环境没有 Git 时，`cloneRepo()` 不再直接失败，而是借已登记的 SSH 服务器在宿主机执行同一条 `git clone`。工作区是 bind mount，宿主机写入后容器内立即可见，结果仍是完整 `.git` 仓库。启用条件：已登记 SSH 服务器 + 能确定宿主机工作区路径（`HOST_WORKSPACE_DIR`，或由服务器 `deployDir + /workspace` 推导）；不满足时给出明确原因，避免把仓库克隆到无关机器上造成「看似成功实则不可见」。凭据仍走临时 `http.extraHeader`（不写 `.git/config`），远程输出经同一套 `scrub()` 脱敏；代理通过环境变量前缀一并传递。
+
+**③ 部署侧（`scripts/remote.js`）**：`pickNodeImage()` 不再用 `^node:` 匹配（会漏掉 `docker.m.daocloud.io/library/node:22-bookworm` 这类带仓库前缀的镜像），改为**先验证镜像里的 Node 能真正启动，再在其中优先选自带 Git 的镜像**。这一步很关键：本次在 `10.0.0.246`（老内核 Debian 9）上发现 `node:22-bookworm` 虽自带 git 2.39.5，但 Node 会 `uv_thread_create` 断言崩溃（exit 139），只看 git 会选出一个跑不了平台的镜像。若所有可运行镜像都不含 Git，默认**不联网安装**（该机 apk 源不可达，硬等会让部署挂死），直接交给第 ② 层 SSH 兜底；确需容器内直接执行 Git 时可设 `DP_INSTALL_GIT=1`，脚本会 `apk add` / `apt-get install` 后 `docker commit` 固化成 `devplatform-runtime:git` 并在后续部署复用。启动后新增「校验平台容器内的 Git」步骤，直接给出结论。
+
+**④ 顺带修复凭据落盘（重要）**：远端实测时发现，`git clone -c http.extraHeader=...` 会把配置**持久化到新仓库的 `.git/config`**（里面是真实 Token 的 Basic base64），与原先「不写 .git/config」的设计相悖。已把所有 `-c` 选项移到 `clone` 子命令之前，改为 `git -c http.extraHeader=... clone ...`，只对本次进程生效。修复后重新克隆验证，`.git/config` 只剩 `[core] / [remote "origin"] / [branch "main"]`，无任何凭据；两个冒烟脚本都加了参数顺序断言防回归。
+
+> `docker-compose --profile full` 路径不受影响：`platform/Dockerfile` 本来就在 `apt-get install` 里装了 git / openssh-client。
+
+### 30.3 控制台可见性
+
+「克隆到工作区」页顶部新增 **Git 运行时** 卡片，在点击克隆之前就显示：
+
+- 绿色 `Git x.y.z` + 执行通道「本机 / 当前容器」；
+- 黄色「本机无 Git · SSH 宿主机兜底」+ 借用的服务器与宿主机工作区路径；
+- 红色「Git 不可用」+ 逐条修复指引（含安装命令、路径填写位置、重新部署命令）。
+
+可直接填写 Git 可执行文件绝对路径、开关 SSH 兜底、重新检测，配置写入 `state.json` 且立即生效。克隆成功提示会附上实际执行通道，例如 `· SSH 宿主机 10.0.0.246（10.0.0.246）`。
+
+### 30.4 配置项
+
+| 配置 | 位置 | 说明 |
+|---|---|---|
+| `GIT_BIN` | `.env` / compose | git 绝对路径；优先级低于控制台配置 |
+| `DP_GIT_FALLBACK_SERVER_ID` | `.env` / compose | 指定借用的 SSH 服务器 id；留空自动挑选 |
+| `HOST_WORKSPACE_DIR` | `.env` | 容器内 `WORKSPACE_DIR` 对应的宿主机目录；既是 Docker 构建挂载映射，也是 Git 兜底的路径依据 |
+| `DP_INSTALL_GIT=1` | 部署命令环境变量 | 可选：让 `remote.js` 联网给运行时镜像装 Git；不设则依赖 SSH 兜底（内网机器推荐不设） |
+| `git.bin` / `git.sshFallback` | `state.json`（控制台写入） | 手工指定路径 / 关闭兜底，无需重启 |
+
+`/api/health` 新增 `git: { available, channel }`，远程排障时不用登录容器就能判断。
+
+### 30.5 新增接口
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/git/runtime` | 完整诊断（版本 / 来源 / 探测记录 / 执行通道 / 兜底就绪度 / 修复指引） |
+| `POST /api/git/runtime/refresh` | 清空缓存重新探测（容器内装完 git 后点「仅重新检测」） |
+| `PUT /api/git/runtime` | 保存 `{ bin, sshFallback }` 并立即重新探测 |
+
+`POST /api/repos/clone` 返回值新增 `channel` / `channelLabel` / `gitVersion`，旧字段保持不变。
+
+### 30.6 排查顺序
+
+1. 打开克隆页看「Git 运行时」卡片，或直接 `curl http://<host>:9000/api/health` 看 `git.channel`；
+2. `channel=local` → 正常；`channel=ssh-host` → 可用但建议给镜像补 git；`channel=none` → 按卡片指引处理；
+3. 容器方式最快修法：重新执行 `node scripts/remote.js deploy <host>`，新版会自动选/构建带 git 的镜像；
+4. 不方便重新部署时：在控制台填写 `GIT_BIN`，或确保已配置 `HOST_WORKSPACE_DIR` 并登记宿主机 SSH 走兜底；
+5. 若远端 git 也无法访问仓库（例如 `cloneUrl` 用了 compose 内部服务名 `gitea:3000`），需改成宿主机可达的地址（`http://<host>:3002`）。
+
+### 30.7 验证结果（`10.0.0.246` 实测）
+
+| 项目 | 结果 |
+|---|---|
+| 部署前 | 平台容器 `node:20-alpine` 内 `GIT_MISSING`，宿主机 `git 2.11.0`；克隆返回 `spawn git ENOENT` |
+| 镜像选择 | `node:22-bookworm` 因 Node 崩溃被跳过，保留可运行的 `node:20-alpine`，未让部署失败 |
+| 部署后健康检查 | `0.3.3` · `git.available=false` · `git.channel=ssh-host` |
+| 兜底详情 | `测试服务器 10.0.0.246` → `/data/platform/workspace`（来源 `HOST_WORKSPACE_DIR`），容器内 SSH 回连成功 |
+| 真实克隆 | 内置 Gitea 临时仓库 → `ok:true` · `authenticated:true` · `channel:ssh-host` · `gitVersion: git 2.11.0` |
+| 产物 | 宿主机与容器内均可见完整 `.git` 与 `README.md`，`HEAD → refs/heads/main` |
+| 凭据安全 | 修复后 `.git/config` 不含 `extraheader` / `Authorization` / Token；测试仓库与目录已清理（Gitea 删除返回 204） |
+| 自检 | `npm run check` 22 个模块、`check-frontend.js` 39 项、`smoke-proxy-openlist.js` 60 项、`smoke-git-runtime.js` 31 项全通过 |
+
+> 本机 `9000` 上的旧实例未覆盖；如需同步，重启该实例或按 §30.6 重新部署即可。

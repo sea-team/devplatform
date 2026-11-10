@@ -472,8 +472,34 @@ async function loadRepos() {
     $$('[data-proxy-repo]').forEach((b) => b.addEventListener('click', () => gotoProxyOverride('git', b.dataset.proxyRepo)));
     // 扩展实例的「绑定仓库」也复用这份聚合列表。
     repoState.items = d.items || [];
+    void loadGitRuntime().catch(() => {});
   } catch (e) {
     $('#repo-list').innerHTML = errorBlock(e.message, '请在「Git 源」页登记可用的仓库服务并配置 Token');
+  }
+}
+
+/* ------------------------- Git 运行时（v0.3.3） ------------------------- */
+// 点击「克隆」之前就能看到 Git 是否就绪；容器镜像缺 Git 时提示走 SSH 宿主机兜底。
+async function loadGitRuntime() {
+  const box = $('#git-runtime-status');
+  if (!box) return;
+  try {
+    const d = await api('/git/runtime');
+    const fb = d.fallback || {};
+    const stateBadge = d.available
+      ? badge(`Git ${d.version || '可用'}`, 'green')
+      : (d.channel === 'ssh-host' ? badge('本机无 Git · SSH 宿主机兜底', 'amber') : badge('Git 不可用', 'red'));
+    const channel = d.available
+      ? `执行通道：本机 / 当前容器（${esc(d.source || '自动探测')}）`
+      : (fb.ready
+        ? `执行通道：SSH 宿主机 ${esc(fb.serverName || '')}（${esc(fb.serverHost || '')}）→ ${esc(fb.hostWorkspaceDir || '')}`
+        : `兜底未就绪：${esc(fb.reason || '未登记 SSH 服务器')}`);
+    const lines = String(d.hint || '').split('\n').map((line) => `<div>${esc(line)}</div>`).join('');
+    box.innerHTML = `${stateBadge} <span class="muted">${channel}</span><div style="margin-top:6px">${lines}</div>`;
+    if ($('#git-runtime-bin')) $('#git-runtime-bin').value = d.configuredBin || '';
+    if ($('#git-runtime-fallback')) $('#git-runtime-fallback').value = fb.enabled === false ? 'off' : 'on';
+  } catch (e) {
+    box.textContent = `Git 运行时检测失败：${e.message}`;
   }
 }
 
@@ -2806,11 +2832,31 @@ $('#clone-form').addEventListener('submit', async (e) => {
   if (mode === 'token' && !body.token) { toast('请填写访问令牌 Token', true); return; }
   try {
     const d = await api('/repos/clone', { method: 'POST', body });
-    toast(`已克隆到 ${d.path}${d.authenticated ? '（已携带凭据）' : ''}`);
+    toast(`已克隆到 ${d.path}${d.authenticated ? '（已携带凭据）' : ''}${d.channelLabel ? ` · ${d.channelLabel}` : ''}`);
     // 本次填写的凭据不留在表单里，也不写入 state.json。
     if (e.target.elements.password) e.target.elements.password.value = '';
     if (e.target.elements.token) e.target.elements.token.value = '';
     loadRepos();
+  } catch (err) { toast(err.message, true); }
+});
+
+$('#git-runtime-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/git/runtime', { method: 'PUT', body: {
+      bin: String(e.target.elements.bin.value || '').trim(),
+      sshFallback: e.target.elements.sshFallback.value !== 'off',
+    } });
+    toast('Git 运行时配置已保存并重新检测');
+    await loadGitRuntime();
+  } catch (err) { toast(err.message, true); }
+});
+
+$('#git-runtime-refresh').addEventListener('click', async () => {
+  try {
+    await api('/git/runtime/refresh', { method: 'POST', body: {} });
+    await loadGitRuntime();
+    toast('已重新检测 Git 运行时');
   } catch (err) { toast(err.message, true); }
 });
 

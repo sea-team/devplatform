@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261110d" />
+  <link rel="stylesheet" href="/style.css?v=20261110e" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -145,6 +145,23 @@
             <button class="subnav-btn active" data-open-view="repo-clone">克隆到工作区</button>
             <button class="subnav-btn" data-open-view="gitsrc">外部 Git 源</button>
           </div>
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-head"><h2>Git 运行时</h2><span class="muted">克隆依赖 Git；缺失时自动改用 SSH 宿主机</span></div>
+            <div id="git-runtime-status" class="hint">正在检测当前运行环境的 Git…</div>
+            <form id="git-runtime-form" class="form" style="margin-top:12px">
+              <div class="grid-2">
+                <label>Git 可执行文件（可选）<input name="bin" id="git-runtime-bin" placeholder="留空自动探测；如 /usr/bin/git 或 C:\Program Files\Git\cmd\git.exe" autocomplete="off" /></label>
+                <label>SSH 宿主机兜底<select name="sshFallback" id="git-runtime-fallback">
+                  <option value="on">开启（容器内无 Git 时在宿主机执行克隆）</option>
+                  <option value="off">关闭（缺 Git 时直接报错）</option>
+                </select></label>
+              </div>
+              <div class="form-actions">
+                <button class="btn" type="submit">保存并重新检测</button>
+                <button class="btn btn-sm" type="button" id="git-runtime-refresh">仅重新检测</button>
+              </div>
+            </form>
+          </div>
           <div class="card">
             <div class="card-head"><h2>克隆到工作区</h2><span class="muted">克隆后可直接用在线 IDE 打开</span></div>
             <form id="clone-form" class="form">
@@ -172,7 +189,8 @@
             </form>
             <div class="notice">
               <b>凭据安全</b>：本次填写的账号密码 / Token 只在 <code>git clone</code> 进程参数里出现，通过临时 <code>http.extraHeader</code> 传递，<b>不会写入 .git/config、不会落到工作区、也不会保存进 state.json</b>；失败日志会自动脱敏。SSH 地址（<code>git@</code> / <code>ssh://</code>）走本机 SSH 密钥，账号密码无效。<br />
-              <b>代理优先级</b>：本次指定 &gt; 单个仓库代理 &gt; Git Host 匹配规则 &gt; Git 分组代理 &gt; 全局代理；<code>direct</code> 表示强制直连。更多说明见「代理配置」页。
+              <b>代理优先级</b>：本次指定 &gt; 单个仓库代理 &gt; Git Host 匹配规则 &gt; Git 分组代理 &gt; 全局代理；<code>direct</code> 表示强制直连。更多说明见「代理配置」页。<br />
+              <b>Git 运行时</b>：克隆需要 Git 可执行文件。容器内没有 Git 时，平台会自动改用已登记的 SSH 宿主机（依据 <code>HOST_WORKSPACE_DIR</code> 挂载映射）执行，效果等同本地克隆；也可在上方直接指定 Git 路径。容器镜像缺 Git 不会再出现 <code>spawn git ENOENT</code>。
             </div>
           </div>
         </section>
@@ -959,6 +977,6 @@
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261110d"></script>
+  <script src="/app.js?v=20261110e"></script>
 </body>
 </html>

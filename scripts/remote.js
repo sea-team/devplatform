@@ -25,6 +25,8 @@ const STATE_FILE = process.env.STATE_FILE || path.join(ROOT, 'data', 'state.json
 const { sshExec, sftpPut, collectStatus } = require(path.join(ROOT, 'platform', 'src', 'integrations.js'));
 
 const SERVICE_NAME = 'devplatform';
+// 基础镜像不含 git 时，把安装结果固化成本地运行时镜像，避免每次重启都联网装包。
+const GIT_RUNTIME_IMAGE = 'devplatform-runtime:git';
 
 function loadServer(host) {
   let raw;
@@ -191,17 +193,96 @@ async function startOnHost(server, target, nodeBin) {
 
 /* ----------------------------- Docker 容器运行方式 ------------------------- */
 
+/** 静默探测：不把镜像探测的原始输出刷进部署日志。 */
+async function quiet(server, command, timeout = 90000) {
+  return sshExec(server, command, timeout);
+}
+
+/** 镜像里的 Node 能否真正启动（老内核上部分 glibc 镜像会 uv_thread_create 断言失败）。 */
+async function imageNodeOk(server, image) {
+  const r = await quiet(server,
+    `timeout 60 docker run --rm ${image} node -e 'process.stdout.write("NODE_OK "+process.version)' 2>/dev/null | tail -1`,
+    90000);
+  return /NODE_OK/.test(r.stdout || '');
+}
+
+/** 镜像里是否自带 git（node:*-bookworm 自带，node:*-alpine / slim 不带）。 */
+async function imageHasGit(server, image) {
+  const r = await quiet(server,
+    `timeout 60 docker run --rm --entrypoint sh ${image} -c 'command -v git >/dev/null 2>&1 && git --version' 2>/dev/null | tail -1`,
+    90000);
+  return /git version/i.test(r.stdout || '');
+}
+
+/**
+ * 把 git 固化进本地镜像：优先 apk（Alpine），其次 apt（Debian/Ubuntu）。
+ * 软件源不可达时返回原镜像，由平台侧的 SSH 宿主机兜底接管克隆（不会让部署失败）。
+ */
+async function ensureGitImage(server, baseImage) {
+  if (await imageHasGit(server, GIT_RUNTIME_IMAGE)) {
+    console.log(`✔ 复用已有运行时镜像：${GIT_RUNTIME_IMAGE}`);
+    return GIT_RUNTIME_IMAGE;
+  }
+  // 内网 / 老机器上的 apk、apt 软件源经常不可达，硬等会让整个部署挂死。
+  // 平台侧有 SSH 宿主机兜底，缺 Git 不影响克隆，因此默认跳过联网安装；
+  // 确需容器内直接执行 Git 时，用 DP_INSTALL_GIT=1 显式开启。
+  if (process.env.DP_INSTALL_GIT !== '1') {
+    console.log('ℹ 基础镜像不含 Git：克隆将自动走 SSH 宿主机兜底（依据 HOST_WORKSPACE_DIR 映射）。');
+    console.log('  如需容器内直接执行 Git，可设 DP_INSTALL_GIT=1 重新部署以构建带 Git 的本地镜像。');
+    return baseImage;
+  }
+  console.log(`▶ 基础镜像 ${baseImage} 不含 Git，构建带 Git 的运行时镜像 ${GIT_RUNTIME_IMAGE}`);
+  const install = [
+    // 软件源不可达时要快速失败，不能让部署卡在 apk / apt 上；平台侧会自动走 SSH 兜底。
+    'if command -v apk >/dev/null 2>&1; then timeout 75 apk add --no-cache git openssh-client',
+    'elif command -v apt-get >/dev/null 2>&1; then timeout 75 apt-get update && timeout 150 apt-get install -y --no-install-recommends git openssh-client',
+    'else echo NO_PACKAGE_MANAGER; exit 4; fi',
+  ].join('; ');
+  const built = await run(server,
+    `docker rm -f dp-git-build >/dev/null 2>&1 || true; `
+    + `docker run --name dp-git-build --entrypoint sh ${baseImage} -c "${install}" `
+    + `&& docker commit dp-git-build ${GIT_RUNTIME_IMAGE} >/dev/null `
+    + `&& docker rm -f dp-git-build >/dev/null 2>&1 `
+    + `&& docker run --rm --entrypoint sh ${GIT_RUNTIME_IMAGE} -c 'git --version'`,
+    240000, '安装 Git 并固化为本地运行时镜像');
+  if (built.code === 0 && /git version/i.test(built.stdout)) {
+    console.log(`✔ 运行时镜像已就绪：${GIT_RUNTIME_IMAGE}`);
+    return GIT_RUNTIME_IMAGE;
+  }
+  await run(server, 'docker rm -f dp-git-build >/dev/null 2>&1 || true', 20000);
+  console.log('⚠ 无法为镜像安装 Git（软件源可能不可达）；平台将启用 SSH 宿主机兜底执行克隆。');
+  return baseImage;
+}
+
 async function pickNodeImage(server) {
-  const result = await run(server, 'docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "^node:" | sort | head -30', 30000, '查找目标机已有的 Node 镜像');
-  const images = result.stdout.split('\n').map((s) => s.trim()).filter((s) => s && !s.includes('<none>'));
-  const preferred = images.find((i) => /^node:(2[0-9]|22)/.test(i)) || images[0];
-  if (preferred) {
-    console.log(`✔ 复用已有镜像：${preferred}（无需访问 Docker Hub）`);
-    return preferred;
+  const result = await run(server, 'docker images --format "{{.Repository}}:{{.Tag}}" | sort', 30000, '查找目标机已有的 Node 镜像');
+  // 兼容带仓库前缀的镜像名（例如 docker.m.daocloud.io/library/node:22-bookworm）。
+  const images = result.stdout.split('\n').map((s) => s.trim())
+    .filter((s) => s && !s.includes('<none>') && /(^|\/)node:/i.test(s))
+    .sort((a, b) => (/alpine/i.test(a) ? 1 : 0) - (/alpine/i.test(b) ? 1 : 0));
+  const usable = [];
+  for (const image of images.slice(0, 8)) {
+    // 必须同时满足「Node 能启动」：老内核上 node:*-bookworm 会在 uv_thread_create 断言崩溃，
+    // 只看 git 会选出一个根本跑不了平台的镜像。
+    if (!(await imageNodeOk(server, image))) {
+      console.log(`⚠ 跳过镜像 ${image}：容器内 Node 无法启动（内核 / glibc 不兼容）`);
+      continue;
+    }
+    usable.push(image);
+  }
+  for (const image of usable) {
+    if (await imageHasGit(server, image)) {
+      console.log(`✔ 复用自带 Git 的镜像：${image}（Node 与 Git 均可用）`);
+      return image;
+    }
+  }
+  if (usable.length) {
+    console.log(`✔ 复用可运行镜像：${usable[0]}`);
+    return ensureGitImage(server, usable[0]);
   }
   const pull = await run(server, 'docker pull node:20-alpine', 300000, '拉取 node:20-alpine');
   if (pull.code !== 0) throw new Error('目标机无 Node 运行时，且无法拉取 Node 镜像（Docker Hub 不可达）。请先配置镜像加速器或安装 Node >= 20');
-  return 'node:20-alpine';
+  return ensureGitImage(server, 'node:20-alpine');
 }
 
 async function startInContainer(server, target, host) {
@@ -216,7 +297,7 @@ async function startInContainer(server, target, host) {
     60000, '校验容器内的 SSH 能力');
   if (!sshReady.stdout.includes('SSH2_OK')) throw new Error('容器内 ssh2 不可用，服务器管理与自动部署功能将无法使用');
 
-  await run(server, `docker rm -f ${SERVICE_NAME} >/dev/null 2>&1 || true`, 30000);
+  await run(server, `docker rm -f ${SERVICE_NAME} dp-git-build >/dev/null 2>&1 || true`, 30000);
 
   // 统一的 .env：存放 Token / 密码 / 服务地址，compose 与平台容器共用同一份。
   // 存在时用 --env-file 注入，改凭据后重新 deploy 即可生效，无需改代码。
@@ -243,6 +324,17 @@ async function startInContainer(server, target, host) {
     '-w /app', image, 'node src/server.js',
   ].join(' ');
   await runStrict(server, `${dockerRun} && sleep 2 && docker ps --filter name=${SERVICE_NAME} --format "{{.Names}}|{{.Status}}|{{.Ports}}"`, 120000, '启动平台容器');
+
+  // v0.3.3：Git 是「克隆到工作区」的硬依赖。缺了会在点击时才抛 spawn git ENOENT，
+  // 这里在部署阶段就校验并给出明确结论（平台侧另有 SSH 宿主机兜底）。
+  const gitCheck = await run(server,
+    `docker exec ${SERVICE_NAME} sh -c 'git --version' 2>/dev/null || echo GIT_MISSING`,
+    30000, '校验平台容器内的 Git');
+  if (/GIT_MISSING/.test(gitCheck.stdout)) {
+    console.log('⚠ 平台容器内仍无 Git：克隆将走 SSH 宿主机兜底。请确认 .env 配置了 HOST_WORKSPACE_DIR，且已登记宿主机 SSH。');
+  } else {
+    console.log(`✔ 平台容器内 ${gitCheck.stdout.trim().split('\n').pop()}，克隆可直接在容器内执行`);
+  }
 }
 
 /* --------------------------------- 部署 ---------------------------------- */
