@@ -192,7 +192,6 @@ tr:last-child td { border-bottom: 0; }
 .badge.amber { background: var(--amber-soft); color: var(--amber); }
 .badge.blue { background: var(--primary-soft); color: var(--primary); }
 .badge.gray { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
-.badge.gray { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
 
 .list { display: flex; flex-direction: column; }
 .list-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--border); }
@@ -433,6 +432,14 @@ tr:last-child td { border-bottom: 0; }
 .ext-mode-row select { max-width: 320px; }
 .ext-list-url { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; color: var(--muted); word-break: break-all; }
 .ext-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.field-help { display: block; margin-top: 5px; font-size: 11px; line-height: 1.5; color: var(--muted); }
+
+/* Docker 管理：六分区切换 */
+.docker-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; padding-bottom: 4px; }
+.docker-tab { border-color: var(--border); }
+.docker-tab.active { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); font-weight: 600; }
+.docker-panel { animation: panel-in .16s ease-out; }
+@keyframes panel-in { from { opacity: .5; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 
 @media (max-width: 1100px) {
   .stat-grid { grid-template-columns: repeat(2, 1fr); }

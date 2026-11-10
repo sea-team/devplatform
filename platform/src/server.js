@@ -15,12 +15,18 @@ const {
 const { PROFILES, startBuild, deployBuild, opsAgent, READ_COMMANDS } = require('./engine');
 const remoteOps = require('./remoteOps');
 const extensions = require('./extensions');
+const gitSources = require('./gitSources');
+const dockerPanel = require('./dockerPanel');
+const backup = require('./backup');
+const extLifecycle = require('./extLifecycle');
+const dbgateSync = require('./dbgateSync');
+const buildBackends = require('./buildBackends');
 
 // 内置 HTTP 路由：本地零依赖即可启动；容器里装了 ssh2/undici 后自动启用 SSH 与代理。
 const app = createApp({ adminToken: config.adminToken, staticDir: config.publicDir });
 app.disable('x-powered-by');
 app.get('/api/health', (req, res) => ok(res, {
-  name: 'devplatform', version: '0.2.0', time: new Date().toISOString(),
+  name: 'devplatform', version: localVersion().version, time: new Date().toISOString(),
   mode: 'normal', executor: config.buildExecutor, workspace: config.workspaceDir,
 }));
 // 鉴权由 mini.js 在分发层统一处理（/api/health 除外）。
@@ -185,7 +191,7 @@ app.get('/api/overview', wrap(async (req, res) => {
   ok(res, {
     services,
     counts: {
-      repos: 0,
+      repos: (state().gitSources || []).length,
       servers: state().servers.length,
       aiProviders: state().aiProviders.length,
       builds: builds.length,
@@ -193,6 +199,9 @@ app.get('/api/overview', wrap(async (req, res) => {
       buildFailed: builds.filter((b) => b.status === 'failed').length,
       deploys: state().deploys.length,
       extensions: extInstances.length,
+      gitSources: (state().gitSources || []).length + 1,
+      backups: (state().backups || []).length,
+      composeTemplates: (state().composeTemplates || []).length,
     },
     workspace: config.workspaceDir,
     executor: config.buildExecutor,
@@ -202,38 +211,55 @@ app.get('/api/overview', wrap(async (req, res) => {
 
 /* ------------------------------ Git 仓库管理 ----------------------------- */
 
+// 仓库列表聚合「平台自带 Gitea + 所有登记的外部源」，单个源失败不影响其它源。
 app.get('/api/repos', wrap(async (req, res) => {
-  ok(res, { items: await giteaApi.listRepos() });
+  ok(res, await gitSources.listAllRepos());
 }));
 
 app.post('/api/repos', wrap(async (req, res) => {
   requireBody(req.body, ['name']);
-  const payload = {
-    name: String(req.body.name).replace(/[^A-Za-z0-9_.-]/g, '-'),
-    description: req.body.description || '',
-    private: Boolean(req.body.private),
-    auto_init: true,
-  };
-  ok(res, { repo: await giteaApi.createRepo(payload) });
+  const sourceId = String(req.body.sourceId || gitSources.BUILTIN_ID);
+  const repo = await gitSources.createRepo(sourceId, req.body);
+  ok(res, { repo });
 }));
 
 app.post('/api/repos/clone', wrap(async (req, res) => {
-  requireBody(req.body, ['cloneUrl']);
-  const cloneUrl = String(req.body.cloneUrl).trim();
-  if (!/^(https?:\/\/|git@|ssh:\/\/)/.test(cloneUrl)) throw new Error('cloneUrl 必须是 http(s)/ssh/git 地址');
-  const name = String(req.body.name || path.basename(cloneUrl, '.git')).replace(/[^A-Za-z0-9_.-]/g, '-');
-  if (!name || name === '.' || name === '..') throw new Error('仓库名不合法');
-  const target = safeWorkspacePath(name);
-  if (fs.existsSync(target)) throw new Error(`目录已存在：${name}`);
+  ok(res, await gitSources.cloneRepo(req.body || {}));
+}));
 
-  await new Promise((resolve, reject) => {
-    const child = spawn('git', ['clone', cloneUrl, target], { shell: false });
-    let stderr = '';
-    child.stderr.on('data', (c) => { stderr += c.toString(); });
-    child.on('error', reject);
-    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`git clone 失败：${stderr.slice(-500)}`))));
-  });
-  ok(res, { name, path: relativeWorkspacePath(target), cloneUrl });
+/* --------------------------- 外部 Git 源管理 --------------------------- */
+// 凭据只存 state.json（600），列表脱敏；clone 用临时 http.extraHeader，不落到 .git/config。
+
+app.get('/api/git-sources', (req, res) => ok(res, gitSources.listSources()));
+
+app.post('/api/git-sources', wrap(async (req, res) => {
+  ok(res, gitSources.createSource(req.body || {}));
+}));
+
+app.put('/api/git-sources/:id', wrap(async (req, res) => {
+  ok(res, gitSources.updateSource(req.params.id, req.body || {}));
+}));
+
+app.delete('/api/git-sources/:id', wrap(async (req, res) => {
+  ok(res, gitSources.removeSource(req.params.id));
+}));
+
+app.post('/api/git-sources/:id/test', wrap(async (req, res) => {
+  ok(res, await gitSources.testSource(req.params.id));
+}));
+
+app.get('/api/git-sources/:id/repos', wrap(async (req, res) => {
+  ok(res, { items: await gitSources.listReposOf(gitSources.findSource(req.params.id)) });
+}));
+
+app.get('/api/git-sources/:id/branches', wrap(async (req, res) => {
+  ok(res, await gitSources.listBranches(req.params.id, String(req.query.repo || '')));
+}));
+
+/* ------------------------------ 构建后端 ------------------------------ */
+// 编译环境走 Docker 体系，auto 按 ssh → docker → wsl → local 降级；不引入 microVM。
+app.get('/api/builds/backends', wrap(async (req, res) => {
+  ok(res, { items: await buildBackends.detectBackends(), current: config.buildExecutor });
 }));
 
 /* -------------------------------- 在线 IDE ------------------------------- */
@@ -669,11 +695,6 @@ app.post('/api/extensions/instances/:id/health', wrap(async (req, res) => {
   ok(res, await extensions.healthOf(req.params.id));
 }));
 
-app.post('/api/extensions/instances/:id/inject', wrap(async (req, res) => {
-  const target = String((req.body && req.body.target) || '.env');
-  ok(res, extensions.injectEnv(req.params.id, target));
-}));
-
 app.get('/api/extensions/instances/:id/connection', wrap(async (req, res) => {
   ok(res, extensions.connectionOfInstance(req.params.id));
 }));
@@ -685,6 +706,204 @@ app.get('/api/extensions/instances/:id/logs', wrap(async (req, res) => {
 app.delete('/api/extensions/instances/:id', wrap(async (req, res) => {
   const purge = req.query.purge === '1' || req.query.purge === 'true';
   ok(res, await extensions.removeInstance(req.params.id, purge));
+}));
+
+/* ------------------- 扩展运维：备份 / 恢复 / 升级 / 绑定仓库 ------------------- */
+
+app.post('/api/extensions/instances/:id/inject', wrap(async (req, res) => {
+  const target = String((req.body && req.body.target) || '.env');
+  // 绑定了仓库时，一次注入到多个工作区 .env。
+  const targets = (req.body && Array.isArray(req.body.targets) && req.body.targets.length)
+    ? req.body.targets
+    : (req.body && req.body.useRepos ? extLifecycle.repoTargets(req.params.id) : []);
+  ok(res, extensions.injectEnv(req.params.id, target, targets));
+}));
+
+app.get('/api/extensions/instances/:id/repos', (req, res) => ok(res, extLifecycle.publicRepos(req.params.id)));
+
+app.put('/api/extensions/instances/:id/repos', wrap(async (req, res) => {
+  ok(res, extLifecycle.setRepos(req.params.id, (req.body && req.body.repoIds) || []));
+}));
+
+app.post('/api/extensions/instances/:id/backup', wrap(async (req, res) => {
+  ok(res, await backup.createBackup(req.params.id, String((req.body && req.body.reason) || 'manual')));
+}));
+
+app.post('/api/extensions/instances/:id/upgrade', wrap(async (req, res) => {
+  requireBody(req.body, ['tag']);
+  ok(res, await extLifecycle.upgradeInstance(req.params.id, String(req.body.tag)));
+}));
+
+app.get('/api/extensions/backups', wrap(async (req, res) => {
+  ok(res, backup.listBackups(String(req.query.instanceId || '')));
+}));
+
+app.post('/api/extensions/backups/:id/restore', wrap(async (req, res) => {
+  ok(res, await backup.restoreBackup(req.params.id, {
+    confirm: Boolean(req.body && req.body.confirm),
+    instanceId: String((req.body && req.body.instanceId) || ''),
+  }));
+}));
+
+app.get('/api/extensions/backups/:id/download', wrap(async (req, res) => {
+  const { record, buffer } = backup.backupBuffer(req.params.id);
+  res.writeHead(200, {
+    'content-type': 'application/octet-stream',
+    'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(record.filename)}`,
+    'content-length': String(buffer.length),
+    'cache-control': 'no-store',
+  });
+  res.end(buffer);
+}));
+
+app.delete('/api/extensions/backups/:id', wrap(async (req, res) => {
+  ok(res, backup.deleteBackup(req.params.id));
+}));
+
+app.get('/api/extensions/dbgate', (req, res) => {
+  const inst = dbgateSync.dbGateInstance();
+  ok(res, {
+    installed: Boolean(inst),
+    instance: inst ? extensions.publicInstance(inst) : null,
+    ...dbgateSync.connectionsEnv(),
+  });
+});
+
+app.post('/api/extensions/dbgate/sync', wrap(async (req, res) => {
+  ok(res, await extLifecycle.syncDbGate());
+}));
+
+/* ------------------------------ Docker 管理 ------------------------------ */
+// 参照宝塔 Docker 模块六分区。非平台容器默认只读，写操作必须带 confirm=true。
+
+const dockerTarget = (req) => String((req.query && req.query.target) || (req.body && req.body.target) || 'local');
+// GET / DELETE 无法可靠携带 JSON body，允许用 ?confirm=true 传确认位（写操作仍逐条记录审计）。
+const dockerConfirm = (req) => Boolean(
+  (req.body && (req.body.confirm === true || req.body.confirm === 'true'))
+  || (req.query && (req.query.confirm === 'true' || req.query.confirm === '1')),
+);
+
+app.get('/api/docker/overview', wrap(async (req, res) => {
+  ok(res, await dockerPanel.overview(dockerTarget(req)));
+}));
+
+app.get('/api/docker/audit', (req, res) => ok(res, dockerPanel.auditList()));
+
+app.post('/api/docker/containers/:id/action', wrap(async (req, res) => {
+  ok(res, await dockerPanel.containerAction(dockerTarget(req), req.params.id,
+    String((req.body && req.body.action) || ''), dockerConfirm(req)));
+}));
+
+app.delete('/api/docker/containers/:id', wrap(async (req, res) => {
+  ok(res, await dockerPanel.containerRemove(dockerTarget(req), req.params.id, dockerConfirm(req)));
+}));
+
+app.get('/api/docker/containers/:id/logs', wrap(async (req, res) => {
+  ok(res, await dockerPanel.containerLogs(dockerTarget(req), req.params.id, Number(req.query.tail) || 200));
+}));
+
+app.get('/api/docker/containers/:id/inspect', wrap(async (req, res) => {
+  ok(res, await dockerPanel.containerInspect(dockerTarget(req), req.params.id));
+}));
+
+app.get('/api/docker/containers/:id/stats', wrap(async (req, res) => {
+  ok(res, await dockerPanel.containerStats(dockerTarget(req), req.params.id));
+}));
+
+app.post('/api/docker/containers/:id/exec', wrap(async (req, res) => {
+  ok(res, await dockerPanel.containerExec(dockerTarget(req), req.params.id,
+    String((req.body && req.body.command) || ''), dockerConfirm(req)));
+}));
+
+app.post('/api/docker/images/pull', wrap(async (req, res) => {
+  requireBody(req.body, ['image']);
+  ok(res, await dockerPanel.pullImage(dockerTarget(req), String(req.body.image), String(req.body.tag || 'latest')));
+}));
+
+app.delete('/api/docker/images/:ref', wrap(async (req, res) => {
+  ok(res, await dockerPanel.removeImage(dockerTarget(req), req.params.ref, dockerConfirm(req)));
+}));
+
+// 镜像标识常含 /（私有仓库），放在路径里会被路由分段拆开，改用 query 传 ref。
+app.post('/api/docker/images/remove', wrap(async (req, res) => {
+  const ref = String((req.body && req.body.ref) || (req.query && req.query.ref) || '');
+  if (!ref) throw new Error('缺少镜像标识 ref');
+  ok(res, await dockerPanel.removeImage(dockerTarget(req), ref, dockerConfirm(req)));
+}));
+
+app.get('/api/docker/images/export', wrap(async (req, res) => {
+  const ref = String((req.query && req.query.ref) || '');
+  if (!ref) throw new Error('缺少镜像标识 ref');
+  const out = await dockerPanel.exportImage(dockerTarget(req), ref);
+  if (!out.available) return fail(res, out.hint, 400);
+  res.writeHead(200, {
+    'content-type': 'application/x-tar',
+    'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${ref.replace(/[^A-Za-z0-9._-]/g, '_')}.tar`)}`,
+    'content-length': String(out.buffer.length),
+    'cache-control': 'no-store',
+  });
+  res.end(out.buffer);
+}));
+
+// 小镜像 tar 直接上传（mini.js raw 上限 100MB）；大镜像请用 /load-path 指向已有文件。
+app.post('/api/docker/images/load', wrap(async (req, res) => {
+  ok(res, await dockerPanel.loadImage(dockerTarget(req), { buffer: req.body }));
+}), { raw: true });
+
+app.post('/api/docker/images/load-path', wrap(async (req, res) => {
+  requireBody(req.body, ['path']);
+  const t = dockerPanel.splitTarget(dockerTarget(req));
+  if (t.remote) {
+    ok(res, await dockerPanel.loadImage(dockerTarget(req), { remotePath: String(req.body.path) }));
+    return;
+  }
+  // 本机：只允许读取 data/images/ 下的 tar，杜绝任意文件读取。
+  const name = path.basename(String(req.body.path)).replace(/[^A-Za-z0-9._-]/g, '');
+  if (!name || !/\.tar(\.gz)?$/i.test(name)) throw new Error('镜像文件名必须是 data/images/ 下的 .tar / .tar.gz');
+  const dir = path.join(config.dataDir, 'images');
+  const file = path.join(dir, name);
+  if (path.dirname(file) !== dir || !fs.existsSync(file)) throw new Error(`镜像文件不存在：data/images/${name}`);
+  ok(res, await dockerPanel.loadImage('local', { buffer: fs.readFileSync(file) }));
+}));
+
+app.get('/api/docker/images/:ref/export', wrap(async (req, res) => {
+  const out = await dockerPanel.exportImage(dockerTarget(req), req.params.ref);
+  if (!out.available) return fail(res, out.hint, 400);
+  res.writeHead(200, {
+    'content-type': 'application/x-tar',
+    'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${req.params.ref.replace(/[^A-Za-z0-9._-]/g, '_')}.tar`)}`,
+    'content-length': String(out.buffer.length),
+    'cache-control': 'no-store',
+  });
+  res.end(out.buffer);
+}));
+
+app.post('/api/docker/volumes', wrap(async (req, res) => {
+  requireBody(req.body, ['name']);
+  ok(res, await dockerPanel.createVolume(dockerTarget(req), String(req.body.name)));
+}));
+
+app.delete('/api/docker/volumes/:name', wrap(async (req, res) => {
+  ok(res, await dockerPanel.removeVolume(dockerTarget(req), req.params.name, dockerConfirm(req)));
+}));
+
+app.post('/api/docker/networks', wrap(async (req, res) => {
+  requireBody(req.body, ['name']);
+  ok(res, await dockerPanel.createNetwork(dockerTarget(req), String(req.body.name)));
+}));
+
+app.delete('/api/docker/networks/:id', wrap(async (req, res) => {
+  ok(res, await dockerPanel.removeNetwork(dockerTarget(req), req.params.id, dockerConfirm(req)));
+}));
+
+app.get('/api/docker/templates', (req, res) => ok(res, dockerPanel.listTemplates()));
+
+app.post('/api/docker/templates', wrap(async (req, res) => {
+  ok(res, dockerPanel.saveTemplate(req.body || {}));
+}));
+
+app.delete('/api/docker/templates/:id', wrap(async (req, res) => {
+  ok(res, dockerPanel.deleteTemplate(req.params.id));
 }));
 
 /* -------------------------------- 静态界面 ------------------------------- */

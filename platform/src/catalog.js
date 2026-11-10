@@ -34,6 +34,13 @@ const COMMON_FIELDS = [
   },
 ];
 
+/** 安装目标（后端按已登记服务器动态填充 options）。 */
+const TARGET_FIELD = {
+  key: 'TARGET', label: '安装到', type: 'select', required: true,
+  default: 'local', options: [{ value: 'local', label: '本机 Docker' }],
+  help: '选择已登记的 Linux 服务器可远程安装（通过 SSH 下发 docker 命令，本机无需 Docker）',
+};
+
 const EXTERNAL_HOST_FIELD = {
   key: 'HOST', label: '数据库地址', type: 'text', required: true,
   placeholder: '例如 10.0.0.246 或 db.internal',
@@ -63,6 +70,7 @@ const BUILTIN = [
       { key: 'DB_NAME', label: '初始库名', type: 'text', default: 'app', required: true },
     ],
     defaults: { USER: 'root' },
+    backup: 'mysqldump', restore: 'mysql', backupFile: '/tmp/dp-backup.sql',
   },
   {
     id: 'pgsql', label: 'PostgreSQL', kind: 'database', icon: 'DB',
@@ -84,6 +92,7 @@ const BUILTIN = [
       { key: 'DB_NAME', label: '初始库名', type: 'text', default: 'app', required: true },
     ],
     defaults: {},
+    backup: 'pgdump', restore: 'psql', backupFile: '/tmp/dp-backup.sql',
   },
   {
     id: 'redis', label: 'Redis', kind: 'cache', icon: 'KV',
@@ -99,8 +108,26 @@ const BUILTIN = [
     },
     fields: [],
     defaults: { USER: 'default' },
+    backup: 'redis-rdb', restore: 'redis-rdb', backupFile: '/data/dp-backup.rdb',
+  },
+  {
+    // 工具型清单：安装后由平台把所有实例的连接自动写成 CONNECTIONS 环境变量，
+    // 用户打开页面就能看到 MySQL / PgSQL / Redis，无需逐个手工录入。
+    id: 'dbgate', label: 'DbGate 数据库管理', kind: 'tool', icon: 'SQL',
+    description: 'GPL-3.0 开源多数据库 Web 客户端：SQL + NoSQL 一个界面，自动同步平台实例连接',
+    image: 'dbgate/dbgate', tags: ['latest'], defaultTag: 'latest',
+    port: 3000, internalPort: 3000, volume: '/root/.dbgate',
+    envKey: 'DBGATE_URL', connection: 'http://${HOST}:${PORT}/',
+    env: { LOGIN: 'admin', PASSWORD: '${PASSWORD}', LANGUAGE: 'zh' },
+    command: [], health: {}, fields: [], defaults: {},
+    dynamicEnv: 'dbgate-connections', openable: true,
   },
 ];
+
+/** 备份 / 恢复只接受这些内置模板 id，命令实现在 backup.js，清单里不写 shell。 */
+const BACKUP_RECIPES = ['mysqldump', 'pgdump', 'redis-rdb'];
+const RESTORE_RECIPES = ['mysql', 'psql', 'redis-rdb'];
+const DYNAMIC_ENV = ['', 'dbgate-connections'];
 
 const TEMPLATE_RE = /\$\{([A-Z_]+)\}/g;
 
@@ -162,9 +189,17 @@ function validateManifest(raw) {
     if (typeof part !== 'string' || part.includes('\n')) throw new Error(`${m.id}: health.cmd 必须是单行字符串数组`);
   }
   m.defaults = m.defaults && typeof m.defaults === 'object' ? m.defaults : {};
-  m.kind = ['database', 'cache', 'queue', 'storage', 'custom'].includes(m.kind) ? m.kind : 'custom';
+  m.kind = ['database', 'cache', 'queue', 'storage', 'tool', 'custom'].includes(m.kind) ? m.kind : 'custom';
   m.description = String(m.description || '').slice(0, 120);
   m.icon = String(m.icon || 'EXT').slice(0, 4);
+
+  // 备份 / 恢复 / 动态环境变量 / 可打开界面：全部是白名单枚举，不接受任意命令或脚本。
+  m.backup = BACKUP_RECIPES.includes(m.backup) ? m.backup : '';
+  m.restore = RESTORE_RECIPES.includes(m.restore) ? m.restore : '';
+  m.backupFile = /^\/[A-Za-z0-9._/-]{1,120}$/.test(String(m.backupFile || '')) ? m.backupFile : '';
+  if (m.backup && !m.backupFile) throw new Error(`${m.id}: 声明 backup 时必须提供容器内绝对路径 backupFile`);
+  m.dynamicEnv = DYNAMIC_ENV.includes(m.dynamicEnv) ? m.dynamicEnv : '';
+  m.openable = m.openable === true;
   return m;
 }
 
@@ -198,6 +233,7 @@ function formFields(manifest, mode) {
     fields.push({ ...COMMON_FIELDS[2], default: manifest.port }); // PORT
     fields.push({ ...COMMON_FIELDS[3] }); // PASSWORD
     for (const f of manifest.fields) fields.push({ ...f });
+    fields.push({ ...TARGET_FIELD, options: TARGET_FIELD.options.map((o) => ({ ...o })) });
   }
   return fields;
 }
@@ -207,6 +243,7 @@ function builtinCatalog() {
 }
 
 module.exports = {
-  BUILTIN, COMMON_FIELDS, EXTERNAL_HOST_FIELD, TEMPLATE_KEYS,
+  BUILTIN, COMMON_FIELDS, EXTERNAL_HOST_FIELD, TARGET_FIELD, TEMPLATE_KEYS,
+  BACKUP_RECIPES, RESTORE_RECIPES, DYNAMIC_ENV,
   validateManifest, renderTemplate, formFields, builtinCatalog,
 };

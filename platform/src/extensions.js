@@ -48,16 +48,28 @@ function allManifests() {
 async function listCatalog() {
   const { items, errors } = allManifests();
   const docker = await runtime.dockerStatus();
+  const servers = (state().servers || []).map((s) => ({
+    value: `server:${s.id}`, label: `${s.name} · ${s.host}`,
+  }));
+  const localTarget = docker.available ? [{ value: 'local', label: '本机 Docker' }] : [];
+  const targets = [...localTarget, ...servers];
+  const firstTarget = targets.length ? targets[0].value : 'local';
   return {
-    items: items.map((m) => ({
-      id: m.id, label: m.label, kind: m.kind, icon: m.icon,
-      description: m.description, image: m.image, tags: m.tags,
-      defaultTag: m.defaultTag, port: m.port, envKey: m.envKey,
-      builtin: m.builtin,
-      forms: { docker: catalog.formFields(m, 'docker'), external: catalog.formFields(m, 'external') },
-    })),
-    errors, customDir: customDir(), docker,
-    defaultMode: docker.available ? 'docker' : 'external',
+    items: items.map((m) => {
+      const d = catalog.formFields(m, 'docker').map((f) => (
+        f.key === 'TARGET' ? { ...f, options: targets.map((o) => ({ ...o })), default: firstTarget } : f
+      ));
+      return {
+        id: m.id, label: m.label, kind: m.kind, icon: m.icon,
+        description: m.description, image: m.image, tags: m.tags,
+        defaultTag: m.defaultTag, port: m.port, envKey: m.envKey,
+        builtin: m.builtin, openable: Boolean(m.openable),
+        canBackup: Boolean(m.backup), canUpgrade: m.tags.length > 1,
+        forms: { docker: d, external: catalog.formFields(m, 'external') },
+      };
+    }),
+    errors, customDir: customDir(), docker, servers,
+    defaultMode: targets.length ? 'docker' : 'external',
     extHost: config.extHost,
   };
 }
@@ -102,10 +114,12 @@ function tcpProbe(host, port, timeout = 900) {
   });
 }
 
-async function assertPortFree(port) {
-  if (instances().some((x) => x.mode === 'docker' && Number(x.port) === port)) {
-    throw new Error(`端口 ${port} 已被平台内另一个扩展实例占用`);
+async function assertPortFree(port, target = 'local') {
+  if (instances().some((x) => x.mode === 'docker' && Number(x.port) === port && (x.target || 'local') === target)) {
+    throw new Error(`端口 ${port} 已被同一目标上的另一个扩展实例占用`);
   }
+  // 远程目标无法从平台本机探测端口，交由远端 docker run 报错；这里只做平台内去重。
+  if (target !== 'local') return;
   const probeHost = config.extBindIp === '0.0.0.0' ? '127.0.0.1' : config.extBindIp;
   if (await tcpProbe(probeHost, port)) {
     throw new Error(`端口 ${port} 已被本机其它程序占用，请换一个端口`);
@@ -165,6 +179,9 @@ function publicInstance(inst) {
   const manifest = (() => { try { return getManifest(inst.catalogId); } catch { return null; } })();
   let masked = '';
   try { masked = maskUrl(connectionOf(inst).url); } catch { /* noop */ }
+  const target = inst.target || 'local';
+  const server = target.startsWith('server:')
+    ? (state().servers || []).find((s) => s.id === target.replace(/^server:/, '')) : null;
   return {
     id: inst.id, catalogId: inst.catalogId,
     label: (manifest && manifest.label) || inst.catalogId,
@@ -175,6 +192,14 @@ function publicInstance(inst) {
     containerName: inst.containerName || '', volumeName: inst.volumeName || '',
     connectionMasked: masked, hasPassword: Boolean(inst.secrets && inst.secrets.PASSWORD),
     canManage: inst.mode === 'docker', createdAt: inst.createdAt,
+    target, targetLabel: server ? server.name : (target === 'local' ? '本机' : target),
+    repoIds: inst.repoIds || [],
+    tags: (manifest && manifest.tags) || [],
+    openable: Boolean(manifest && manifest.openable),
+    canBackup: Boolean(manifest && manifest.backup),
+    canUpgrade: Boolean(manifest && manifest.tags.length > 1),
+    kind: (manifest && manifest.kind) || 'custom',
+    lastUpgrade: inst.lastUpgrade || null,
   };
 }
 
@@ -186,11 +211,29 @@ async function createInstance(body = {}) {
   const manifest = getManifest(String(body.catalogId || ''));
   const mode = body.mode === 'external' ? 'external' : 'docker';
   const docker = await runtime.dockerStatus();
-  if (mode === 'docker' && !docker.available) {
-    throw new Error('本机未检测到 Docker：请改用「外部连接」模式，或为平台挂载 docker.sock');
+  const values = pickValues(manifest, mode, body.values || body);
+
+  // 安装目标：本机 Docker 或已登记的 Linux 服务器（SSH 远程安装）。
+  let target = 'local';
+  let server = null;
+  if (mode === 'docker') {
+    target = String(values.TARGET || 'local');
+    if (target.startsWith('server:')) {
+      const id = target.replace(/^server:/, '');
+      server = (state().servers || []).find((s) => s.id === id);
+      if (!server) throw new Error(`目标服务器不存在：${id}`);
+      const remote = await runtime.remoteDockerStatus(id);
+      if (!remote.available) {
+        throw new Error(`服务器「${server.name}」上的 Docker 不可用${remote.error ? `：${remote.error}` : ''}；请先在该服务器安装 Docker，或改选本机 / 外部连接`);
+      }
+    } else {
+      target = 'local';
+      if (!docker.available) {
+        throw new Error('本机未检测到 Docker：请在安装目标里选择已登记服务器做远程安装，或改用「外部连接」模式');
+      }
+    }
   }
 
-  const values = pickValues(manifest, mode, body.values || body);
   const name = String(values.NAME || '').trim();
   if (!/^[a-z][a-z0-9-]{1,31}$/.test(name)) {
     throw new Error('实例名称必须是小写字母开头、2~32 位，仅含字母 / 数字 / 短横线');
@@ -204,13 +247,13 @@ async function createInstance(body = {}) {
   const password = values.PASSWORD || (mode === 'docker' ? randomPassword() : '');
   const host = mode === 'external'
     ? String(values.HOST || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '')
-    : config.extHost;
+    : (server ? server.host : config.extHost);
   if (mode === 'external' && !/^[A-Za-z0-9._:-]{1,120}$/.test(host)) {
     throw new Error('数据库地址不合法（只填主机名或 IP，不要带协议与路径）');
   }
   const user = values.USER || manifest.defaults.USER || '';
   const dbName = values.DB_NAME || '';
-  if (mode === 'docker') await assertPortFree(port);
+  if (mode === 'docker') await assertPortFree(port, target);
 
   const inst = {
     id: uid('ext'), catalogId: manifest.id, name, mode,
@@ -220,7 +263,7 @@ async function createInstance(body = {}) {
     envKey: manifest.envKey, status: 'installing',
     statusDetail: mode === 'docker' ? '正在创建容器' : '正在校验外部地址',
     containerId: '', containerName: '', volumeName: '',
-    createdAt: new Date().toISOString(),
+    target, repoIds: [], createdAt: new Date().toISOString(),
   };
   update((s) => {
     if (!Array.isArray(s.extensions)) s.extensions = [];
@@ -247,7 +290,13 @@ async function createInstance(body = {}) {
     update((s) => { s.extensions = (s.extensions || []).filter((x) => x.id !== inst.id); });
     throw e;
   }
-  return publicInstance(findInstance(inst.id));
+  // 非 DbGate 实例变化后同步连接列表（已安装 DbGate 时自动重建其容器）。
+  let dbgate = null;
+  if (inst.catalogId !== 'dbgate') {
+    try { dbgate = await require('./extLifecycle').syncDbGate(); } catch { /* 同步失败不影响安装结果 */ }
+  }
+  const result = publicInstance(findInstance(inst.id));
+  return { ...result, dbgate };
 }
 
 async function actionInstance(id, action) {
@@ -267,7 +316,12 @@ async function removeInstance(id, purge = false) {
   if (!inst) throw new Error(`扩展实例不存在：${id}`);
   if (inst.mode === 'docker') await runtime.remove(inst, purge);
   update((s) => { s.extensions = (s.extensions || []).filter((x) => x.id !== id); });
-  return { removed: id, purged: Boolean(purge && inst.mode === 'docker'), volumeKept: inst.mode === 'docker' && !purge };
+  let dbgate = null;
+  try { dbgate = await require('./extLifecycle').syncDbGate(); } catch { /* 同步失败不影响卸载结果 */ }
+  return {
+    removed: id, purged: Boolean(purge && inst.mode === 'docker'),
+    volumeKept: inst.mode === 'docker' && !purge, dbgate,
+  };
 }
 
 async function healthOf(id) {
@@ -297,27 +351,36 @@ function connectionOfInstance(id) {
 }
 
 /** 把 ENV_KEY=连接串 写进工作区内的 .env（保留其它行，同名键覆盖）。 */
-function injectEnv(id, targetPath) {
+function injectEnv(id, targetPath, extraTargets = []) {
   const inst = findInstance(id);
   if (!inst) throw new Error(`扩展实例不存在：${id}`);
-  const rel = String(targetPath || '.env').replace(/\\/g, '/');
-  if (!rel || rel.startsWith('/') || rel.includes('..')) throw new Error('目标必须是工作区内的相对路径');
-  const target = safeWorkspacePath(rel);
   const { line, envKey } = connectionOf(inst);
-  let text = '';
-  try { text = fs.readFileSync(target, 'utf8'); } catch { /* 文件不存在则新建 */ }
   const escaped = envKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`^${escaped}=.*$`, 'm');
-  if (re.test(text)) text = text.replace(re, line);
-  else text = `${text.replace(/\s*$/, '')}${text.trim() ? '\n' : ''}${line}\n`;
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, text, { encoding: 'utf8', mode: 0o600 });
-  try { fs.chmodSync(target, 0o600); } catch { /* Windows 忽略 */ }
-  return { path: relativeWorkspacePath(target), envKey, written: true };
+  // 多实例 / 绑定仓库：可一次注入到多个工作区 .env。
+  const requested = Array.isArray(extraTargets) && extraTargets.length
+    ? extraTargets : [targetPath || '.env'];
+  const paths = [...new Set(requested.map(String))].slice(0, 50);
+  const written = [];
+  for (const item of paths) {
+    const rel = String(item).replace(/\\/g, '/');
+    if (!rel || rel.startsWith('/') || rel.includes('..')) throw new Error('目标必须是工作区内的相对路径');
+    const target = safeWorkspacePath(rel);
+    let text = '';
+    try { text = fs.readFileSync(target, 'utf8'); } catch { /* 文件不存在则新建 */ }
+    if (re.test(text)) text = text.replace(re, line);
+    else text = `${text.replace(/\s*$/, '')}${text.trim() ? '\n' : ''}${line}\n`;
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, text, { encoding: 'utf8', mode: 0o600 });
+    try { fs.chmodSync(target, 0o600); } catch { /* Windows 忽略 */ }
+    written.push(relativeWorkspacePath(target));
+  }
+  return { path: written[0], paths: written, envKey, written: true, count: written.length };
 }
 
 module.exports = {
   listCatalog, listInstances, publicInstance, findInstance,
   createInstance, actionInstance, removeInstance, healthOf, logsOf,
   connectionOfInstance, injectEnv, customDir,
+  allManifests, getManifest, renderEnv, setInstance, templateVars,
 };

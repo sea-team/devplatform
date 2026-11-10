@@ -7,10 +7,26 @@
  */
 const net = require('net');
 const docker = require('./dockerApi');
+const remoteDocker = require('./remoteDocker');
+const dbgateSync = require('./dbgateSync');
 const { config } = require('./core');
 
 const LABEL = 'devplatform.ext';
 let _statusCache = { at: 0, value: null };
+
+/** 实例的 target：'local' | 'server:<id>'。旧数据没有该字段时一律视为本机。 */
+function targetOf(inst) {
+  return inst && inst.target ? String(inst.target) : 'local';
+}
+function isRemote(inst) {
+  return targetOf(inst).startsWith('server:');
+}
+function serverIdOf(inst) {
+  return targetOf(inst).replace(/^server:/, '');
+}
+function containerRef(inst) {
+  return inst.containerName || inst.containerId || `dp-ext-${inst.name}`;
+}
 
 function tcpProbe(host, port, timeout = 1200) {
   return new Promise((resolve) => {
@@ -91,16 +107,38 @@ async function resolveId(inst) {
 async function install(inst, manifest, rendered) {
   const containerName = `dp-ext-${inst.name}`;
   const volumeName = `dp-ext-${inst.name}-data`;
+  const image = `${inst.image}:${inst.tag}`;
+  const dynamic = manifest.dynamicEnv === 'dbgate-connections' ? dbgateSync.connectionsEnv().env : [];
+  const env = [
+    ...Object.entries(rendered.env || {}).map(([k, v]) => `${k}=${String(v)}`),
+    ...dynamic,
+  ];
+
+  // 远程安装：SSH 下发 docker run，凭据走远程 600 权限的 --env-file，不进命令行。
+  if (isRemote(inst)) {
+    const serverId = serverIdOf(inst);
+    const server = remoteDocker.findServer(serverId);
+    const result = await remoteDocker.install(serverId, {
+      id: inst.id, name: containerName, image,
+      bindIp: server.host, port: inst.port, internalPort: inst.internalPort,
+      volumeName, volumePath: manifest.volume, env,
+      command: rendered.command,
+    });
+    const healthy = await waitTcp(inst.host, inst.port, 60000);
+    return {
+      ...result, healthy,
+      detail: healthy ? `已在 ${server.name} 远程安装，端口可连通` : '远程容器已启动，但 60 秒内端口未就绪',
+    };
+  }
+
   const existing = await findContainer(inst);
   if (existing) throw new Error(`同名容器已存在：${containerName}，请先卸载该实例或在 Docker 中手工清理`);
 
-  const image = `${inst.image}:${inst.tag}`;
   if (!(await docker.imageExists(inst.image, inst.tag))) {
     // 镜像未在本地时才拉取；内网离线可先 docker load 导入，再在平台里安装。
     await docker.pullImage(inst.image, inst.tag);
   }
 
-  const env = Object.entries(rendered.env || {}).map(([k, v]) => `${k}=${String(v)}`);
   const spec = {
     Image: image,
     Env: env,
@@ -135,11 +173,18 @@ async function install(inst, manifest, rendered) {
 }
 
 async function action(inst, actionName) {
+  if (!['start', 'stop', 'restart', 'pause', 'unpause'].includes(actionName)) {
+    throw new Error(`不支持的操作：${actionName}`);
+  }
+  if (isRemote(inst)) {
+    return remoteDocker.action(serverIdOf(inst), containerRef(inst), actionName);
+  }
   const id = await resolveId(inst);
   if (actionName === 'start') await docker.startContainer(id);
   else if (actionName === 'stop') await docker.stopContainer(id);
   else if (actionName === 'restart') await docker.restartContainer(id);
-  else throw new Error(`不支持的操作：${actionName}`);
+  else if (actionName === 'pause') await docker.pauseContainer(id);
+  else await docker.unpauseContainer(id);
   let running = false;
   try {
     const info = await docker.inspectContainer(id);
@@ -149,6 +194,10 @@ async function action(inst, actionName) {
 }
 
 async function remove(inst, purge) {
+  if (isRemote(inst)) {
+    const result = await remoteDocker.remove(serverIdOf(inst), containerRef(inst), Boolean(purge));
+    return { removedContainer: result.removed, removedVolume: Boolean(purge && inst.volumeName) };
+  }
   let id = inst.containerId;
   try { id = await resolveId(inst); }
   catch { return { removedContainer: false }; }
@@ -164,8 +213,10 @@ async function remove(inst, purge) {
 }
 
 async function logs(inst, tail) {
+  const n = Math.min(Math.max(Number(tail) || 200, 10), 2000);
+  if (isRemote(inst)) return remoteDocker.logs(serverIdOf(inst), containerRef(inst), n);
   const id = await resolveId(inst);
-  return docker.containerLogs(id, Math.min(Math.max(Number(tail) || 200, 10), 2000));
+  return docker.containerLogs(id, n);
 }
 
 async function health(inst, manifest) {
@@ -173,13 +224,25 @@ async function health(inst, manifest) {
   let execOk = null;
   let execOutput = '';
   try {
-    const id = await resolveId(inst);
-    const info = await docker.inspectContainer(id);
-    running = Boolean(info && info.State && info.State.Running);
-    if (running && manifest.health && manifest.health.cmd && manifest.health.cmd.length) {
-      const result = await docker.execContainer(id, manifest.health.cmd);
-      execOk = result.exitCode === 0;
-      execOutput = String(result.output || '').trim().slice(0, 200);
+    if (isRemote(inst)) {
+      const serverId = serverIdOf(inst);
+      const ref = containerRef(inst);
+      const info = await remoteDocker.inspect(serverId, ref);
+      running = Boolean(info && info.State && info.State.Running);
+      if (running && manifest.health && manifest.health.cmd && manifest.health.cmd.length) {
+        const result = await remoteDocker.exec(serverId, ref, manifest.health.cmd, 30000);
+        execOk = result.exitCode === 0;
+        execOutput = String(result.output || '').trim().slice(0, 200);
+      }
+    } else {
+      const id = await resolveId(inst);
+      const info = await docker.inspectContainer(id);
+      running = Boolean(info && info.State && info.State.Running);
+      if (running && manifest.health && manifest.health.cmd && manifest.health.cmd.length) {
+        const result = await docker.execContainer(id, manifest.health.cmd);
+        execOk = result.exitCode === 0;
+        execOutput = String(result.output || '').trim().slice(0, 200);
+      }
     }
   } catch (e) {
     return { healthy: false, running: false, tcp: false, detail: `容器不可查询：${e.message}` };
@@ -201,7 +264,13 @@ async function externalHealth(inst) {
   };
 }
 
+/** 远程服务器的 Docker 是否可用（安装表单选择远程目标时显示）。 */
+async function remoteDockerStatus(serverId) {
+  try { return await remoteDocker.dockerVersion(serverId); }
+  catch (e) { return { available: false, version: '', error: String(e.message || e) }; }
+}
+
 module.exports = {
-  dockerStatus, install, action, remove, logs, health, externalHealth,
-  tcpProbe,
+  dockerStatus, remoteDockerStatus, install, action, remove, logs, health, externalHealth,
+  tcpProbe, targetOf, isRemote, serverIdOf,
 };

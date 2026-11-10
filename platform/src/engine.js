@@ -6,13 +6,7 @@ const os = require('os');
 const { spawn } = require('child_process');
 const { config, state, update, uid, safeWorkspacePath } = require('./core');
 const { sshExec, sftpPut, collectStatus, aiChat } = require('./integrations');
-const { runContainer } = require('./dockerApi');
-
-// 本地执行器所用的 shell：Windows 依赖 Git Bash；Alpine / busybox 镜像只有 sh。
-function localShell() {
-  if (process.platform === 'win32') return 'bash';
-  return fs.existsSync('/bin/bash') ? '/bin/bash' : 'sh';
-}
+const buildBackends = require('./buildBackends');
 
 /* --------------------------- 多语言构建 Profile -------------------------- */
 // 每个 profile 定义：识别文件、容器镜像、安装 / 编译 / 测试命令、产物目录。
@@ -124,6 +118,8 @@ async function startBuild(payload) {
   const profileId = payload.profile && payload.profile !== 'auto' ? payload.profile : detectProfile(repoPath);
   const profile = profileById(profileId);
   if (!profile) throw new Error(`未知构建类型：${profileId}`);
+  // 构建后端可显式指定，也可由 BUILD_EXECUTOR=auto 按 ssh → docker → wsl → local 降级。
+  const backend = await buildBackends.resolveBackend(payload.backend);
 
   const record = {
     id: uid('build'),
@@ -137,7 +133,10 @@ async function startBuild(payload) {
     durationMs: 0,
     exitCode: null,
     logs: '',
-    executor: config.buildExecutor,
+    executor: backend.id,
+    backend: backend.id,
+    backendLabel: backend.label,
+    backendDetail: backend.detail,
   };
   update((s) => s.builds.unshift(record));
 
@@ -150,26 +149,14 @@ async function startBuild(payload) {
   // 异步执行，HTTP 立即返回 buildId；前端轮询日志。
   (async () => {
     try {
-      append(`[platform] 构建开始 · profile=${profile.id} · executor=${config.buildExecutor}\n`);
-      append(`[platform] 工作目录 ${abs}\n\n`);
-      let code;
-      if (config.buildExecutor === 'docker') {
-        // 平台容器通过 docker.sock 调宿主机 Docker：卷左侧必须是「宿主机可见」的路径。
-        const rel = path.relative(path.resolve(config.workspaceDir), abs).split(path.sep).join('/');
-        const hostPath = config.hostWorkspaceDir
-          ? path.posix.join(config.hostWorkspaceDir, rel)
-          : abs;
-        const image = `${config.dockerImagePrefix || ''}${profile.image}`;
-        append(`[platform] 容器镜像 ${image} · 宿主机目录 ${hostPath}\n`);
-        code = await runContainer({
-          image, hostPath, script,
-          name: `dp-build-${record.id}`,
-          onData: append,
-          timeoutMs: config.buildTimeoutMs,
-        });
-      } else {
-        code = await runProcess(localShell(), ['-c', script], { cwd: abs, onData: append });
-      }
+      append(`[platform] 构建开始 · profile=${profile.id} · backend=${backend.id} (${backend.label})\n`);
+      append(`[platform] 工作目录 ${abs}\n`);
+      append(`[platform] ${backend.detail}\n\n`);
+      const code = await buildBackends.runBuild({
+        backend: backend.id, image: profile.image, script, abs,
+        artifact: profile.artifact, buildId: record.id,
+        onData: append, timeoutMs: config.buildTimeoutMs,
+      });
       record.exitCode = code;
       record.status = code === 0 ? 'success' : 'failed';
       append(`\n[platform] 构建结束 · exit=${code}\n`);

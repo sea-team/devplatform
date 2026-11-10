@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261110a" />
+  <link rel="stylesheet" href="/style.css?v=20261110b" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -27,6 +27,8 @@
         <button class="nav-item" data-view="builds"><span class="ico">⚙</span>构建 · 部署</button>
         <button class="nav-item" data-view="servers"><span class="ico">▣</span>服务器</button>
         <button class="nav-item" data-view="extensions"><span class="ico">▦</span>扩展 / 数据库</button>
+        <button class="nav-item" data-view="gitsrc"><span class="ico">⑃</span>Git 源</button>
+        <button class="nav-item" data-view="docker"><span class="ico">⬡</span>Docker 管理</button>
         <button class="nav-item" data-view="ai"><span class="ico">✦</span>AI 服务配置</button>
         <button class="nav-item" data-view="ops"><span class="ico">◎</span>AI 运维</button>
       </nav>
@@ -99,6 +101,7 @@
             <div class="card">
               <div class="card-head"><h2>新建仓库</h2><span class="muted">创建后自动初始化</span></div>
               <form id="repo-form" class="form">
+                <label>目标 Git 源<select name="sourceId" id="repo-source"></select></label>
                 <label>仓库名称<input name="name" placeholder="my-project" required /></label>
                 <label>描述<input name="description" placeholder="项目简介" /></label>
                 <label class="check"><input type="checkbox" name="private" /> 设为私有仓库</label>
@@ -108,15 +111,134 @@
             <div class="card">
               <div class="card-head"><h2>克隆到工作区</h2><span class="muted">克隆后可直接用在线 IDE 打开</span></div>
               <form id="clone-form" class="form">
-                <label>仓库地址<input name="cloneUrl" placeholder="http://localhost:3000/admin/my-project.git" required /></label>
+                <label>Git 源（用于临时携带凭据）<select name="sourceId" id="clone-source"></select></label>
+                <label>仓库地址<input name="cloneUrl" placeholder="从下方列表点「克隆」自动填入，也可手填 http(s)/git@ 地址" required /></label>
                 <label>本地目录名（可选）<input name="name" placeholder="留空则用仓库名" /></label>
                 <div class="form-actions"><button class="btn btn-block" type="submit">克隆到工作区</button></div>
               </form>
+              <div class="hint" style="margin-top:10px">凭据通过临时 <code>http.extraHeader</code> 传递，不会写入 .git/config 或落到磁盘。</div>
             </div>
           </div>
           <div class="card">
             <div class="card-head"><h2>仓库列表</h2><button class="btn btn-ghost btn-sm" data-reload="repos">刷新</button></div>
+            <div class="hint" id="repo-source-hint">聚合平台自带 Gitea 与所有已登记的外部 Git 源</div>
             <div id="repo-list" class="table-wrap"></div>
+          </div>
+        </section>
+
+        <!-- 外部 Git 源 -->
+        <section class="page" id="view-gitsrc">
+          <div class="card">
+            <div class="card-head"><h2>登记外部 Git 源</h2><span class="muted">GitHub / 自建 Gitea / GitLab</span></div>
+            <div class="hint" id="gitsrc-hint">平台自带 Gitea 已内置；登记外部源后，仓库列表会一并聚合，可直接克隆到工作区并用在线 IDE 开发。</div>
+            <form id="gitsrc-form" class="form" style="margin-top:14px">
+              <div class="grid-2">
+                <label>名称<input name="label" placeholder="例如 公司 Gitea" required /></label>
+                <label>类型<select name="type">
+                  <option value="gitea">Gitea / 兼容 API</option>
+                  <option value="github">GitHub</option>
+                  <option value="gitlab">GitLab</option>
+                  <option value="generic">其它（Gitea 兼容）</option>
+                </select></label>
+                <label>服务地址<input name="baseUrl" placeholder="https://api.github.com 或 http://10.0.0.246:3000" required /></label>
+                <label>用户名（可选）<input name="username" placeholder="GitLab / 自建服务可留空" /></label>
+              </div>
+              <label>访问令牌 Token<input name="token" type="password" placeholder="ghp_... / Gitea Token / GitLab PAT" required /></label>
+              <div class="form-actions"><button class="btn btn-primary" type="submit">登记 Git 源</button><span class="muted">Token 只写入本机 state.json（600 权限），列表接口一律脱敏</span></div>
+            </form>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>已登记的源</h2><button class="btn btn-ghost btn-sm" data-reload="gitsrc">刷新</button></div>
+            <div id="gitsrc-list" class="table-wrap"></div>
+          </div>
+          <div class="card" id="gitsrc-repos-card" hidden>
+            <div class="card-head"><h2 id="gitsrc-repos-title">源仓库列表</h2><button class="btn btn-ghost btn-sm" id="gitsrc-repos-close">收起</button></div>
+            <div class="hint">点「克隆」把地址填入「Git 仓库」页的克隆表单，凭据由平台临时携带。</div>
+            <div id="gitsrc-repos" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+        </section>
+
+        <!-- Docker 管理 -->
+        <section class="page" id="view-docker">
+          <div class="card">
+            <div class="card-head"><h2>Docker 运行环境</h2>
+              <select id="docker-target" style="max-width:280px"><option value="local">本机 Docker</option></select>
+            </div>
+            <div class="hint" id="docker-hint">容器 / 镜像 / 存储卷 / 网络 / 编排模板 / 设置，参照宝塔 Docker 模块组织。</div>
+            <div class="hint" id="docker-status" style="margin-top:8px">检测中…</div>
+            <div class="docker-tabs" id="docker-tabbar">
+              <button class="btn btn-sm docker-tab active" data-docker-tab="containers">容器</button>
+              <button class="btn btn-sm docker-tab" data-docker-tab="images">镜像</button>
+              <button class="btn btn-sm docker-tab" data-docker-tab="volumes">存储卷</button>
+              <button class="btn btn-sm docker-tab" data-docker-tab="networks">网络</button>
+              <button class="btn btn-sm docker-tab" data-docker-tab="templates">编排模板</button>
+              <button class="btn btn-sm docker-tab" data-docker-tab="settings">设置 / 审计</button>
+            </div>
+          </div>
+
+          <div class="card docker-panel" id="docker-panel-containers">
+            <div class="card-head"><h2>容器</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
+            <div class="hint">带 devplatform.ext 标签的是平台自建容器，可直接管理；其它容器默认只读，启停 / 删除需二次确认。</div>
+            <div id="docker-containers" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+
+          <div class="card docker-panel" id="docker-panel-images" hidden>
+            <div class="card-head"><h2>镜像</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
+            <div class="grid-2" style="margin-top:12px">
+              <form id="docker-pull-form" class="form">
+                <label>拉取镜像<div class="row"><input name="image" placeholder="mysql" required /><input name="tag" placeholder="8.4" value="latest" style="max-width:110px" /></div></label>
+                <div class="form-actions"><button class="btn btn-primary btn-sm" type="submit">拉取镜像</button></div>
+              </form>
+              <form id="docker-load-form" class="form">
+                <label>离线导入（≤100MB tar）<input type="file" name="file" accept=".tar,.tar.gz" /></label>
+                <label>或填写服务器上已有路径<input name="path" placeholder="/data/images/mysql.tar（大镜像推荐）" /></label>
+                <div class="form-actions"><button class="btn btn-sm" type="submit">导入镜像</button></div>
+              </form>
+            </div>
+            <div id="docker-images" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+
+          <div class="card docker-panel" id="docker-panel-volumes" hidden>
+            <div class="card-head"><h2>存储卷</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
+            <form id="docker-volume-form" class="form row" style="margin-top:12px">
+              <input name="name" placeholder="新卷名称" required />
+              <button class="btn btn-sm btn-primary" type="submit">创建卷</button>
+            </form>
+            <div id="docker-volumes" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+
+          <div class="card docker-panel" id="docker-panel-networks" hidden>
+            <div class="card-head"><h2>网络</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
+            <form id="docker-network-form" class="form row" style="margin-top:12px">
+              <input name="name" placeholder="新网络名称" required />
+              <button class="btn btn-sm btn-primary" type="submit">创建网络</button>
+            </form>
+            <div id="docker-networks" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+
+          <div class="card docker-panel" id="docker-panel-templates" hidden>
+            <div class="card-head"><h2>Compose 编排模板</h2><span class="muted">只登记文本，不在平台内执行，避免任意编排执行入口</span></div>
+            <form id="docker-template-form" class="form" style="margin-top:12px">
+              <div class="grid-2">
+                <label>模板名称<input name="name" placeholder="lnmp" required /></label>
+                <label>说明<input name="description" placeholder="用途描述" /></label>
+              </div>
+              <label>YAML 内容<textarea name="content" rows="7" placeholder="services: ..." required></textarea></label>
+              <div class="form-actions"><button class="btn btn-primary btn-sm" type="submit">保存模板</button></div>
+            </form>
+            <div id="docker-templates" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+
+          <div class="card docker-panel" id="docker-panel-settings" hidden>
+            <div class="card-head"><h2>设置与操作审计</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
+            <div class="hint">Docker 端点、版本与安全策略；非平台容器的所有写操作都会记录在这里。</div>
+            <pre class="log" id="docker-settings" style="margin-top:12px">—</pre>
+            <div id="docker-audit" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+
+          <div class="card" id="docker-log-card" hidden>
+            <div class="card-head"><h2>容器日志 / 输出</h2><button class="btn btn-ghost btn-sm" id="docker-log-close">收起</button></div>
+            <pre class="log" id="docker-log">—</pre>
           </div>
         </section>
 
@@ -179,6 +301,8 @@
                 <label>项目目录（相对工作区）<input name="repoPath" placeholder="my-project" required /></label>
                 <label>构建类型<select name="profile" id="profile-select"></select></label>
               </div>
+              <label>编译环境 / 构建后端<select name="backend" id="build-backend"></select></label>
+              <div class="hint" id="build-backends">检测中：Windows 无 Docker 时自动把编译任务推到已登记的 Linux 服务器，不引入 microVM。</div>
               <label class="check"><input type="checkbox" name="runTests" checked /> 构建后运行测试</label>
               <label class="check"><input type="checkbox" name="autoDeploy" id="auto-deploy" /> 构建成功后自动部署</label>
               <div class="grid-3" id="deploy-fields" hidden>
@@ -256,6 +380,21 @@
           <div class="card" id="ext-log-card" hidden>
             <div class="card-head"><h2>容器日志</h2><button class="btn btn-ghost btn-sm" id="ext-log-close">收起</button></div>
             <pre class="log" id="ext-log">—</pre>
+          </div>
+          <div class="card" id="ext-repos-card" hidden>
+            <div class="card-head"><h2 id="ext-repos-title">绑定仓库</h2><button class="btn btn-ghost btn-sm" id="ext-repos-close">收起</button></div>
+            <div class="hint">绑定后「注入 .env」可一次写入这些仓库目录下的 .env，供多项目共用同一个数据库实例。</div>
+            <div id="ext-repos-options" class="ext-grid" style="margin-top:12px"></div>
+            <div class="form-actions" style="margin-top:12px"><button class="btn btn-primary btn-sm" id="ext-repos-save">保存绑定</button></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>数据库管理工具</h2><button class="btn btn-ghost btn-sm" data-reload="dbgate">刷新</button></div>
+            <div id="ext-dbgate" class="hint">检测中…</div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>备份存档</h2><button class="btn btn-ghost btn-sm" data-reload="backups">刷新</button></div>
+            <div class="hint">升级前会自动备份；恢复会覆盖当前数据，需要二次确认。存档保存在 data/backups/。</div>
+            <div id="ext-backups" class="table-wrap" style="margin-top:12px"></div>
           </div>
         </section>
 
@@ -359,6 +498,6 @@
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261110a"></script>
+  <script src="/app.js?v=20261110b"></script>
 </body>
 </html>

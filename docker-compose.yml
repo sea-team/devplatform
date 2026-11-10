@@ -85,8 +85,17 @@ services:
       WORKSPACE_DIR: /workspace
       DATA_DIR: /app/data
       # 正常模式：不提供演示数据，外部服务不可达时会直接显示真实错误。
-      BUILD_EXECUTOR: ${BUILD_EXECUTOR:-local}
+      # 构建后端 auto/ssh/docker/wsl/local 见 README §20；auto 在容器里会优先探测登记过的 SSH 服务器。
+      BUILD_EXECUTOR: ${BUILD_EXECUTOR:-auto}
       BUILD_TIMEOUT_MS: ${BUILD_TIMEOUT_MS:-900000}
+      HOST_WORKSPACE_DIR: ${HOST_WORKSPACE_DIR:-}
+      DOCKER_IMAGE_PREFIX: ${DOCKER_IMAGE_PREFIX:-}
+      DOCKER_HOST: ${DOCKER_HOST:-}
+      DP_BUILD_SERVER_ID: ${DP_BUILD_SERVER_ID:-}
+      DP_REMOTE_TMP_DIR: ${DP_REMOTE_TMP_DIR:-/tmp/devplatform}
+      # 平台在容器内时，扩展容器绑在宿主机上、连接串也要写宿主机 IP（§19.6）。
+      DP_EXT_HOST: ${DP_EXT_HOST:-127.0.0.1}
+      DP_EXT_BIND_IP: ${DP_EXT_BIND_IP:-127.0.0.1}
     volumes:
       - ./workspace:/workspace
       - ./data/platform:/app/data

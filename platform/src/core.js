@@ -31,7 +31,6 @@ const config = {
   openlistUser: env('OPENLIST_USER', 'admin'),
   openlistPassword: env('OPENLIST_PASSWORD'),
   workspaceDir: env('WORKSPACE_DIR', path.join(ROOT, 'workspace')),
-  buildExecutor: env('BUILD_EXECUTOR', 'local'),
   // 容器化构建：平台自身跑在容器里时，docker.sock 属于宿主机，
   // 必须把容器内 /workspace/... 映射成宿主机上的真实路径，否则挂载的是空目录。
   hostWorkspaceDir: env('HOST_WORKSPACE_DIR'),
@@ -42,6 +41,14 @@ const config = {
   // 平台本体跑在容器里时，容器内的 127.0.0.1 不是宿主机，需由 compose 注入宿主机 IP。
   extBindIp: env('DP_EXT_BIND_IP', '127.0.0.1'),
   extHost: env('DP_EXT_HOST', '127.0.0.1'),
+  // 构建后端：local / docker / wsl / ssh / auto（按可用性自动降级，见 buildBackends.js）。
+  buildExecutor: env('BUILD_EXECUTOR', 'local'),
+  // WSL 发行版名（仅 win32 + wsl 后端使用）；留空则由 wsl.exe 使用默认发行版。
+  wslDistro: env('DP_WSL_DISTRO'),
+  // 远程构建时优先使用的服务器 id；留空则取第一台可用的 Linux 服务器。
+  buildServerId: env('DP_BUILD_SERVER_ID'),
+  // 远程 docker 数据的暂存目录（镜像 tar、备份文件）。
+  remoteTmpDir: env('DP_REMOTE_TMP_DIR', '/tmp/devplatform'),
 };
 
 function defaultState() {
@@ -51,6 +58,9 @@ function defaultState() {
     builds: [],
     deploys: [],
     extensions: [],
+    gitSources: [],
+    backups: [],
+    composeTemplates: [],
   };
 }
 

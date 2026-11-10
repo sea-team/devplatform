@@ -29,12 +29,14 @@ function endpoint() {
   return { socketPath: SOCKET_PATH, kind: 'socket' };
 }
 
-function request(method, path, body, { stream = false, binary = false, timeout = 0 } = {}) {
+function request(method, path, body, { stream = false, binary = false, timeout = 0, rawBody = false, contentType = '' } = {}) {
   return new Promise((resolve, reject) => {
-    const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+    // rawBody=true 时 body 已是 Buffer（镜像 tar / 容器归档），不再做 JSON 序列化。
+    const payload = body === undefined ? null
+      : (rawBody ? (Buffer.isBuffer(body) ? body : Buffer.from(body)) : Buffer.from(JSON.stringify(body)));
     const headers = {};
     if (payload) {
-      headers['content-type'] = 'application/json';
+      headers['content-type'] = contentType || (rawBody ? 'application/x-tar' : 'application/json');
       headers['content-length'] = String(payload.length);
     } else if (method === 'POST' || method === 'PUT') {
       headers['content-length'] = '0';
@@ -95,9 +97,11 @@ async function version() {
   return request('GET', '/version', undefined, { timeout: 3000 });
 }
 
-async function listContainers() {
-  const filters = JSON.stringify({ label: ['devplatform.ext=1'] });
-  return request('GET', `/containers/json?${qs({ all: 1, filters })}`, undefined, { timeout: 8000 });
+/** scope='platform' 只列自建扩展容器（安装器用）；scope='all' 列宿主机全部容器（Docker 管理面板用）。 */
+async function listContainers(scope = 'platform') {
+  const params = { all: 1 };
+  if (scope !== 'all') params.filters = JSON.stringify({ label: ['devplatform.ext=1'] });
+  return request('GET', `/containers/json?${qs(params)}`, undefined, { timeout: 8000 });
 }
 
 async function inspectContainer(id) {
@@ -160,7 +164,11 @@ async function containerLogs(id, tail = 200) {
   const buf = await request('GET', `/containers/${encodeURIComponent(id)}/logs?${qs({
     stdout: 1, stderr: 1, tail, timestamps: 0,
   })}`, undefined, { binary: true, timeout: 15000 });
-  // 扩展容器以 Tty=true 创建，日志是纯文本，没有 8 字节帧头。
+  // 扩展容器以 Tty=true 创建，日志是纯文本；宿主机上其它容器可能是 Tty=false 的复用帧。
+  if (buf.length >= 8 && buf[0] <= 2) {
+    const size = buf.readUInt32BE(4);
+    if (size > 0 && size <= buf.length - 8) return demux(buf);
+  }
   return buf.toString('utf8');
 }
 
@@ -176,11 +184,110 @@ async function execContainer(id, cmd) {
   return { exitCode: Number((info && info.ExitCode) || 0), output: demux(buf) };
 }
 
+/* ------------------- Docker 管理面板（全量资源） ------------------- */
+// 与扩展安装共用同一套 request/endpoint，不引入 docker CLI 依赖。
+
+async function listImages() {
+  return request('GET', '/images/json', undefined, { timeout: 10000 });
+}
+
+async function inspectImage(id) {
+  return request('GET', `/images/${encodeURIComponent(id)}/json`, undefined, { timeout: 8000 });
+}
+
+async function removeImage(id, force = false) {
+  return request('DELETE', `/images/${encodeURIComponent(id)}?${qs({ force: force ? 1 : 0 })}`,
+    undefined, { timeout: 30000 });
+}
+
+/** 离线镜像导入：body 是 `docker save` 产出的 tar；返回逐行进度文本。 */
+async function loadImage(tarBuffer) {
+  if (!Buffer.isBuffer(tarBuffer) || !tarBuffer.length) throw new Error('镜像 tar 为空');
+  const buf = await request('POST', '/images/load', tarBuffer,
+    { binary: true, rawBody: true, contentType: 'application/x-tar', timeout: 600000 });
+  return String(buf.toString('utf8')).trim().slice(0, 4000);
+}
+
+/** 导出镜像为 tar（宝塔「导出镜像」）。 */
+async function saveImage(id) {
+  return request('GET', `/images/${encodeURIComponent(id)}/get`, undefined,
+    { binary: true, timeout: 600000 });
+}
+
+async function listVolumes() {
+  const data = await request('GET', '/volumes', undefined, { timeout: 10000 });
+  return (data && data.Volumes) || [];
+}
+
+async function createVolume(name, labels = {}) {
+  return request('POST', '/volumes/create', { Name: name, Labels: labels }, { timeout: 15000 });
+}
+
+async function inspectVolume(name) {
+  return request('GET', `/volumes/${encodeURIComponent(name)}`, undefined, { timeout: 8000 });
+}
+
+async function listNetworks() {
+  return request('GET', '/networks', undefined, { timeout: 10000 });
+}
+
+async function createNetwork(name, driver = 'bridge') {
+  return request('POST', '/networks/create', { Name: name, Driver: driver }, { timeout: 15000 });
+}
+
+async function removeNetwork(id) {
+  return request('DELETE', `/networks/${encodeURIComponent(id)}`, undefined, { timeout: 15000 });
+}
+
+async function pauseContainer(id) {
+  return request('POST', `/containers/${encodeURIComponent(id)}/pause`, undefined, { timeout: 15000 });
+}
+
+async function unpauseContainer(id) {
+  return request('POST', `/containers/${encodeURIComponent(id)}/unpause`, undefined, { timeout: 15000 });
+}
+
+/** 单次资源快照（stream=false），用于容器列表上的 CPU / 内存列。 */
+async function containerStats(id) {
+  return request('GET', `/containers/${encodeURIComponent(id)}/stats?stream=0`,
+    undefined, { timeout: 10000 });
+}
+
+/** 容器内文件读（tar 流），用于备份与「容器目录」查看。 */
+async function getArchive(id, containerPath) {
+  return request('GET', `/containers/${encodeURIComponent(id)}/archive?${qs({ path: containerPath })}`,
+    undefined, { binary: true, timeout: 120000 });
+}
+
+/** 容器内文件写（tar 流），用于恢复。 */
+async function putArchive(id, containerPath, tarBuffer) {
+  return request('PUT', `/containers/${encodeURIComponent(id)}/archive?${qs({ path: containerPath })}`,
+    tarBuffer, { binary: true, rawBody: true, contentType: 'application/x-tar', timeout: 120000 });
+}
+
+/** 一次性容器 exec，返回退出码与输出；备份 / 恢复命令都走这里。 */
+async function execContainerTimed(id, cmd, timeout = 120000) {
+  const created = await request('POST', `/containers/${encodeURIComponent(id)}/exec`, {
+    AttachStdout: true, AttachStderr: true, AttachStdin: false, Tty: false, Cmd: cmd,
+  }, { timeout: 15000 });
+  if (!created || !created.Id) throw new Error('Docker 未返回 exec ID');
+  const buf = await request('POST', `/exec/${encodeURIComponent(created.Id)}/start`, {
+    Detach: false, Tty: false,
+  }, { binary: true, timeout });
+  const info = await request('GET', `/exec/${encodeURIComponent(created.Id)}/json`, undefined, { timeout: 8000 });
+  return { exitCode: Number((info && info.ExitCode) || 0), output: demux(buf) };
+}
+
 module.exports = {
   runContainer, SOCKET_PATH, endpoint, request,
   ping, version, listContainers, inspectContainer, imageExists, pullImage,
   createContainer, startContainer, stopContainer, restartContainer,
   removeContainer, removeVolume, containerLogs, execContainer,
+  listImages, inspectImage, removeImage, loadImage, saveImage,
+  listVolumes, createVolume, inspectVolume,
+  listNetworks, createNetwork, removeNetwork,
+  pauseContainer, unpauseContainer, containerStats,
+  getArchive, putArchive, execContainerTimed,
 };
 
 /**

@@ -28,7 +28,11 @@ const missing = refs.filter((id) => !ids.has(id) && id !== 'ops-hint');
 note(missing.length === 0, 'app.js 引用的静态 id 均存在', missing.length ? `缺失：${missing.join(', ')}` : `${refs.length} 个引用`);
 
 const sections = [...html.matchAll(/class="page" id="view-([a-z]+)"/g)].map((m) => m[1]);
-note(sections.length === 9, '9 个模块页面已转为可标签化的 .page', sections.join(', '));
+note(sections.length === 11 && sections.includes('gitsrc') && sections.includes('docker'),
+  '11 个模块页面已转为可标签化的 .page（含 Git 源 / Docker 管理）', sections.join(', '));
+note(['/git-sources', '/docker/overview', '/extensions/backups', '/extensions/dbgate', '/builds/backends']
+  .every((p) => app.includes(p)) && app.includes('function loadGitSources') && app.includes('function loadDocker'),
+'Git 源 / Docker 管理 / 备份 / DbGate / 构建后端接口已全部接线');
 
 const scripts = [...html.matchAll(/<script src="\/vendor\/([^"]+)"/g)].map((m) => m[1]);
 const cmIndex = scripts.indexOf('codemirror.js');
