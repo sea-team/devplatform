@@ -154,4 +154,17 @@ A: 不会覆盖已有凭据；安装器只补齐缺失项。改完 .env 需完�
 Q: 我只想连到别处已经部署好的三个服务？
 A: 不用 INSTALL.bat，把地址与 Token 填进 platform\dist\.env 后重启 exe。
 
+Q: 项目要用 MySQL / PostgreSQL / Redis，或要连 GitHub 上的仓库，怎么弄？
+A: 控制台左侧新增了「扩展 / 数据库」「Git 源」「Docker 管理」三个模块：
+   - 有 Docker：可一键装数据库容器，自动生成密码与连接串并注入项目 .env；
+     还能装 DbGate（开源多数据库 Web 客户端），连接会自动同步。
+   - 无 Docker：自动降级为「外部连接」，只登记已有数据库地址与凭据，
+     不安装、不下载任何东西；本机无需 Docker 也能用。
+   - 外部 Git 源：登记 GitHub / 自建 Gitea / GitLab 后，仓库列表会自动聚合，
+     Token 只存本机且脱敏，克隆时不写入 .git/config。
+   - 需要编译环境但本机无 Docker：在「服务器」页登记一台 Linux 机器，
+     构建后端 auto 会自动走 SSH 远程容器构建，不需要本机装 Docker Desktop。
+   数据库镜像不含在本安装包内（体积 GB 级且依赖容器运行时）；
+   内网可先用「Docker 管理 · 镜像」离线导入，详见 README 第 19-25 章。
+
 完整文档：https://github.com/sea-team/devplatform#readme

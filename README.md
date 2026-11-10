@@ -469,7 +469,9 @@ node scripts/verify.js http://<host>:9000
 | 远程文件 | `GET /servers/:id/files`、`GET/PUT /servers/:id/files/content`、`GET .../files/download`、`PUT .../files/upload`、`POST .../files/create\|mkdir\|rename\|delete` |
 | Web 终端 | `POST .../terminal/open`、`GET .../terminal/stream`（SSE）、`POST .../terminal/input\|resize\|close`、`GET .../terminals` |
 | AI | `GET/POST /ai/providers`、`DELETE /ai/providers/:id`、`GET /ai/local/programs`、`POST /ai/local/test`、`POST /ai/test`、`POST /ai/chat`、`POST /ai/ops`、`GET /ai/tools` |
-| 扩展 / 数据库 | `GET /extensions/catalog`、`GET/POST/DELETE /extensions/instances[/:id]`、`POST .../action\|health\|inject`、`GET .../connection\|logs`（§19） |
+| 扩展 / 数据库 | `GET /extensions/catalog`、`GET/POST/DELETE /extensions/instances[/:id]`、`POST .../action\|health\|inject\|backup\|upgrade`、`GET/PUT .../repos`、`GET .../connection\|logs`、`GET/POST/DELETE /extensions/backups...`、`GET/POST /extensions/dbgate...`（§19 / §23） |
+| 外部 Git 源 | `GET/POST /git-sources`、`PUT/DELETE /git-sources/:id`、`POST .../test`、`GET .../repos\|branches`、`GET /builds/backends`（§21） |
+| Docker 管理 | `GET /docker/overview\|audit`、容器 `POST .../action\|exec`、`GET .../logs\|inspect\|stats`、镜像 `POST /docker/images/pull\|load\|load-path\|remove`、`GET /docker/images/export`、卷 / 网络 / 模板 CRUD（§22） |
 
 需要鉴权时，SSE 与下载链接用 `?token=<ADMIN_TOKEN>`，其余用 `Authorization: Bearer <ADMIN_TOKEN>`。
 
@@ -531,8 +533,9 @@ devplatform/
 │   │   └── vendor/         # 离线 xterm.js + CodeMirror 5（无需外网）
 │   └── src/                # core / mini / server / integrations / engine
 │                           # dockerApi / remoteOps / fileTypes
-│                           # catalog（内置扩展清单）/ extensions（实例管理）
-│                           # extRuntime（扩展容器运行时适配）（§19）
+│                           # catalog / extensions / extRuntime（§19）
+│                           # gitSources / remoteDocker / buildBackends（§20-21）
+│                           # dockerPanel / backup / extLifecycle / dbgateSync（§22-24）
 ├── scripts/                # remote.js、setup-integrations.sh、verify.js、
 │                           # check-frontend.js、sync-integrations.js（本机配置同步）
 ├── windows/                # Windows 一键安装：install.bat / install.ps1 /
@@ -545,7 +548,9 @@ devplatform/
 │   └── runtime/            # 运行时（不入库）：bin/ 下载的 exe、gitea/ 仓库、
 │                           # openlist/ 数据、ide/、logs/、services.json、pids.txt
 ├── data/                   # 运行时状态（不入库，600/700）
-│   └── extensions/         # 自定义扩展清单 *.json（不入库，§19.7）
+│   ├── extensions/         # 自定义扩展清单 *.json（不入库，§19.7）
+│   ├── backups/            # 数据库逻辑备份存档（§23.2）
+│   └── images/             # 本机离线镜像 tar（§22.3）
 └── workspace/              # 克隆与构建工作区（不入库）
 ```
 
@@ -570,7 +575,7 @@ git commit -m "feat: ..."
 - Swift、TOML 等无对应 CodeMirror 模式时按纯文本编辑。
 - 动态标签（文件 / 编辑器 / 终端）不跨浏览器刷新恢复；模块标签顺序会恢复。
 - 一期未实现多租户 / 细粒度权限、GitOps 自动触发、Web 终端文件上传进度条。
-- 扩展 / 数据库目前只做本机 Docker 安装与外部连接登记；SSH 远程安装、备份恢复、版本升级与离线镜像导入属于完整版范围（§19.9）。
+- 扩展 / 数据库：SSH 远程安装、备份恢复、版本升级、离线镜像导入均已实现（§20–§24）；仍不支持 SQL 终端动态标签与外部连接模式的备份 / 升级（§19.9）。
 - `wsl.exe` 在部分受安全策略管控的 Windows 沙箱内会被拦截，需在真实宿主机运行本地 CLI 能力。
 
 ---
@@ -1384,9 +1389,226 @@ Get-FileHash .\devplatform-windows.zip -Algorithm SHA256
 | `GET /extensions/instances/:id/logs?tail=200` | 容器日志 |
 | `DELETE /extensions/instances/:id?purge=1` | 卸载；`purge=1` 才同时删除数据卷 |
 
-### 19.9 当前限制与后续
+### 19.9 当前能力边界
 
-- 只做**本机 Docker** 安装；「SSH 到远程 Linux 服务器装容器」属于完整版（现有 `remoteOps.js` 已具备 SSH 执行能力，接线即可）。
-- 未实现备份 / 恢复、版本升级、一个实例绑定多个仓库、离线镜像包导入与 SQL 终端标签；这些属于完整版范围。
-- 外部连接模式只做 TCP 可达性探测，不会验证账号密码是否正确。
-- 容器日志直接在面板内展示，未做成动态标签；卸载后命名卷保留但面板不再显示，需用 `docker volume ls` 查看。
+§19 是「标准版」的基线，**v0.3.0 起下面的能力已全部补齐**，见 §20–§24：
+
+| 早期限制 | 现在的实现 | 章节 |
+|---|---|---|
+| 只能本机 Docker 安装 | 实例支持 `target: local / server:<id>`，SSH 远程下发 `docker run` | §20.2 / §23.2 |
+| 无备份 / 恢复 | 内置 mysqldump / pg_dumpall / Redis RDB 模板，存档可下载 · 上传 · 恢复 · 删除 | §23.3 |
+| 无版本升级 | 换 tag 前强制自动备份 → 保留命名卷重建 → 健康检查失败自动回滚 | §23.4 |
+| 一个实例不能绑多仓库 | `repoIds[]`，注入 `.env` 可一次写多个工作区目录 | §23.5 |
+| 无离线镜像导入 | Docker 管理·镜像支持 ≤100MB tar 直传与「服务器已有路径」导入 | §22.3 |
+| 无多数据库 Web 工具 | 内置 DbGate 清单（GPL-3.0），连接随实例增删自动同步 | §24 |
+
+仍然存在的边界：
+
+- 外部连接（`external`）模式只做 TCP 可达性探测，**不会验证账号密码是否正确**，也不能备份 / 升级 / 启停。
+- 容器日志与 SQL 查询在面板内展示，**未做成动态标签**；Docker 管理的 Compose 模板只保存文本，不在平台内执行。
+- 卸载时默认保留命名卷，面板不再显示该卷；可用「Docker 管理 · 存储卷」查看，或 `docker volume ls`。
+- 远程目标只支持**已登记在「服务器」页**的 Linux 机器（SSH 凭据复用 `state.json`），不支持临时填地址。
+
+---
+
+## 20. 编译环境与可降级的构建后端
+
+### 20.1 结论：用 Docker 体系，不引入 microVM
+
+microVM（Firecracker / Kata / gVisor）解决的是「隔离不可信代码 / 多租户强隔离」，而编译环境要的是「**可复现工具链 + 不污染宿主机**」，两者不是同一问题。容器已经够用，且有三个硬约束让 microVM 在本平台不成立：
+
+| 约束 | 说明 |
+|---|---|
+| 平台要求 | Firecracker 依赖 Linux KVM，Windows 原生跑不了；Windows 上的 Docker Desktop 本身已跑在 Hyper-V / WSL2 虚拟机里，等于已有一层 VM 边界 |
+| WSL2 定位 | 微软官方明确 WSL2 **不是安全沙箱**；Docker Sandboxes 之类 microVM 方案又要求先装 Docker Desktop，恰好不满足「无 Docker」前提 |
+| 兼容性 | microVM 不兼容 OCI 镜像，会把 `engine.js` 里六套 `PROFILES` 白名单全部推翻，只换来开发编译并不需要的高隔离级别 |
+
+因此 `BUILD_EXECUTOR` 从 `local | docker` 扩成 **可降级的四级后端**，让「Windows 无 Docker」由远程 Linux 服务器兜底——这与本轮的 SSH 远程安装、远程 Docker 管理共用同一条 `sshExec` / `sftpPut` 通道。
+
+### 20.2 四级降级
+
+| 后端 | 执行方式 | 适用 |
+|---|---|---|
+| `ssh`（优先） | 打包工作区 → SFTP 上传 → 目标机 `docker run` 编译 → 产物 tar 回传 → 清理远端临时目录 | **Windows 无 Docker 的主路径**；已有 Linux 构建机 |
+| `docker` | 本机 Docker Engine API 起一次性构建容器（沿用 `PROFILES` 官方镜像） | Linux 服务器 / 装了 Docker Desktop 的 Windows |
+| `wsl` | `wsl.exe -- bash -s`，把 Windows 路径转成 `/mnt/<盘符>/...` | Windows 有 WSL2 但没 Docker Desktop |
+| `local` | 平台进程内 `bash -c` 直接跑工具链（无隔离，最后兜底） | 已有全套本机工具链 |
+
+`BUILD_EXECUTOR=auto`（推荐）按 `ssh → docker → wsl → local` 依次探测，选第一个可用后端；`GET /api/builds/backends` 返回四项实时可用性与当前选择，构建页顶部显示实际后端。显式指定某后端而它不可用时**直接报错，不静默降级**，避免"以为在容器里编译、其实污染了宿主机"。
+
+远程构建的日志由 `sshExec` 一次性返回（非实时流），这是它与本机后端唯一的体验差异；产物目录会被打回工作区，本地与远程结果一致。
+
+### 20.3 相关配置
+
+| 变量 | 默认 | 用途 |
+|---|---|---|
+| `BUILD_EXECUTOR` | `local` | `auto / ssh / docker / wsl / local`；`.env.example` 推荐 `auto` |
+| `DP_BUILD_SERVER_ID` | 空 | 远程构建优先使用的服务器 id，留空取「服务器」页第一台 |
+| `DP_WSL_DISTRO` | 空 | WSL 发行版名，留空用默认 |
+| `DP_REMOTE_TMP_DIR` | `/tmp/devplatform` | 远程构建 / 备份 / 镜像导入的临时根目录 |
+| `HOST_WORKSPACE_DIR` | — | 平台跑在容器里时，`/workspace` 对应的**宿主机真实路径**（§19.6） |
+
+安全边界：远程构建只使用 `state.json` 里已登记的 SSH 凭据；远端脚本由平台按固定模板拼接，路径与 buildId 全部经 `shq` 转义；临时目录在 `finally` 中清理；`docker run --rm` 不留存容器。
+
+---
+
+## 21. 外部 Git 源（GitHub / 自建 Gitea / GitLab）
+
+### 21.1 定位
+
+平台自带 Gitea 只是**其中一个源**，不是唯一入口。`gitSources.js` 提供统一适配器：内置源恒为 `builtin-gitea`（地址与 Token 来自 `.env`），外部源登记在 `state.gitSources`，两者归一成同一种仓库结构，前端只认一套字段。
+
+| 类型 | API 基址 | 认证头 |
+|---|---|---|
+| `github` | `baseUrl`（默认 `https://api.github.com`） | `Authorization: Bearer <token>` |
+| `gitea` / `generic` | `<baseUrl>/api/v1` | `Authorization: token <token>` |
+| `gitlab` | `<baseUrl>/api/v4` | `PRIVATE-TOKEN: <token>` |
+
+「Git 源」页可登记 / 测试连通 / 查看该源仓库列表 / 删除；「Git 仓库」页自动聚合**所有源**的仓库（单源失败只记入 `errors`，不影响其它源），每个仓库都能一键填入克隆表单或直接开在线 IDE。创建仓库时可选择目标 Git 源，不再只能建到平台自带 Gitea。
+
+### 21.2 凭据不落盘
+
+这是外部源最要紧的一点：Token 只写 `state.json`（`core.save` 强制 600 权限），列表 / 详情接口一律脱敏成 `ghp****876`。克隆时用 `git -c http.extraHeader=<Authorization: Basic ...>` **临时**注入凭据：
+
+- 参数只在本次 `git clone` 进程里出现，**不写进 `.git/config` 的 remote URL**，也不落到工作区任何文件；
+- 附加 `-c http.extraHeaderRedact=true`，并对 stderr 做 `scrub()`，避免失败日志泄漏 Token 或 Base64 串；
+- `GIT_TERMINAL_PROMPT=0`，凭据失效时直接失败而不是卡在交互式输入；
+- SSH 形式（`git@` / `ssh://`）不做任何处理，走本机 SSH 密钥。
+
+### 21.3 API
+
+| 端点 | 用途 |
+|---|---|
+| `GET/POST /git-sources`、`PUT/DELETE /git-sources/:id` | 登记 / 更新 / 删除（内置源不可删，由 `.env` 配置） |
+| `POST /git-sources/:id/test` | 列一次仓库验证连通性与 Token |
+| `GET /git-sources/:id/repos` / `/branches?repo=owner/name` | 单源仓库 / 分支列表 |
+| `GET/POST /repos` | 聚合所有源的仓库 / 在指定 `sourceId` 创建仓库 |
+| `POST /repos/clone` | 带临时凭据克隆到工作区（可选 `sourceId` / `name` / `branch`） |
+
+---
+
+## 22. Docker 管理（宝塔式面板）
+
+### 22.1 六个分区与宝塔对照
+
+| 宝塔模块 | 平台对应 |
+|---|---|
+| 应用商店 / 一键部署 | 就是 §19 的 manifest v1 清单（纯数据，且能自动注入连接串） |
+| 镜像：拉取 / 导入 / 导出 / 删除 | Docker 管理·镜像 |
+| 容器：启停 / 日志 / 终端 / 详情 / 资源 / 批量 | Docker 管理·容器（只读诊断命令走白名单 `exec`） |
+| Compose 模板 | 编排模板：只保存文本，**不在平台内执行**，避免把面板变成任意编排入口 |
+| 网络 / 存储卷 | 同名分区，支持创建与删除 |
+| 设置 / 日志 | 端点 · 版本 · 安全策略 + **操作审计** |
+
+顶部「目标」下拉可切换 `本机 Docker` 或 `server:<id>`——远程目标复用 `remoteDocker.js` 下发 `docker ps / images / volume ls / network ls`，与远程安装、远程构建一条通道。
+
+### 22.2 只读 + 二次确认
+
+带 `devplatform.ext=1` 标签（或 `dp-ext-` / `dp-build-` 前缀）的是平台自建容器，可直接管理。**其余宿主机容器默认只读**：
+
+- 查看状态 / 日志 / 详情 / 资源**无需确认**；
+- 启停 / 重启 / 删除必须带 `confirm=true`，服务端 `assertWritable` 二次校验，前端弹两道确认并明确写出"可能是生产服务"；
+- 删除镜像 / 卷 / 网络**一律**要求确认（不论归属）；
+- 每次写操作写入 `state.dockerAudit`（保留最近 100 条），「设置 / 审计」页可见时间、动作、目标、对象、是否确认。
+
+这一策略与宝塔"所有容器都可删"不同，是为了避免多人共用一个面板时误伤宿主机上的其它服务。
+
+### 22.3 离线镜像导入
+
+| 方式 | 上限 | 用法 |
+|---|---|---|
+| 直传 tar | ≤100 MB（`mini.js` raw body 上限） | 镜像页选 `.tar` / `.tar.gz`，POST `/docker/images/load` |
+| **服务器已有路径** | 无上传限制 | 把 `docker save` 的 tar 放到目标机，填绝对路径；本机路径只允许 `data/images/` 下的文件名（防目录穿越） |
+
+数据库镜像往往 GB 级，**推荐第二种**：内网机器先 `docker load -i /data/images/mysql.tar`，或在安装表单填路径让平台导入；平台检测到本地已有镜像会跳过拉取。导出镜像为 tar 下载，远程目标则提示在服务器上自行执行 `docker save`。
+
+镜像标识常含 `/`（私有仓库），因此删除与导出提供 `/docker/images/remove`、`/docker/images/export?ref=...` 两个 query 形式端点，避免被路由分段拆开。
+
+### 22.4 API 速查
+
+`GET /docker/overview?target=`、`GET /docker/audit`、容器 `POST /docker/containers/:id/action`、`DELETE /docker/containers/:id`、`GET .../logs|inspect|stats`、`POST .../exec`；镜像 `POST /docker/images/pull|load|load-path|remove`、`GET /docker/images/export`；卷 `POST/DELETE /docker/volumes...`；网络 `POST/DELETE /docker/networks...`；模板 `GET/POST/DELETE /docker/templates...`。所有写操作都可带 `target` 与 `confirm`。
+
+---
+
+## 23. 统一运行时：远程安装 · 备份 · 升级 · 绑定仓库
+
+### 23.1 一层运行时，四个模块共用
+
+`extRuntime.js` 按实例的 `target` 分派，避免每个功能各写一套远程逻辑：
+
+| target | 安装 | 健康检查 | 日志 / 启停 | 备份 / 恢复 |
+|---|---|---|---|---|
+| `local` | Docker Engine API 创建长期容器 + 命名卷 | TCP + 容器内 `exec` | Engine API | `exec` + `getArchive` / `putArchive` |
+| `server:<id>` | SSH 下发 `docker run --env-file`（凭据走远端 600 权限文件，不进命令行） | TCP 探测宿主机 IP | `sshExec` 下发 docker CLI | `docker exec` stdout 重定向 → SFTP 拉回 / 灌入 |
+| `external` | 不安装，只登记地址与凭据 | TCP 可达性 | 不可启停 | 不支持 |
+
+远程安装与本机的差异：容器端口绑定在**服务器 IP** 上，连接串的 `host` 也自动取该服务器地址；`targetLabel` 会在实例列表标出是哪台机器。
+
+### 23.2 备份 / 恢复
+
+命令只来自 `backup.js` 的内置白名单模板（清单里只能写枚举 id，**不允许写 shell**），凭据通过容器内环境变量引用，不拼进命令行：
+
+| 清单 | 备份 | 恢复 |
+|---|---|---|
+| MySQL | `mysqldump --all-databases --single-transaction --routines --triggers` | `mysql` 灌入 |
+| PostgreSQL | `pg_dumpall` | `psql -d postgres` |
+| Redis | `redis-cli SAVE` + 读 `dump.rdb` | 覆盖 RDB、清 AOF 后重启容器 |
+
+本机路径：`exec` 生成容器内文件 → `getArchive` 取 tar → 解出**原始 dump 字节**存档；恢复反向操作。远端路径：`docker exec` stdout 重定向 → SFTP 拉回；恢复 `docker exec -i < file`。两条路径存档格式一致，便于下载、查看与人工修复。存档落在 `data/backups/`，恢复必须 `confirm=true` 且类型匹配，平台前端再叠两道确认。
+
+### 23.3 版本升级与自动回滚
+
+`POST /extensions/instances/:id/upgrade { tag }` 的顺序是：**升级前强制自动备份 → 只删容器（命名卷保留）→ 用新 tag 重建 → 端口健康检查 → 失败则回滚旧 tag 并恢复备份**。只有清单 `tags` 里列出的版本可选，同版本或 `external` 实例直接拒绝。成功后同步刷新 DbGate 连接，返回的 `backupId` 可在备份列表里找到那份"升级前自动"存档。
+
+### 23.4 多实例绑定仓库
+
+实例新增 `repoIds[]`。「注入 .env」时若绑定了仓库，可一次写入这些仓库目录下的 `.env`（同名键覆盖、其它行保留、文件 600），适合一个数据库给多个项目共用；未绑定时仍写工作区根目录。仓库候选来自 §21 的**多源聚合列表**，所以外部 GitHub / 自建 Gitea 的仓库同样可绑定。
+
+### 23.5 新增端点
+
+`PUT/GET /extensions/instances/:id/repos`、`POST .../backup`、`POST .../upgrade`、`GET/POST/DELETE /extensions/backups...`、`GET/POST /extensions/dbgate...`；`GET /builds/backends` 返回构建后端可用性。
+
+---
+
+## 24. DbGate：一套工具管多种数据库
+
+### 24.1 选型
+
+| 候选 | 许可 | 覆盖 | 连接可预置 | 判断 |
+|---|---|---|---|---|
+| **DbGate**（采用） | GPL-3.0 社区版免费 | MySQL / MariaDB / PgSQL / SQLServer / Oracle / SQLite / **MongoDB / Redis** / ClickHouse | **环境变量直接注入** | 推荐 |
+| CloudBeaver | Apache 2.0 | JDBC 关系型很全，Redis / MongoDB 在商业版 | 需 GraphQL 或手工配置 | 备选 |
+| Bytebase | MIT | 25 种引擎 | 偏变更审核 / 审计治理，生产还需外部 PgSQL | 不合定位 |
+| phpMyAdmin | 开源 | 仅 MySQL | — | 已排除 |
+
+决定性理由不是"支持得全"，而是**能被平台自动配置**：DbGate 官方镜像支持用 `CONNECTIONS` 加 `LABEL_x / ENGINE_x / SERVER_x / USER_x / PASSWORD_x / PORT_x / DATABASE_x` 预置连接。
+
+### 24.2 自动联动
+
+`dbgateSync.js` 把平台内所有非 dbgate 实例翻译成这组变量；`extRuntime.install` 检测到清单的 `dynamicEnv: 'dbgate-connections'` 时追加进容器 `Env`。实例创建 / 删除 / 升级后 `syncDbGate()` 会**保留命名卷重建 DbGate 容器**（Docker 不允许改运行中容器的 Env），Web 登录信息与查询历史不丢。用户点开就看到全部数据库，不用手工录一遍连接。
+
+DbGate 本身作为一条内置清单（`kind: tool`）加入 manifest v1，因此安装表单、状态、日志、升级、卸载全部自动具备；Web 登录用清单里的 `LOGIN=admin` + 自动生成的 `PASSWORD`（可在实例详情取明文）。扩展页「打开管理界面」按钮与实例列表里的同名按钮直达 `http://<host>:<port>/`。
+
+**无 Docker 的 Windows native 模式**：DbGate 可降级为 `external` 登记（指向机器上已装的 DbGate 桌面版 / 服务），仍可一键复制连接串；不会隐式下载任何东西。
+
+### 24.3 许可说明
+
+DbGate 社区版按 GPL-3.0 分发，平台只提供官方镜像清单与连接预置，不修改、不内嵌其代码；发行包里不包含该镜像（GB 级且依赖容器运行时），首次安装按 §19.3 的镜像分发机制拉取或离线导入。上游许可与来源记录在 `windows/bin/services-manifest.json` 的同类清单里，数据库镜像由运维按自身合规要求引入。
+
+---
+
+## 25. v0.3.0 新增文件与验证
+
+| 文件 | 职责 |
+|---|---|
+| `src/gitSources.js` | 外部 Git 源适配器、多源聚合、临时凭据克隆 |
+| `src/remoteDocker.js` | SSH 下发 docker CLI（安装 / 镜像 / 备份 / 容器管理共用） |
+| `src/buildBackends.js` | 四级构建后端探测与执行 |
+| `src/dockerPanel.js` | 宝塔式 Docker 管理六分区 + 只读策略 + 审计 |
+| `src/backup.js` | 逻辑备份 / 恢复、零依赖 tar 读写 |
+| `src/extLifecycle.js` | 版本升级回滚、DbGate 同步、仓库绑定 |
+| `src/dbgateSync.js` | DbGate 连接环境变量生成 |
+
+前端新增「Git 源」「Docker 管理」两个模块页（共 11 个可标签化模块），扩展页增加备份存档、绑定仓库、打开管理界面、升级等卡片；`public/index.html` 资源版本升至 `?v=20261110b`。
+
+验证方式：`npm run check`（19 个后端模块）、`scripts/check-frontend.js`（静态一致性 + DOM stub 跑 boot）、`scripts/verify.js`；隔离实例冒烟覆盖外部 Git 源登记 / 脱敏 / 连通 / 分支 / 多源聚合 / **真实 git clone**、外部实例绑定仓库与多目录注入、模板 CRUD、路径穿越与缺参校验；Docker Engine API 模拟覆盖容器二次确认与审计、镜像拉取 / 裸 tar 导入 / 含斜杠 ref 导出与删除、卷与网络 CRUD、`mysqldump` 备份 → 下载 → 恢复、tag 升级（升级前自动备份）、DbGate 安装与连接同步、`purge=1` 卸载。完整 SEA 构建验证新增模块打进单文件 exe 后还原运行实例的 `dist`。
