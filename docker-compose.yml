@@ -90,8 +90,9 @@ services:
     volumes:
       - ./workspace:/workspace
       - ./data/platform:/app/data
-      # 启用容器化构建 (BUILD_EXECUTOR=docker) 时再打开下一行。
+      # 启用容器化构建 (BUILD_EXECUTOR=docker) 或「扩展 / 数据库」容器安装（§19）时打开下一行。
       # 注意：挂载 docker.sock 等于把宿主机 root 权限交给该容器，仅限可信内网环境。
+      # 平台在容器内时还需把 DP_EXT_HOST 设为宿主机 IP，否则连接串里的 127.0.0.1 指向平台容器自身。
       # - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "9000:9000"

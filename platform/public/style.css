@@ -192,6 +192,7 @@ tr:last-child td { border-bottom: 0; }
 .badge.amber { background: var(--amber-soft); color: var(--amber); }
 .badge.blue { background: var(--primary-soft); color: var(--primary); }
 .badge.gray { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
+.badge.gray { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
 
 .list { display: flex; flex-direction: column; }
 .list-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--border); }
@@ -421,9 +422,21 @@ tr:last-child td { border-bottom: 0; }
 .term-hint { margin-top: 10px; color: var(--muted); font-size: 12px; }
 .file-btn.btn-sm { cursor: pointer; }
 
+/* 扩展 / 数据库：清单卡片与安装表单 */
+.ext-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.ext-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px; background: var(--surface-2); }
+.ext-card h3 { margin: 0 0 6px; font-size: 14px; font-weight: 650; }
+.ext-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; min-height: 38px; }
+.ext-card .ext-meta { margin-top: 8px; font-size: 11px; color: var(--muted); }
+.ext-card .row { margin-top: 12px; }
+.ext-mode-row { margin-bottom: 14px; }
+.ext-mode-row select { max-width: 320px; }
+.ext-list-url { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; color: var(--muted); word-break: break-all; }
+.ext-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
 @media (max-width: 1100px) {
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
-  .grid-2, .server-grid { grid-template-columns: 1fr; }
+  .grid-2, .server-grid, .ext-grid { grid-template-columns: 1fr; }
   .grid-3 { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 900px) { .pill-mini { display: none; } }

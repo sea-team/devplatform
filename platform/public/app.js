@@ -10,12 +10,13 @@ const VIEW_META = {
   storage: ['存储 / 文件', '基于 OpenList 的多存储挂载、文件管理与 WebDAV'],
   builds: ['构建 · 部署', '多语言自动编译、测试、产物打包与 SSH 自动部署'],
   servers: ['服务器', 'SSH 连接、Web 终端、远程文件管理与实时状态'],
+  extensions: ['扩展 / 数据库', '按通用清单安装管理 MySQL / PostgreSQL / Redis 等中间件'],
   ai: ['AI 服务配置', 'API 服务、宿主机 / WSL 本地 AI 程序与代理'],
   ops: ['AI 运维', '让 AI 查询状态、分析日志并给出建议'],
 };
 const MODULE_ICONS = {
   overview: '◈', repos: '⑂', ide: '⌘', storage: '▤',
-  builds: '⚙', servers: '▣', ai: '✦', ops: '◎',
+  builds: '⚙', servers: '▣', extensions: '▦', ai: '✦', ops: '◎',
 };
 
 let currentView = 'overview';
@@ -1340,11 +1341,140 @@ async function loadOps() {
   } catch (e) { toast(e.message, true); }
 }
 
+/* ----------------------------- 扩展 / 数据库 ----------------------------- */
+// 清单由后端下发（内置 + data/extensions/*.json），前端只按字段声明渲染表单，
+// 不内置任何数据库专属逻辑；新增一种服务只需在后端加一条清单常量。
+const extState = { catalog: null, items: [], manifestId: '', mode: 'external', defaultMode: 'external' };
+
+function extManifest(id) {
+  const items = (extState.catalog && extState.catalog.items) || [];
+  return items.find((m) => m.id === id);
+}
+
+function renderExtRuntime(cat) {
+  const d = cat && cat.docker;
+  const label = $('#ext-runtime');
+  const hint = $('#ext-runtime-hint');
+  if (!d) {
+    label.textContent = '状态未知';
+    hint.textContent = '未能读取运行环境信息，可点击「刷新」重试。';
+    return;
+  }
+  if (d.available) {
+    label.textContent = `Docker 可用 · ${d.mode}${d.version ? ` v${d.version}` : ''}`;
+    hint.textContent = `安装实例会在 ${d.endpoint} 上创建带 devplatform.ext 标签的容器，数据落在命名卷；端口只绑定内网地址。也可切到「外部数据库」只登记连接信息。`;
+  } else {
+    label.textContent = 'Docker 不可用';
+    hint.textContent = `${d.hint}。此时「安装」会默认使用外部连接模式，平台不会创建容器，也不会下载任何程序。`;
+  }
+}
+
+function renderExtCatalog() {
+  const items = (extState.catalog && extState.catalog.items) || [];
+  const errors = (extState.catalog && extState.catalog.errors) || [];
+  const errorHtml = errors.length
+    ? `<div class="empty" style="grid-column:1/-1;text-align:left">自定义清单解析失败（已跳过，不影响其它清单）：<br>${errors.map((e) => esc(e)).join('<br>')}</div>`
+    : '';
+  $('#ext-catalog').innerHTML = errorHtml + (items.length ? items.map((m) => `
+    <div class="ext-card">
+      <h3>${esc(m.label)} ${badge(m.kind === 'database' ? '数据库' : m.kind === 'cache' ? '缓存' : '扩展', 'blue')}</h3>
+      <p>${esc(m.description || '自定义清单')}</p>
+      <div class="ext-meta">${esc(m.image)} · 默认 ${esc(m.port)} · ${esc((m.tags || []).join(' / '))}</div>
+      <div class="row">
+        <button class="btn btn-primary btn-sm" data-ext-install="${esc(m.id)}">安装</button>
+        ${m.builtin ? '' : badge('自定义清单', 'amber')}
+      </div>
+    </div>`).join('') : '<div class="empty">暂无可用清单</div>');
+}
+
+function extStatusMeta(status) {
+  return {
+    online: ['在线', 'green'], partial: ['待就绪', 'amber'],
+    installing: ['安装中', 'amber'], offline: ['离线', 'red'], error: ['异常', 'red'],
+  }[status] || ['未知', 'amber'];
+}
+
+function renderExtList() {
+  const rows = extState.items.map((i) => {
+    const meta = extStatusMeta(i.status);
+    const ops = [
+      `<button class="btn btn-sm" data-ext-op="connection" data-ext-id="${esc(i.id)}">复制连接串</button>`,
+      `<button class="btn btn-sm" data-ext-op="inject" data-ext-id="${esc(i.id)}">注入 .env</button>`,
+      `<button class="btn btn-sm" data-ext-op="health" data-ext-id="${esc(i.id)}">检测</button>`,
+    ];
+    if (i.canManage) {
+      ops.push(`<button class="btn btn-sm" data-ext-op="start" data-ext-id="${esc(i.id)}">启动</button>`);
+      ops.push(`<button class="btn btn-sm" data-ext-op="stop" data-ext-id="${esc(i.id)}">停止</button>`);
+      ops.push(`<button class="btn btn-sm" data-ext-op="restart" data-ext-id="${esc(i.id)}">重启</button>`);
+      ops.push(`<button class="btn btn-sm" data-ext-op="logs" data-ext-id="${esc(i.id)}">日志</button>`);
+    }
+    ops.push(`<button class="btn btn-sm btn-danger" data-ext-op="remove" data-ext-id="${esc(i.id)}" data-ext-name="${esc(i.name)}">卸载</button>`);
+    return `<tr>
+      <td><b>${esc(i.name)}</b><div class="ext-list-url">${esc(i.label)} · ${esc(i.image)}:${esc(i.tag)}</div></td>
+      <td>${i.mode === 'docker' ? badge('容器', 'blue') : badge('外部', 'gray')}</td>
+      <td>${esc(i.host)}:${esc(i.port)}</td>
+      <td>${badge(meta[0], meta[1])}<div class="ext-list-url">${esc(i.statusDetail || '')}</div></td>
+      <td><div class="ext-list-url">${esc(i.connectionMasked || '')}</div><div class="ext-actions" style="margin-top:8px">${ops.join('')}</div></td>
+    </tr>`;
+  });
+  $('#ext-list').innerHTML = table(['实例', '模式', '地址', '状态', '连接串与操作'], rows);
+}
+
+function renderExtInstallForm() {
+  const m = extManifest(extState.manifestId);
+  if (!m) return;
+  const fields = ((m.forms || {})[extState.mode]) || [];
+  const html = fields.map((f) => {
+    const value = f.default === undefined || f.default === null ? '' : f.default;
+    let input;
+    if (f.type === 'tags') {
+      input = `<select name="${esc(f.key)}">${(f.options || []).map((t) => `
+        <option value="${esc(t)}"${String(t) === String(value) ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
+    } else {
+      const type = f.type === 'number' ? 'number' : f.type === 'password' ? 'password' : 'text';
+      input = `<input name="${esc(f.key)}" type="${type}" value="${esc(value)}"${f.required ? ' required' : ''} placeholder="${esc(f.placeholder || '')}" />`;
+    }
+    return `<label>${esc(f.label)}${input}${f.help ? `<span class="field-help">${esc(f.help)}</span>` : ''}</label>`;
+  }).join('');
+  const note = extState.mode === 'docker'
+    ? '将创建容器与命名数据卷，首次安装会拉取镜像（可配 DOCKER_IMAGE_PREFIX 加速）'
+    : '只登记地址与凭据，平台不会连接、安装或改动外部服务';
+  $('#ext-install-form').innerHTML = `${html}<div class="form-actions"><button class="btn btn-primary" type="submit">创建实例</button><span class="muted">${esc(note)}</span></div>`;
+}
+
+function openExtInstall(id) {
+  const m = extManifest(id);
+  if (!m) return;
+  extState.manifestId = id;
+  extState.mode = extState.defaultMode;
+  const select = $('#ext-mode');
+  select.value = extState.mode;
+  const docker = extState.catalog && extState.catalog.docker;
+  const dockerOption = select.querySelector('option[value="docker"]');
+  if (dockerOption && docker && !docker.available) dockerOption.disabled = true;
+  $('#ext-install-title').textContent = `安装 ${m.label}`;
+  renderExtInstallForm();
+  $('#ext-install-card').hidden = false;
+}
+
+async function loadExtensions() {
+  try {
+    const [cat, list] = await Promise.all([api('/extensions/catalog'), api('/extensions/instances')]);
+    extState.catalog = cat || null;
+    extState.items = (list && list.items) || [];
+    extState.defaultMode = (cat && cat.defaultMode) || 'external';
+    renderExtRuntime(cat);
+    renderExtCatalog();
+    renderExtList();
+  } catch (e) { toast(e.message, true); }
+}
+
 /* -------------------------------- 事件绑定 ------------------------------- */
 
 const loaders = {
   overview: loadOverview, repos: loadRepos, ide: loadIde, storage: loadStorage,
-  builds: loadBuilds, servers: loadServers, ai: loadAI, ops: loadOps,
+  builds: loadBuilds, servers: loadServers, extensions: loadExtensions,
+  ai: loadAI, ops: loadOps,
 };
 
 $('#nav').addEventListener('click', (e) => {
@@ -1512,6 +1642,67 @@ document.addEventListener('keydown', (e) => {
   }
 });
 $$('[data-reload]').forEach((b) => b.addEventListener('click', () => loaders[b.dataset.reload]()));
+
+$('#ext-catalog').addEventListener('click', (e) => {
+  const button = e.target.closest('[data-ext-install]');
+  if (button) openExtInstall(button.dataset.extInstall);
+});
+$('#ext-mode').addEventListener('change', (e) => {
+  extState.mode = e.target.value;
+  renderExtInstallForm();
+});
+$('#ext-install-close').addEventListener('click', () => { $('#ext-install-card').hidden = true; });
+$('#ext-install-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const values = formData(e.target);
+  try {
+    const created = await api('/extensions/instances', {
+      method: 'POST', body: { catalogId: extState.manifestId, mode: extState.mode, values },
+    });
+    toast(`已创建实例 ${created.name}`);
+    $('#ext-install-card').hidden = true;
+    await loadExtensions();
+  } catch (err) { toast(err.message || String(err), true); }
+});
+$('#ext-log-close').addEventListener('click', () => { $('#ext-log-card').hidden = true; });
+$('#ext-list').addEventListener('click', async (e) => {
+  const button = e.target.closest('[data-ext-op]');
+  if (!button) return;
+  const id = button.dataset.extId;
+  const op = button.dataset.extOp;
+  try {
+    if (op === 'connection') {
+      const d = await api(`/extensions/instances/${id}/connection`);
+      await navigator.clipboard.writeText(d.url);
+      toast('连接串已复制到剪贴板');
+    } else if (op === 'inject') {
+      const target = prompt('写入工作区内的哪个文件？', '.env');
+      if (!target) return;
+      const d = await api(`/extensions/instances/${id}/inject`, { method: 'POST', body: { target } });
+      toast(`已写入 ${d.path}（${d.envKey}）`);
+    } else if (op === 'health') {
+      const d = await api(`/extensions/instances/${id}/health`, { method: 'POST', body: {} });
+      toast(d.healthy ? '健康检查通过' : d.detail, !d.healthy);
+      await loadExtensions();
+    } else if (['start', 'stop', 'restart'].includes(op)) {
+      await api(`/extensions/instances/${id}/action`, { method: 'POST', body: { action: op } });
+      toast('操作已完成');
+      await loadExtensions();
+    } else if (op === 'logs') {
+      const d = await api(`/extensions/instances/${id}/logs?tail=200`);
+      $('#ext-log').textContent = d.text || '(暂无日志)';
+      $('#ext-log-card').hidden = false;
+    } else if (op === 'remove') {
+      const name = button.dataset.extName || '该实例';
+      if (!confirm(`确定卸载扩展实例「${name}」？`)) return;
+      const purge = confirm('是否同时删除数据卷？\n确定 = 连同数据一起删除（不可恢复）\n取消 = 保留数据卷，之后可重新挂载');
+      const d = await api(`/extensions/instances/${id}?purge=${purge ? 1 : 0}`, { method: 'DELETE' });
+      toast(d.volumeKept ? '已卸载，数据卷已保留' : '已卸载');
+      $('#ext-log-card').hidden = true;
+      await loadExtensions();
+    }
+  } catch (err) { toast(err.message || String(err), true); }
+});
 
 $('#kind-seg').addEventListener('click', (e) => {
   const button = e.target.closest('.seg-btn');

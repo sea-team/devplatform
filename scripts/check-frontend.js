@@ -28,7 +28,7 @@ const missing = refs.filter((id) => !ids.has(id) && id !== 'ops-hint');
 note(missing.length === 0, 'app.js 引用的静态 id 均存在', missing.length ? `缺失：${missing.join(', ')}` : `${refs.length} 个引用`);
 
 const sections = [...html.matchAll(/class="page" id="view-([a-z]+)"/g)].map((m) => m[1]);
-note(sections.length === 8, '8 个模块页面已转为可标签化的 .page', sections.join(', '));
+note(sections.length === 9, '9 个模块页面已转为可标签化的 .page', sections.join(', '));
 
 const scripts = [...html.matchAll(/<script src="\/vendor\/([^"]+)"/g)].map((m) => m[1]);
 const cmIndex = scripts.indexOf('codemirror.js');

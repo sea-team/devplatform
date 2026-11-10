@@ -14,6 +14,7 @@ const {
 } = require('./integrations');
 const { PROFILES, startBuild, deployBuild, opsAgent, READ_COMMANDS } = require('./engine');
 const remoteOps = require('./remoteOps');
+const extensions = require('./extensions');
 
 // 内置 HTTP 路由：本地零依赖即可启动；容器里装了 ssh2/undici 后自动启用 SSH 与代理。
 const app = createApp({ adminToken: config.adminToken, staticDir: config.publicDir });
@@ -152,7 +153,7 @@ app.get('/api/overview', wrap(async (req, res) => {
     if (/fetch failed/i.test(msg)) return '连接失败：服务未启动，或地址是容器内服务名（本机无法解析）';
     return msg.slice(0, 120);
   };
-  const services = probes.map((p, i) => {
+  const builtinServices = probes.map((p, i) => {
     const up = p.status === 'fulfilled';
     const detail = up
       ? (i === 0 ? `v${(p.value && p.value.version) || 'unknown'}` : '可连接')
@@ -165,6 +166,21 @@ app.get('/api/overview', wrap(async (req, res) => {
       detail, hint: up && configured[i] ? '' : hints[i],
     };
   });
+  // 扩展（MySQL / PgSQL / Redis 等）沿用同一套四态展示；这里只取已持久化的状态，
+  // 不在总览里做实时探测，避免拖慢页面。需要精确结论时到扩展页点「检测」。
+  const extInstances = extensions.listInstances().items;
+  const extServices = extInstances.map((i) => {
+    const status = ['online', 'offline', 'partial', 'unconfigured'].includes(i.status)
+      ? i.status : (i.status === 'installing' ? 'partial' : 'offline');
+    return {
+      name: `${i.label} · ${i.name}`,
+      url: `${i.mode === 'docker' ? '容器' : '外部'} ${i.host}:${i.port}`,
+      status, configured: true,
+      detail: i.statusDetail || i.status,
+      hint: status === 'online' ? '' : '到「扩展 / 数据库」页检测状态或启动实例',
+    };
+  });
+  const services = [...builtinServices, ...extServices];
   const builds = state().builds;
   ok(res, {
     services,
@@ -176,6 +192,7 @@ app.get('/api/overview', wrap(async (req, res) => {
       buildSuccess: builds.filter((b) => b.status === 'success').length,
       buildFailed: builds.filter((b) => b.status === 'failed').length,
       deploys: state().deploys.length,
+      extensions: extInstances.length,
     },
     workspace: config.workspaceDir,
     executor: config.buildExecutor,
@@ -616,6 +633,59 @@ app.post('/api/ai/ops', wrap(async (req, res) => {
 }));
 
 app.get('/api/ai/tools', (req, res) => ok(res, { readCommands: READ_COMMANDS }));
+
+/* ----------------------- 扩展 / 数据库（manifest v1） ----------------------- */
+// 三类运行形态统一由这一组接口管理：
+//   docker    平台创建带标签的长期容器（Docker Engine API / SSH 之外的本机路径）
+//   external  只登记外部数据库的地址与凭据，不安装、不改动远端服务
+// 无 Docker 时前端默认切到 external，安装页不会隐式拉取任何东西。
+// 明文连接串单独走 /connection，列表接口一律脱敏。
+
+app.get('/api/extensions/catalog', wrap(async (req, res) => {
+  ok(res, await extensions.listCatalog());
+}));
+
+app.get('/api/extensions/instances', wrap(async (req, res) => {
+  ok(res, extensions.listInstances());
+}));
+
+app.post('/api/extensions/instances', wrap(async (req, res) => {
+  ok(res, await extensions.createInstance(req.body || {}));
+}));
+
+app.get('/api/extensions/instances/:id', wrap(async (req, res) => {
+  const inst = extensions.findInstance(req.params.id);
+  if (!inst) return fail(res, '扩展实例不存在', 404);
+  ok(res, extensions.publicInstance(inst));
+}));
+
+app.post('/api/extensions/instances/:id/action', wrap(async (req, res) => {
+  const action = String((req.body && req.body.action) || '');
+  if (!['start', 'stop', 'restart'].includes(action)) return fail(res, '不支持的操作', 400);
+  ok(res, await extensions.actionInstance(req.params.id, action));
+}));
+
+app.post('/api/extensions/instances/:id/health', wrap(async (req, res) => {
+  ok(res, await extensions.healthOf(req.params.id));
+}));
+
+app.post('/api/extensions/instances/:id/inject', wrap(async (req, res) => {
+  const target = String((req.body && req.body.target) || '.env');
+  ok(res, extensions.injectEnv(req.params.id, target));
+}));
+
+app.get('/api/extensions/instances/:id/connection', wrap(async (req, res) => {
+  ok(res, extensions.connectionOfInstance(req.params.id));
+}));
+
+app.get('/api/extensions/instances/:id/logs', wrap(async (req, res) => {
+  ok(res, await extensions.logsOf(req.params.id, Number(req.query.tail) || 200));
+}));
+
+app.delete('/api/extensions/instances/:id', wrap(async (req, res) => {
+  const purge = req.query.purge === '1' || req.query.purge === 'true';
+  ok(res, await extensions.removeInstance(req.params.id, purge));
+}));
 
 /* -------------------------------- 静态界面 ------------------------------- */
 

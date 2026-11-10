@@ -1,6 +1,6 @@
 {
   "name": "devplatform-console",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "description": "统一 Web 开发管理平台控制台与 API 网关",
   "main": "src/server.js",
@@ -10,7 +10,7 @@
     "dev": "node launcher/launcher.js --dev",
     "build": "node build.mjs",
     "build:bundle": "node build.mjs --bundle-only",
-    "check": "node --check src/server.js && node --check src/core.js && node --check src/integrations.js && node --check src/engine.js && node --check src/fileTypes.js && node --check src/remoteOps.js && node --check src/dockerApi.js && node --check src/mini.js && node --check launcher/launcher.js"
+    "check": "node --check src/server.js && node --check src/core.js && node --check src/integrations.js && node --check src/engine.js && node --check src/fileTypes.js && node --check src/remoteOps.js && node --check src/dockerApi.js && node --check src/catalog.js && node --check src/extensions.js && node --check src/extRuntime.js && node --check src/mini.js && node --check launcher/launcher.js"
   },
   "engines": {
     "node": ">=20"

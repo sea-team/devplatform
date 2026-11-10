@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261108b" />
+  <link rel="stylesheet" href="/style.css?v=20261110a" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -26,6 +26,7 @@
         <button class="nav-item" data-view="storage"><span class="ico">▤</span>存储 / 文件</button>
         <button class="nav-item" data-view="builds"><span class="ico">⚙</span>构建 · 部署</button>
         <button class="nav-item" data-view="servers"><span class="ico">▣</span>服务器</button>
+        <button class="nav-item" data-view="extensions"><span class="ico">▦</span>扩展 / 数据库</button>
         <button class="nav-item" data-view="ai"><span class="ico">✦</span>AI 服务配置</button>
         <button class="nav-item" data-view="ops"><span class="ico">◎</span>AI 运维</button>
       </nav>
@@ -227,6 +228,37 @@
           <div id="server-list" class="server-grid"></div>
         </section>
 
+        <!-- 扩展 / 数据库 -->
+        <section class="page" id="view-extensions">
+          <div class="card">
+            <div class="card-head"><h2>运行环境</h2><span class="muted" id="ext-runtime">检测中</span></div>
+            <div class="hint" id="ext-runtime-hint">MySQL / PostgreSQL / Redis 等中间件按清单标准安装；未检测到 Docker 时自动改用外部连接模式。</div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>可安装的服务</h2><button class="btn btn-ghost btn-sm" data-reload="extensions">刷新</button></div>
+            <div id="ext-catalog" class="ext-grid"></div>
+          </div>
+          <div class="card" id="ext-install-card" hidden>
+            <div class="card-head"><h2 id="ext-install-title">安装实例</h2><button class="btn btn-ghost btn-sm" id="ext-install-close">取消</button></div>
+            <div class="row ext-mode-row">
+              <span class="muted">运行模式</span>
+              <select id="ext-mode">
+                <option value="docker">本机 Docker 容器（自动安装）</option>
+                <option value="external">外部数据库（只登记连接信息）</option>
+              </select>
+            </div>
+            <form id="ext-install-form" class="form"></form>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>实例列表</h2><span class="muted">凭据默认脱敏，明文连接串按需单独读取</span></div>
+            <div id="ext-list" class="table-wrap"></div>
+          </div>
+          <div class="card" id="ext-log-card" hidden>
+            <div class="card-head"><h2>容器日志</h2><button class="btn btn-ghost btn-sm" id="ext-log-close">收起</button></div>
+            <pre class="log" id="ext-log">—</pre>
+          </div>
+        </section>
+
         <!-- AI 服务 -->
         <section class="page" id="view-ai">
           <div class="card">
@@ -327,6 +359,6 @@
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261108b"></script>
+  <script src="/app.js?v=20261110a"></script>
 </body>
 </html>

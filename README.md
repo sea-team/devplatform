@@ -469,6 +469,7 @@ node scripts/verify.js http://<host>:9000
 | 远程文件 | `GET /servers/:id/files`、`GET/PUT /servers/:id/files/content`、`GET .../files/download`、`PUT .../files/upload`、`POST .../files/create\|mkdir\|rename\|delete` |
 | Web 终端 | `POST .../terminal/open`、`GET .../terminal/stream`（SSE）、`POST .../terminal/input\|resize\|close`、`GET .../terminals` |
 | AI | `GET/POST /ai/providers`、`DELETE /ai/providers/:id`、`GET /ai/local/programs`、`POST /ai/local/test`、`POST /ai/test`、`POST /ai/chat`、`POST /ai/ops`、`GET /ai/tools` |
+| 扩展 / 数据库 | `GET /extensions/catalog`、`GET/POST/DELETE /extensions/instances[/:id]`、`POST .../action\|health\|inject`、`GET .../connection\|logs`（§19） |
 
 需要鉴权时，SSE 与下载链接用 `?token=<ADMIN_TOKEN>`，其余用 `Authorization: Bearer <ADMIN_TOKEN>`。
 
@@ -530,6 +531,8 @@ devplatform/
 │   │   └── vendor/         # 离线 xterm.js + CodeMirror 5（无需外网）
 │   └── src/                # core / mini / server / integrations / engine
 │                           # dockerApi / remoteOps / fileTypes
+│                           # catalog（内置扩展清单）/ extensions（实例管理）
+│                           # extRuntime（扩展容器运行时适配）（§19）
 ├── scripts/                # remote.js、setup-integrations.sh、verify.js、
 │                           # check-frontend.js、sync-integrations.js（本机配置同步）
 ├── windows/                # Windows 一键安装：install.bat / install.ps1 /
@@ -542,6 +545,7 @@ devplatform/
 │   └── runtime/            # 运行时（不入库）：bin/ 下载的 exe、gitea/ 仓库、
 │                           # openlist/ 数据、ide/、logs/、services.json、pids.txt
 ├── data/                   # 运行时状态（不入库，600/700）
+│   └── extensions/         # 自定义扩展清单 *.json（不入库，§19.7）
 └── workspace/              # 克隆与构建工作区（不入库）
 ```
 
@@ -566,6 +570,7 @@ git commit -m "feat: ..."
 - Swift、TOML 等无对应 CodeMirror 模式时按纯文本编辑。
 - 动态标签（文件 / 编辑器 / 终端）不跨浏览器刷新恢复；模块标签顺序会恢复。
 - 一期未实现多租户 / 细粒度权限、GitOps 自动触发、Web 终端文件上传进度条。
+- 扩展 / 数据库目前只做本机 Docker 安装与外部连接登记；SSH 远程安装、备份恢复、版本升级与离线镜像导入属于完整版范围（§19.9）。
 - `wsl.exe` 在部分受安全策略管控的 Windows 沙箱内会被拦截，需在真实宿主机运行本地 CLI 能力。
 
 ---
@@ -1274,3 +1279,114 @@ Get-FileHash .\devplatform-windows.zip -Algorithm SHA256
 | 单 exe 提示「无法释放 bundle.cjs」 | exe 放在只读目录 | 移到可写目录（如 `D:\devplatform\`）再运行 |
 | `INSTALL.bat` 仍在联网下载 / 提示下载超时 | 用的是轻量包或 `git clone` 安装，包内没有三个二进制 | 换全量包 `devplatform-windows.zip`；或把 `devplatform-services.zip` 放进 `windows\bootstrap\` 后重跑（§18.10.3） |
 | 下载到的文件大小明显不对 | 代理返回了 504 页面 / 下载被截断 | 用 `SHA256SUMS.txt` 校验，换 `ghfast.top` 加速源或重新下载 |
+
+---
+
+## 19. 扩展 / 数据库（通用清单标准）
+
+功能开发常需要 MySQL、PostgreSQL、Redis 等中间件。平台为这类「项目开发资源」提供一套**通用扩展标准**，而不是每加一种数据库就改一遍前后端。
+
+### 19.1 定位与取舍
+
+| 对象 | 例子 | 管理方式 |
+|---|---|---|
+| 平台自身基础设施 | Gitea / OpenList / 在线 IDE | 固定三项，硬编码在 `core.js` / `docker-compose.yml` / Windows 安装器，**不并入扩展标准**（§18） |
+| 项目开发资源 | MySQL / PgSQL / Redis / 自定义中间件 | 清单驱动，按「实例」管理，可多个、可卸载、连接串可注入项目 `.env` |
+
+**为什么是「数据清单 + 内置适配器」，不是插件框架**：平台是 Node SEA 单文件 exe，`require` 只能加载构建快照内的模块（§17.9），动态加载用户放进来的 JS 跑不通。因此清单只含**数据**，命令一律来自平台内置模板，用户可覆盖的只有镜像 tag、端口、库名、凭据等参数，不能传 shell 字符串（与 `engine.js` 的 `PROFILES` 白名单思路一致）。
+
+内置清单写在 `platform/src/catalog.js` 常量里，随 `bundle.cjs` 一起热更新；自定义清单放 `data/extensions/*.json`（不入库、不占 SEA assets），放进去后刷新页面即生效，无需重启或重新打包。新增一种服务**只需加一条清单**，前端表单、状态、连接串、日志全部自动具备。
+
+### 19.2 manifest v1 字段
+
+| 字段 | 含义 | 约束 |
+|---|---|---|
+| `id` / `label` / `kind` / `description` / `icon` | 标识与展示 | `id` 小写字母开头 2~32 位；`kind` ∈ database/cache/queue/storage/custom |
+| `image` / `tags` / `defaultTag` | 官方镜像与可选版本 | tag 只允许 `[A-Za-z0-9._-]`；镜像前缀自动套用 `DOCKER_IMAGE_PREFIX` |
+| `port` / `internalPort` / `volume` | 默认宿主机端口、容器内端口、数据目录 | 端口 1~65535；`volume` 必须是容器内绝对路径，映射为命名卷 `dp-ext-<name>-data` |
+| `env` / `command` | 容器环境变量与启动命令 | 值只允许 `${HOST} ${PORT} ${INTERNAL_PORT} ${PASSWORD} ${USER} ${DB_NAME} ${TAG} ${IMAGE} ${NAME}` 九个白名单变量；`command` 是字符串数组，不经过 shell |
+| `fields` / `defaults` | 安装表单字段与默认值 | 字段名大写下划线；`type` ∈ text/number/password；前端按声明动态渲染 |
+| `envKey` / `connection` | 注入 `.env` 的键名与连接串模板 | `envKey` 大写；模板用同样的白名单变量，密码自动 URL 编码 |
+| `health.cmd` | 容器内健康检查命令 | 固定字符串数组，用环境变量引用密码，不把凭据写进命令行 |
+
+内置三份清单：
+
+| id | 镜像 | 默认端口 | 注入键 | 健康检查 |
+|---|---|---|---|---|
+| `mysql` | `mysql:8.4 / 8.0 / 5.7` | 3306 | `DATABASE_URL` | `mysqladmin ping` |
+| `pgsql` | `postgres:16 / 15 / 14` | 5432 | `DATABASE_URL` | `pg_isready` |
+| `redis` | `redis:7.4 / 7.2 / 6.2` | 6379 | `REDIS_URL` | `redis-cli ping`（AOF + requirepass） |
+
+### 19.3 两种运行形态与无 Docker 降级
+
+| 形态 | 平台做什么 | 适用 |
+|---|---|---|
+| `docker` | 通过 Docker Engine API 创建带 `devplatform.ext=1` 标签的长期容器 + 命名卷，`restart: unless-stopped`，端口只绑 `DP_EXT_BIND_IP`（默认 `127.0.0.1`） | Linux / 有 Docker Desktop 的 Windows / 已挂载 docker.sock 的容器部署 |
+| `external` | **只登记**地址、端口、账号与凭据，生成连接串；不安装、不连接、不改动外部服务 | 无 Docker 的 Windows native 模式、已有云数据库、内网已有中间件 |
+
+`GET /extensions/catalog` 会探测 Docker 可达性（`/_ping`）：不可用时面板顶部明确显示原因与修复提示，`docker` 选项置灰，安装默认切到 `external`。**不会隐式下载或安装任何东西**。注意这与 §18 的「随包自带服务二进制」是两套机制：Gitea / OpenList 是单个 Windows exe，可以打进 zip；数据库镜像是 GB 级且依赖容器运行时，只能按需拉取或由运维预先 `docker load` 导入。
+
+### 19.4 面板操作
+
+左侧「扩展 / 数据库」页：选清单 → 选运行模式 → 填表单（密码留空自动生成 24 位随机串）→ 创建实例。安装前会检测端口占用；容器启动后等待端口就绪（最多 60 秒）再判定状态。
+
+实例列表提供：复制连接串、注入工作区 `.env`（同名键覆盖、其它行保留）、检测健康、启动 / 停止 / 重启、查看容器日志、卸载。卸载**默认保留数据卷**，只有再次确认才删除；`external` 实例不能启停，删除只移除本地登记。总览页「集成服务」会把每个实例作为一条服务列出，沿用 online / partial / unconfigured / offline 四态。
+
+### 19.5 凭据与安全边界
+
+- 随机密码只写入 `state.json`（`core.save` 强制 600 权限）；列表与详情接口一律脱敏（`mysql://root:******@...`），明文连接串只能通过 `GET /extensions/instances/:id/connection` 单独取得（受 `ADMIN_TOKEN` 保护）。
+- 端口默认只绑 `127.0.0.1`，不对公网暴露；容器带专属标签，平台只管理自己创建的容器，绝不触碰宿主机上其它容器。
+- `health.cmd` 通过容器内环境变量引用密码，避免凭据出现在 `docker inspect`；Redis 的 `--requirepass` 是官方镜像的启动参数形式，会出现在 inspect 里，仅限本机 / 可信内网开发环境使用。
+- 注入 `.env` 只能写工作区内的相对路径（`safeWorkspacePath` 防目录穿越），文件权限设为 600。
+
+### 19.6 容器部署时的三个变量
+
+平台本体跑在容器里时，容器内的 `127.0.0.1` **不是宿主机**，需要显式配置：
+
+| 变量 | 默认 | 用途 |
+|---|---|---|
+| `DP_EXT_BIND_IP` | `127.0.0.1` | 扩展容器端口绑定的宿主机 IP；需要跨机访问时改 `0.0.0.0`（务必配合防火墙） |
+| `DP_EXT_HOST` | `127.0.0.1` | 生成连接串与做 TCP 探测时使用的主机名；平台在容器内时填**宿主机 IP** |
+| `DOCKER_HOST` | 空 | 显式指定 Docker 端点，如 `tcp://127.0.0.1:2375`；不填时依次用 `DOCKER_SOCKET`（默认 `/var/run/docker.sock`）或 Windows 命名管道 |
+
+`docker-compose.yml` 里 `platform` 服务的 `docker.sock` 挂载默认注释，启用扩展的容器安装前需打开（挂载 docker.sock 等于把宿主机 root 权限交给平台容器，仅限可信内网）。镜像不可达时沿用已有的 `DOCKER_IMAGE_PREFIX` 加速器；内网离线可先 `docker load` 导入镜像，平台检测到本地已有镜像会跳过拉取。
+
+### 19.7 自定义清单示例
+
+把下面内容存为 `data/extensions/mongo.json`，刷新页面即可在「可安装的服务」里看到（解析失败的清单会显示在页面错误提示里，不影响其它清单）：
+
+```json
+{
+  "id": "mongo", "label": "MongoDB", "kind": "database",
+  "image": "mongo", "tags": ["7"], "defaultTag": "7",
+  "port": 27017, "internalPort": 27017, "volume": "/data/db",
+  "envKey": "MONGO_URL",
+  "connection": "mongodb://${USER}:${PASSWORD}@${HOST}:${PORT}/${DB_NAME}",
+  "env": {}, "command": [], "health": {},
+  "fields": [{ "key": "DB_NAME", "label": "库名", "type": "text", "default": "app" }],
+  "defaults": { "USER": "root" }
+}
+```
+
+校验规则：模板变量白名单、字段名 / 端口 / 镜像 tag 合法性、命令数组长度与单行限制；不接受任意脚本、不支持 `${}` 之外的表达式。自定义清单与内置清单同名时以内置为准。
+
+### 19.8 API
+
+| 端点 | 用途 |
+|---|---|
+| `GET /extensions/catalog` | 清单列表 + 表单字段 + Docker 探测结果 + 自定义清单目录与解析错误 |
+| `GET/POST /extensions/instances` | 实例列表（脱敏）/ 创建实例 |
+| `GET /extensions/instances/:id` | 单个实例（脱敏） |
+| `POST /extensions/instances/:id/action` | `start` / `stop` / `restart`（仅 docker 实例） |
+| `POST /extensions/instances/:id/health` | TCP + 容器内命令健康检查，并回写状态 |
+| `POST /extensions/instances/:id/inject` | 把 `ENV_KEY=连接串` 写进工作区 `.env` |
+| `GET /extensions/instances/:id/connection` | 明文连接串（`ADMIN_TOKEN` 保护） |
+| `GET /extensions/instances/:id/logs?tail=200` | 容器日志 |
+| `DELETE /extensions/instances/:id?purge=1` | 卸载；`purge=1` 才同时删除数据卷 |
+
+### 19.9 当前限制与后续
+
+- 只做**本机 Docker** 安装；「SSH 到远程 Linux 服务器装容器」属于完整版（现有 `remoteOps.js` 已具备 SSH 执行能力，接线即可）。
+- 未实现备份 / 恢复、版本升级、一个实例绑定多个仓库、离线镜像包导入与 SQL 终端标签；这些属于完整版范围。
+- 外部连接模式只做 TCP 可达性探测，不会验证账号密码是否正确。
+- 容器日志直接在面板内展示，未做成动态标签；卸载后命名卷保留但面板不再显示，需用 `docker volume ls` 查看。

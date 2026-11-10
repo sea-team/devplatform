@@ -38,6 +38,10 @@ const config = {
   // 语言镜像的加速器前缀，例如 docker.m.daocloud.io/library/（注意结尾斜杠）。
   dockerImagePrefix: env('DOCKER_IMAGE_PREFIX'),
   buildTimeoutMs: Number(env('BUILD_TIMEOUT_MS', '900000')),
+  // 扩展（MySQL / PgSQL / Redis 等）容器对外绑定地址与连接串里使用的主机名。
+  // 平台本体跑在容器里时，容器内的 127.0.0.1 不是宿主机，需由 compose 注入宿主机 IP。
+  extBindIp: env('DP_EXT_BIND_IP', '127.0.0.1'),
+  extHost: env('DP_EXT_HOST', '127.0.0.1'),
 };
 
 function defaultState() {
@@ -46,6 +50,7 @@ function defaultState() {
     aiProviders: [],
     builds: [],
     deploys: [],
+    extensions: [],
   };
 }
 
