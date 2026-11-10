@@ -97,11 +97,20 @@ async function openlistToken() {
 async function openlist(pathname, options = {}) {
   const token = await openlistToken();
   const url = `${config.openlistUrl}${pathname}`;
-  return httpJSON(url, {
+  const raw = await httpJSON(url, {
     ...options,
     proxy: proxyModule.forGlobal(url).proxy,
     headers: { Authorization: token, ...(options.headers || {}) },
   });
+  // OpenList 用「HTTP 200 + body.code != 200」表达业务错误（token 失效时返回
+  // code:500 record not found）。不检查会被 asList() 当成空列表，前端误报成功。
+  if (raw && typeof raw === 'object' && 'code' in raw && Number(raw.code) !== 200) {
+    const err = new Error(`OpenList ${pathname} 返回 code=${raw.code}：${raw.message || '未知错误'}`);
+    err.code = Number(raw.code);
+    err.openlistMessage = String(raw.message || '');
+    throw err;
+  }
+  return raw;
 }
 
 /** 界面更新 OpenList 连接配置后必须清掉缓存 token，否则仍拿旧服务的令牌去请求。 */

@@ -74,14 +74,23 @@ function launcherCmd(type, payload = {}) {
 function localVersion() {
   let release = null;
   try { release = JSON.parse(fs.readFileSync(path.join(appRoot, 'release.json'), 'utf8')); } catch { /* noop */ }
+  let pkgVersion = '';
+  try { pkgVersion = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8')).version || ''; } catch { /* noop */ }
+  const binary = hasLauncher();
+  // 单文件 exe / 热更新模式以 release.json 为准；源码直跑（容器、systemd、npm start）
+  // 以 package.json 为准，否则 dist/ 里残留的旧 release.json 会让版本号永远停在旧值。
+  const version = binary
+    ? ((release && release.version) || pkgVersion || '0.2.0')
+    : (pkgVersion || (release && release.version) || '0.2.0');
+  const fromRelease = Boolean(release && release.version === version);
   return {
-    version: (release && release.version) || '0.2.0',
-    buildTime: (release && release.buildTime) || null,
-    runtime: hasLauncher() ? 'binary' : 'source',
+    version,
+    buildTime: fromRelease ? (release.buildTime || null) : null,
+    runtime: binary ? 'binary' : 'source',
     node: process.version,
     appRoot,
     updateUrl: process.env.DP_UPDATE_URL || '',
-    launcher: hasLauncher(),
+    launcher: binary,
   };
 }
 

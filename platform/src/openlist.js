@@ -119,16 +119,22 @@ async function status() {
   try { settings = unwrap(await openlistApi.health()) || {}; } catch (e) {
     return { online: false, ...conn, error: String(e.message || e), hint: hintFor(e) };
   }
+  // 公开接口可达 ≠ 管理权限可用：必须真正调一次管理接口才能确认 token 有效。
   let storages = [];
-  try { storages = await listStorages(); } catch { /* 非管理员 token 时忽略 */ }
+  let admin = false;
+  let adminError = '';
+  try { storages = await listStorages(); admin = true; }
+  catch (e) { adminError = String(e.message || e); }
   return {
     online: true,
     ...conn,
     version: settings.version || '',
     siteTitle: settings.site_title || settings.title || '',
     storageCount: storages.length,
-    admin: storages.length > 0 || Boolean(settings.version),
-    write: settings.write !== false,
+    admin,
+    adminError,
+    adminHint: adminError ? hintFor(adminError) : '',
+    write: admin && settings.write !== false,
   };
 }
 
@@ -137,6 +143,7 @@ function hintFor(error) {
   if (/未配置/.test(msg)) return '在下方填写 Token 或管理员密码；也可改 dist/.env 后完全重启';
   if (/ECONNREFUSED|fetch failed/i.test(msg)) return '服务未启动或地址是容器内服务名，请改成本机可访问地址';
   if (/登录失败|401|403/i.test(msg)) return 'Token 或管理员密码不正确；存储管理需要管理员权限的 Token';
+  if (/record not found|code=500|token 失效/i.test(msg)) return 'Token 已失效或无管理员权限：清空 OPENLIST_TOKEN 让平台改用管理员密码登录，或在 OpenList 后台重新生成管理员 Token';
   return msg.slice(0, 180);
 }
 

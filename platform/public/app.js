@@ -499,7 +499,7 @@ function renderOpenlistStatus(status) {
   const online = Boolean(status && status.online);
   $('#openlist-status-text').textContent = online ? '● 在线' : '● 离线 / 未配置';
   $('#openlist-status-detail').textContent = online
-    ? `${status.url} · ${status.version ? `v${status.version} · ` : ''}${status.siteTitle || 'OpenList'} · ${status.storageCount} 个挂载 · 配置来源：${status.source} · 代理：${status.effectiveProxy || '无'}`
+    ? `${status.url} · ${status.version ? `v${status.version} · ` : ''}${status.siteTitle || 'OpenList'} · ${status.storageCount} 个挂载 · 配置来源：${status.source} · 代理：${status.effectiveProxy || '无'}${status.admin ? '' : ` · [管理权限不可用] ${status.adminHint || status.adminError || 'Token 无效'}`}`
     : `${status ? status.url || '' : ''} ${status ? (status.hint || status.error || '') : ''}`;
   $('#openlist-open').href = (status && status.manageUrl) || '#';
   $('#webdav-url').textContent = (status && status.webdav) || '-';

@@ -150,7 +150,7 @@ compose 的 `platform` 服务默认 `BUILD_EXECUTOR=local`；要启用容器化�
 1. 在本机平台「服务器」页登记目标机：名称、主机、端口、用户名、密码或私钥、私钥口令、默认部署目录（默认 `/data/platform`）。凭据写入本机 `data/state.json`，不会进入部署包。
 2. 探测环境：`MSYS_NO_PATHCONV=1 node scripts/remote.js probe <host>`
 3. 部署：`MSYS_NO_PATHCONV=1 node scripts/remote.js deploy <host> /data/platform`
-   - 自动打包（排除 `data/`、`.env`、`state.json`、`node_modules/`、`workspace/`、`.workbuddy/`）→ SFTP 上传 → 解压 → 选择运行时 → 启动容器/服务 → 健康检查 → 幂等登记远端服务器。
+   - 自动打包（排除 `data/`、`.env`、`state.json`、`node_modules/`、`workspace/`、`dist/`、`.workbuddy/`，以及 `windows/{bin,bootstrap,runtime}`、`.native-probe` 等随包大二进制）→ SFTP 上传 → 解压 → 选择运行时 → 启动容器/服务 → 健康检查 → 幂等登记远端服务器。
    - 容器方式复用目标机已有的 `node:20-alpine` 等镜像，代码/数据挂载到 `/data/platform/{platform,data,workspace}`，容器名 `devplatform`，端口 9000。
 4. 在目标机启动三个配套组件：`docker compose up -d gitea openlist code-server`
 5. 初始化凭据：`MSYS_NO_PATHCONV=1 node scripts/remote.js script <host> scripts/setup-integrations.sh`

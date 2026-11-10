@@ -98,6 +98,9 @@ async function cmdProbe(host) {
 
 const EXCLUDE_DIRS = new Set(['node_modules', 'data', '.git', 'workspace', 'dist', '.workbuddy']);
 const EXCLUDE_FILES = new Set(['.env', 'state.json', 'state.json.tmp']);
+// Linux 部署包用不到 Windows 随包二进制 / 离线补充包 / 原生服务运行时，
+// 这三个目录合计数百 MB，不排除会把每次部署的上传体积放大上千倍。
+const EXCLUDE_PATH = /^(?:windows\/(?:bin|bootstrap|runtime)|\.native-probe)(?:\/|$)/;
 
 function collectFiles() {
   const files = [];
@@ -105,6 +108,7 @@ function collectFiles() {
     for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
       if (EXCLUDE_DIRS.has(entry.name) || EXCLUDE_FILES.has(entry.name)) continue;
       const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      if (EXCLUDE_PATH.test(rel)) continue;
       const abs = path.join(absDir, entry.name);
       if (entry.isDirectory()) walk(abs, rel);
       else if (entry.isFile()) files.push({ name: `devplatform/${rel}`, data: fs.readFileSync(abs) });
