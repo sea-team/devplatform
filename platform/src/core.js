@@ -63,8 +63,12 @@ function defaultState() {
     composeTemplates: [],
     // 分层代理：全局 / 分组 / Git Host 规则 / 单项覆盖（见 src/proxy.js）
     proxy: { global: {}, groups: {}, rules: [], overrides: {} },
-    // 运行时 OpenList 连接配置（界面可覆盖 .env；凭据只存 state.json）
+    // 运行时 OpenList 连接配置（旧版单连接，界面可覆盖 .env；凭据只存 state.json）
     openlist: null,
+    // v0.3.2：多 OpenList 连接。每个连接独立 url/user/token/password，
+    // openlistActiveId 指向当前生效项；切换时由 openlist.applyConfig() 写回运行时 config。
+    openlistConnections: [],
+    openlistActiveId: '',
   };
 }
 

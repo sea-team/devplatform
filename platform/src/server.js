@@ -341,6 +341,13 @@ app.get('/api/openlist/connection', (req, res) => ok(res, openlist.connection())
 app.put('/api/openlist/connection', wrap(async (req, res) => ok(res, openlist.setConnection(req.body || {}))));
 app.post('/api/openlist/connection/reset', (req, res) => ok(res, openlist.clearConnection()));
 
+// v0.3.2：多 OpenList 连接。除 active 连接外，其余只做登记，不改动运行时 config。
+app.get('/api/openlist/connections', (req, res) => ok(res, openlist.listConnections()));
+app.post('/api/openlist/connections', wrap(async (req, res) => ok(res, openlist.addConnection(req.body || {}))));
+app.put('/api/openlist/connections/:id', wrap(async (req, res) => ok(res, openlist.editConnection(req.params.id, req.body || {}))));
+app.delete('/api/openlist/connections/:id', wrap(async (req, res) => ok(res, openlist.removeConnection(req.params.id))));
+app.post('/api/openlist/connections/:id/activate', wrap(async (req, res) => ok(res, openlist.activateConnection(req.params.id))));
+
 app.get('/api/openlist/status', wrap(async (req, res) => ok(res, await openlist.status())));
 app.get('/api/openlist/settings', wrap(async (req, res) => ok(res, await openlist.settings())));
 

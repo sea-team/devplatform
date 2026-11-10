@@ -5,22 +5,47 @@ const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 const VIEW_META = {
   overview: ['总览', '平台各模块运行状态与关键指标'],
-  repos: ['Git 仓库', '聚合平台自带与 GitHub / 自建 Gitea 等外部源，克隆后直接开发'],
+  repos: ['仓库列表', '聚合平台自带与 GitHub / 自建 Gitea 等外部源，克隆后直接开发'],
+  'repo-new': ['新建仓库', '在指定 Git 源上创建并自动初始化仓库'],
+  'repo-clone': ['克隆到工作区', '支持已登记源凭据、本次账号密码 / Token，以及分层代理'],
   ide: ['在线 IDE', '基于 code-server 的浏览器版 VSCode，工作区与构建流水线共享'],
-  storage: ['存储 / 文件', 'OpenList 连接、挂载存储、驱动与全功能文件管理器'],
-  builds: ['构建 · 部署', '可降级构建后端：远程 Docker / 本机 Docker / WSL2 / 本地工具链'],
-  servers: ['服务器', 'SSH 连接、Web 终端、远程文件管理与实时状态'],
+  storage: ['文件浏览', '当前 OpenList 连接下的文件、上传、下载与批量操作'],
+  'storage-conn': ['OpenList 连接', '登记 / 切换本机与多个外部 OpenList，查看状态与后台'],
+  'storage-mounts': ['挂载存储', '当前连接下的挂载点增删改、启停与重载'],
+  'storage-drivers': ['WebDAV / 驱动', 'WebDAV 地址与当前连接支持的驱动清单'],
+  builds: ['构建记录', '历史构建、实时日志与构建后端状态'],
+  'build-start': ['启动构建', '选择项目、构建类型、编译环境与自动部署'],
+  deploys: ['部署记录', 'SSH + SFTP 产物发布记录'],
+  servers: ['服务器列表', '已登记 SSH 节点、终端、文件管理与连通性'],
+  'server-new': ['添加服务器', '登记 SSH 凭据、默认部署目录与单个服务器代理'],
   extensions: ['扩展 / 数据库', '清单化安装管理数据库、备份恢复、版本升级与 DbGate'],
-  gitsrc: ['Git 源', '登记 GitHub / 自建 Gitea / GitLab，凭据加密保存且不落入仓库配置'],
-  docker: ['Docker 管理', '容器 / 镜像 / 卷 / 网络 / 编排模板，非平台容器只读加二次确认'],
+  gitsrc: ['Git 源', '登记 GitHub / 自建 Gitea / GitLab，支持 Token 与账号密码'],
+  docker: ['Docker · 总览', 'Docker 端点、运行统计、安全策略与操作审计'],
+  'docker-containers': ['Docker · 容器', '容器列表、日志、详情、资源占用与启停'],
+  'docker-images': ['Docker · 镜像', '从仓库拉取、离线导入、导出与删除镜像'],
+  'docker-volumes': ['Docker · 存储卷', '持久化卷的创建、挂载点与删除'],
+  'docker-networks': ['Docker · 网络', '容器网络的创建、驱动与作用域'],
+  'docker-compose': ['Docker · 编排', 'Compose YAML 模板登记（不在平台内执行）'],
   proxy: ['代理配置', '全局 / 分组 / Git Host 规则 / 单项覆盖，四级优先级解析与连通性测试'],
   ai: ['AI 服务配置', 'API 服务、宿主机 / WSL 本地 AI 程序与代理'],
   ops: ['AI 运维', '让 AI 查询状态、分析日志并给出建议'],
 };
 const MODULE_ICONS = {
-  overview: '◈', repos: '⑂', ide: '⌘', storage: '▤',
-  builds: '⚙', servers: '▣', extensions: '▦', gitsrc: '⑃', docker: '⬡',
+  overview: '◈', repos: '⑂', 'repo-new': '＋', 'repo-clone': '⇩',
+  ide: '⌘', storage: '▤', 'storage-conn': '⇄', 'storage-mounts': '⛁', 'storage-drivers': '⎗',
+  builds: '⚙', 'build-start': '▶', deploys: '⇧',
+  servers: '▣', 'server-new': '＋', extensions: '▦', gitsrc: '⑃',
+  docker: '⬡', 'docker-containers': '▣', 'docker-images': '◫', 'docker-volumes': '⛁',
+  'docker-networks': '⌘', 'docker-compose': '▦',
   proxy: '⇄', ai: '✦', ops: '◎',
+};
+// 子页面归属：侧边栏主项保持高亮，标签栏仍显示各自的子页标题。
+const NAV_GROUP = {
+  'repo-new': 'repos', 'repo-clone': 'repos',
+  'storage-conn': 'storage', 'storage-mounts': 'storage', 'storage-drivers': 'storage',
+  'build-start': 'builds', deploys: 'builds', 'server-new': 'servers',
+  'docker-containers': 'docker', 'docker-images': 'docker', 'docker-volumes': 'docker',
+  'docker-networks': 'docker', 'docker-compose': 'docker',
 };
 
 let currentView = 'overview';
@@ -246,7 +271,8 @@ function activateTab(id) {
   // 先清所有面板（含已关闭但 DOM 常驻的模块页），再激活当前，避免两页同时显示。
   $$('#content .page').forEach((el) => el.classList.remove('active'));
   tabs.forEach((t) => { if (t.pane) t.pane.classList.toggle('active', t.id === id); });
-  $$('.nav-item').forEach((b) => b.classList.toggle('active', tab.kind === 'module' && b.dataset.view === tab.module));
+  $$('.nav-item').forEach((b) => b.classList.toggle('active', tab.kind === 'module' && b.dataset.view === (NAV_GROUP[tab.module] || tab.module)));
+  $$('.subnav-btn').forEach((b) => b.classList.toggle('active', b.dataset.openView === tab.module));
   // 顶部不再重复标题：浏览器标签页标题 + 悬停浮层 + ⓘ 承载上下文说明。
   document.title = `${tab.title} · DevPlatform`;
   const info = $('#tab-info');
@@ -405,7 +431,7 @@ async function loadRepos() {
   try {
     const d = await api('/repos');
     const sources = d.sources || [];
-    const options = sources.map((s) => `<option value="${esc(s.id)}">${esc(s.label)}${s.hasToken ? '' : '（未配置 Token）'}</option>`).join('');
+    const options = sources.map((s) => `<option value="${esc(s.id)}">${esc(s.label)}${s.hasCreds ? '' : '（未配置凭据）'}</option>`).join('');
     if ($('#repo-source')) $('#repo-source').innerHTML = options;
     if ($('#clone-source')) $('#clone-source').innerHTML = '<option value="">手动填写地址（不带凭据）</option>' + options;
     const errors = (d.errors || []).map((x) => `${x.label}：${x.error}`).join('；');
@@ -436,6 +462,7 @@ async function loadRepos() {
       $('#clone-form').elements.name.value = b.dataset.cloneName || '';
       $('#clone-source').value = b.dataset.cloneSource || '';
       $('#clone-repo-id').value = b.dataset.cloneId || '';
+      switchView('repo-clone');
       toast('已填入克隆表单，点击「克隆到工作区」执行');
     }));
     $$('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
@@ -497,18 +524,82 @@ function olResult(text) {
 function renderOpenlistStatus(status) {
   storageState.connection = status || null;
   const online = Boolean(status && status.online);
+  const label = status && (status.connectionLabel || status.label) ? `「${status.connectionLabel || status.label}」` : '';
   $('#openlist-status-text').textContent = online ? '● 在线' : '● 离线 / 未配置';
   $('#openlist-status-detail').textContent = online
-    ? `${status.url} · ${status.version ? `v${status.version} · ` : ''}${status.siteTitle || 'OpenList'} · ${status.storageCount} 个挂载 · 配置来源：${status.source} · 代理：${status.effectiveProxy || '无'}${status.admin ? '' : ` · [管理权限不可用] ${status.adminHint || status.adminError || 'Token 无效'}`}`
-    : `${status ? status.url || '' : ''} ${status ? (status.hint || status.error || '') : ''}`;
+    ? `${label} ${status.url} · ${status.version ? `v${status.version} · ` : ''}${status.siteTitle || 'OpenList'} · ${status.storageCount} 个挂载 · 配置来源：${status.source} · 代理：${status.effectiveProxy || '无'}${status.admin ? '' : ` · [管理权限不可用] ${status.adminHint || status.adminError || 'Token 无效'}`}`
+    : `${label} ${status ? status.url || '' : ''} ${status ? (status.hint || status.error || '') : ''}`;
   $('#openlist-open').href = (status && status.manageUrl) || '#';
   $('#webdav-url').textContent = (status && status.webdav) || '-';
   if (online && !$('#openlist-frame-card').hidden) {
     $('#openlist-frame').src = status.manageUrl;
   }
-  const form = $('#openlist-config-form');
-  if (form && form.elements.url && !form.elements.url.value) form.elements.url.value = status.url || '';
-  if (form && form.elements.user && !form.elements.user.value) form.elements.user.value = status.user || 'admin';
+  $('#storage-current-conn').textContent = online
+    ? `当前连接：${label || status.url} ${status.url}${status.admin ? '' : ' · 管理权限不可用（挂载 / 驱动接口会报错，请到连接管理修复凭据）'}`
+    : `当前连接不可用：${status ? (status.hint || status.error || '') : '未配置'} · 请到「连接管理」切换或修复`;
+}
+
+/** v0.3.2：多 OpenList 连接列表，可切换 / 编辑 / 删除。 */
+function renderOpenlistConnections(d) {
+  const items = (d && d.items) || [];
+  storageState.connections = items;
+  storageState.activeId = (d && d.activeId) || '';
+  $('#ol-conn-list').innerHTML = table(['连接', '服务地址', '凭据', '状态', '操作'], items.map((c) => `
+    <tr>
+      <td><b>${esc(c.label)}</b>${c.active ? ' ' + badge('当前', 'green') : ''}<div class="ext-list-url">${esc(c.user || 'admin')} · ${c.source === 'env' ? '来自 .env' : '面板登记'}</div></td>
+      <td><div class="ext-list-url">${esc(c.url)}</div><div class="ext-list-url">代理 ${esc(c.effectiveProxy || '无')}</div></td>
+      <td>${c.hasToken ? badge('Token', 'blue') : ''} ${c.hasPassword ? badge('密码', 'blue') : ''}${!c.hasToken && !c.hasPassword ? badge('匿名 / 未配置', 'amber') : ''}</td>
+      <td>${c.active ? badge('生效中', 'green') : badge('已登记', 'gray')}</td>
+      <td class="actions"><div class="ext-actions">
+        ${c.active ? '' : `<button class="btn btn-sm" data-olc-op="activate" data-olc-id="${esc(c.id)}" data-olc-name="${esc(c.label)}">设为当前</button>`}
+        <button class="btn btn-sm" data-olc-op="edit" data-olc-id="${esc(c.id)}">编辑</button>
+        ${items.length > 1 ? `<button class="btn btn-sm btn-danger" data-olc-op="remove" data-olc-id="${esc(c.id)}" data-olc-name="${esc(c.label)}">删除</button>` : ''}
+      </div></td>
+    </tr>`));
+  $$('[data-olc-op]').forEach((b) => b.addEventListener('click', async () => {
+    const op = b.dataset.olcOp;
+    const id = b.dataset.olcId;
+    try {
+      if (op === 'edit') {
+        fillOpenlistConnectionForm((storageState.connections || []).find((c) => c.id === id));
+      } else if (op === 'activate') {
+        await api(`/openlist/connections/${encodeURIComponent(id)}/activate`, { method: 'POST', body: {} });
+        toast(`已切换到「${b.dataset.olcName || id}」，正在重新加载`);
+        currentStoragePath = '/';
+        closeOpenlistConnectionForm();
+        await loadStorage();
+      } else if (op === 'remove') {
+        if (!confirm(`确定删除连接「${b.dataset.olcName || id}」？只移除平台里的登记，不会影响远端服务。`)) return;
+        await api(`/openlist/connections/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        toast('连接已删除');
+        closeOpenlistConnectionForm();
+        await loadStorage();
+      }
+    } catch (err) { toast(err.message || String(err), true); }
+  }));
+}
+
+function fillOpenlistConnectionForm(c) {
+  const f = $('#openlist-config-form');
+  f.hidden = false;
+  $('#ol-conn-tip').hidden = true;
+  $('#ol-conn-title').textContent = c ? `编辑连接 · ${c.label}` : '新增连接';
+  f.elements.id.value = c ? c.id : '';
+  f.elements.label.value = c ? c.label : '';
+  f.elements.url.value = c ? c.url : '';
+  f.elements.user.value = c ? (c.user || 'admin') : 'admin';
+  f.elements.token.value = c && c.hasToken ? c.tokenMasked : '';
+  f.elements.password.value = c && c.hasPassword ? c.passwordMasked : '';
+  if (f.elements.url && f.elements.url.focus) f.elements.url.focus();
+}
+
+function closeOpenlistConnectionForm() {
+  const f = $('#openlist-config-form');
+  f.hidden = true;
+  if (f.reset) f.reset();
+  if (f.elements.id) f.elements.id.value = '';
+  $('#ol-conn-tip').hidden = false;
+  $('#ol-conn-title').textContent = '新增连接';
 }
 
 function renderBreadcrumb(p) {
@@ -640,16 +731,18 @@ function renderDriverList(items) {
 async function loadStorage() {
   $('#storage-path').value = currentStoragePath;
   const settled = (p) => Promise.resolve(p).catch((e) => ({ error: e.message }));
-  const [status, files, mounts, drivers] = await Promise.all([
+  const [status, files, mounts, drivers, connections] = await Promise.all([
     settled(api('/openlist/status')),
     settled(api(`/openlist/files?path=${encodeURIComponent(currentStoragePath)}`)),
     settled(api('/openlist/storages')),
     settled(api('/openlist/drivers')),
+    settled(api('/openlist/connections')),
   ]);
   renderOpenlistStatus(status);
+  renderOpenlistConnections(connections);
   if (files && !files.error) renderFileList(files);
   else $('#file-list').innerHTML = errorBlock(files.error || '无法读取目录',
-    '请在上方「连接设置」里填写 OpenList 地址与管理员 Token / 密码，并确认服务已启动');
+    '请到「连接管理」切换到一个可用的 OpenList，或修复当前连接的管理员凭据');
   renderMountList(mounts && mounts.items || []);
   renderDriverList(drivers && drivers.items || []);
 }
@@ -1936,7 +2029,10 @@ async function loadGitSources() {
     const rows = (d.items || []).map((s) => `<tr>
       <td><b>${esc(s.label)}</b>${s.builtin ? ' ' + badge('内置', 'blue') : ''}<div class="ext-list-url">${esc(s.baseUrl)}</div></td>
       <td>${esc(s.type)}</td>
-      <td>${s.hasToken ? badge('已配置', 'green') + `<div class="ext-list-url">${esc(s.tokenMasked)}</div>` : badge('未配置', 'amber')}</td>
+      <td>${s.hasCreds
+        ? badge(s.authType === 'password' ? '账号密码' : 'Token', 'green')
+          + `<div class="ext-list-url">${esc(s.authType === 'password' ? `${s.username || '-'} / ${s.passwordMasked || '******'}` : (s.tokenMasked || ''))}</div>`
+        : badge('未配置', 'amber')}</td>
       <td><div class="ext-actions">
         <button class="btn btn-sm" data-gitsrc-op="test" data-gitsrc-id="${esc(s.id)}">测试连通</button>
         <button class="btn btn-sm" data-gitsrc-op="repos" data-gitsrc-id="${esc(s.id)}">仓库列表</button>
@@ -1959,64 +2055,101 @@ async function loadDocker() {
       + servers.map((s) => `<option value="server:${esc(s.id)}"${dockerState.target === `server:${s.id}` ? ' selected' : ''}>${esc(s.name)} · ${esc(s.host)}</option>`).join('');
     if (!d.available) {
       $('#docker-status').textContent = `Docker 不可用：${d.error || ''}`;
-      $('#docker-hint').textContent = d.hint || '可在上方切换远程目标';
-      ['containers', 'images', 'volumes', 'networks'].forEach((k) => { $(`#docker-${k}`).innerHTML = '<div class="empty">Docker 不可用</div>'; });
+      $('#docker-hint').textContent = d.hint || '可在「目标」里切换到已登记的 Linux 服务器远程管理';
+      $('#docker-stat-grid').innerHTML = '';
+      ['containers', 'images', 'volumes', 'networks'].forEach((k) => {
+        $(`#docker-${k}`).innerHTML = errorBlock('Docker 不可用', d.hint || '请切换远程目标或检查本机 Docker 服务');
+      });
+      $('#docker-settings').textContent = JSON.stringify({
+        target: d.target, available: false, error: d.error || '', hint: d.hint || '',
+      }, null, 2);
+      renderDockerTemplates();
       return;
     }
     const c = d.counts || {};
     $('#docker-status').textContent = `Docker ${d.status.version || ''} · ${d.status.endpoint || d.status.mode} · 容器 ${c.containers}（运行 ${c.running} / 平台自建 ${c.owned}）· 镜像 ${c.images} · 卷 ${c.volumes} · 网络 ${c.networks}`;
     $('#docker-hint').textContent = d.policy || '';
+    $('#docker-stat-grid').innerHTML = [
+      ['容器', c.containers, `运行中 ${c.running} · 平台自建 ${c.owned}`],
+      ['镜像', c.images, '本地镜像 / 仓库'],
+      ['存储卷', c.volumes, '持久化数据'],
+      ['网络', c.networks, '容器互联'],
+    ].map(([label, value, sub]) => `
+      <div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="sub">${esc(sub)}</div></div>
+    `).join('');
     renderDockerContainers();
     renderDockerImages();
     renderDockerVolumes();
     renderDockerNetworks();
-    if (dockerState.tab === 'templates') renderDockerTemplates();
-    if (dockerState.tab === 'settings') renderDockerSettings();
+    renderDockerTemplates();
+    renderDockerSettings();
   } catch (e) {
     $('#docker-status').textContent = `加载失败：${e.message}`;
-    $('#docker-containers').innerHTML = errorBlock(e.message);
+    if ($('#docker-containers')) $('#docker-containers').innerHTML = errorBlock(e.message);
   }
 }
 
 function renderDockerContainers() {
   const d = dockerState.data || {};
-  const rows = (d.containers || []).map((c) => {
-    const meta = `data-dk-id="${esc(c.id)}" data-dk-owned="${c.owned ? 1 : 0}" data-dk-name="${esc(c.name || '')}"`;
-    const ops = [
+  const all = Array.isArray(d.containers) ? d.containers : [];
+  const keyword = String(($('#docker-container-filter') && $('#docker-container-filter').value) || '').trim().toLowerCase();
+  const stateFilter = ($('#docker-container-state') && $('#docker-container-state').value) || 'all';
+  const isRunning = (c) => /running|up/i.test(String(c.state || ''));
+  const list = all.filter((c) => {
+    if (stateFilter === 'running' && !isRunning(c)) return false;
+    if (stateFilter === 'stopped' && isRunning(c)) return false;
+    if (!keyword) return true;
+    return [c.name, c.image, c.status, c.state, (c.ports || []).join(' ')]
+      .join(' ').toLowerCase().includes(keyword);
+  });
+  const count = $('#docker-container-count');
+  if (count) count.textContent = `显示 ${list.length} / ${all.length} 个容器`;
+  if (!list.length) {
+    $('#docker-containers').innerHTML = `<div class="empty">${all.length ? '没有符合筛选条件的容器' : '暂无容器'}</div>`;
+    return;
+  }
+  const rows = list.map((c) => {
+    const id = String(c.id || '');
+    const meta = `data-dk-id="${esc(id)}" data-dk-owned="${c.owned ? 1 : 0}" data-dk-name="${esc(c.name || '')}"`;
+    const view = [
       `<button class="btn btn-sm" data-dk-op="logs" ${meta}>日志</button>`,
       `<button class="btn btn-sm" data-dk-op="inspect" ${meta}>详情</button>`,
       `<button class="btn btn-sm" data-dk-op="stats" ${meta}>资源</button>`,
       `<button class="btn btn-sm" data-dk-op="proxy" ${meta}>代理</button>`,
     ];
-    if (!/running|up/i.test(c.state)) ops.push(`<button class="btn btn-sm" data-dk-op="start" ${meta}>启动</button>`);
-    else {
-      ops.push(`<button class="btn btn-sm" data-dk-op="stop" ${meta}>停止</button>`);
-      ops.push(`<button class="btn btn-sm" data-dk-op="restart" ${meta}>重启</button>`);
-    }
-    ops.push(`<button class="btn btn-sm btn-danger" data-dk-op="remove" ${meta}>删除</button>`);
+    const power = isRunning(c)
+      ? [`<button class="btn btn-sm" data-dk-op="stop" ${meta}>停止</button>`,
+        `<button class="btn btn-sm" data-dk-op="restart" ${meta}>重启</button>`]
+      : [`<button class="btn btn-sm" data-dk-op="start" ${meta}>启动</button>`];
+    power.push(`<button class="btn btn-sm btn-danger" data-dk-op="remove" ${meta}>删除</button>`);
     return `<tr>
-      <td><b>${esc(c.name || c.id.slice(0, 12))}</b><div class="ext-list-url">${esc(c.image)}</div></td>
+      <td><b>${esc(c.name || id.slice(0, 12) || '(未命名)')}</b><div class="ext-list-url">${esc(c.image || '-')}</div><div class="ext-list-url">${esc(id.slice(0, 12))}</div></td>
       <td>${c.owned ? badge('平台自建', 'blue') : badge('宿主机其它', 'gray')}</td>
-      <td>${badge(/running|up/i.test(c.state) ? '运行中' : '已停止', /running|up/i.test(c.state) ? 'green' : 'gray')}<div class="ext-list-url">${esc(c.status)}</div></td>
-      <td><div class="ext-list-url">${esc((c.ports || []).join(', ') || '-')}</div></td>
-      <td><div class="ext-actions">${ops.join('')}</div></td>
+      <td>${badge(isRunning(c) ? '运行中' : '已停止', isRunning(c) ? 'green' : 'gray')}<div class="ext-list-url">${esc(c.status || '-')}</div></td>
+      <td><div class="ext-list-url">${esc((c.ports || []).join(', ') || '-')}</div><div class="ext-list-url">创建于 ${esc(fmtTime(c.created))}</div></td>
+      <td class="actions"><div class="dk-ops"><div class="ext-actions">${power.join('')}</div><div class="ext-actions">${view.join('')}</div></div></td>
     </tr>`;
   });
-  $('#docker-containers').innerHTML = table(['容器', '归属', '状态', '端口', '操作'], rows);
+  $('#docker-containers').innerHTML = table(['容器 / 镜像', '归属', '状态', '端口 / 创建', '操作'], rows);
 }
 
 function renderDockerImages() {
   const d = dockerState.data || {};
-  const rows = (d.images || []).map((i) => `<tr>
-    <td><b>${esc((i.tags || []).filter(Boolean).join(', ') || i.repository || i.id.slice(0, 19))}</b><div class="ext-list-url">${esc(i.id.slice(0, 24))}</div></td>
+  const rows = (Array.isArray(d.images) ? d.images : []).map((i) => {
+    const id = String(i.id || '');
+    const tags = (Array.isArray(i.tags) ? i.tags : []).filter(Boolean);
+    const ref = tags[0] || i.repository || id;
+    return `<tr>
+    <td><b>${esc(tags.join(', ') || i.repository || id.slice(0, 19) || '(未命名)')}</b><div class="ext-list-url">${esc(id.slice(0, 24))}</div></td>
     <td>${typeof i.size === 'number' ? fmtSize(i.size) : esc(i.size || '-')}</td>
     <td class="muted">${esc(fmtTime(i.created))}</td>
     <td><div class="ext-actions">
-      <button class="btn btn-sm" data-dk-op="export" data-dk-ref="${esc((i.tags || [])[0] || i.id)}">导出</button>
-      <button class="btn btn-sm btn-danger" data-dk-op="rmi" data-dk-ref="${esc((i.tags || [])[0] || i.id)}">删除</button>
+      <button class="btn btn-sm" data-dk-op="export" data-dk-ref="${esc(ref)}">导出</button>
+      <button class="btn btn-sm btn-danger" data-dk-op="rmi" data-dk-ref="${esc(ref)}">删除</button>
     </div></td>
-  </tr>`);
-  $('#docker-images').innerHTML = table(['镜像', '大小', '创建时间', '操作'], rows);
+  </tr>`;
+  });
+  $('#docker-images').innerHTML = table(['镜像 / 标签', '大小', '创建时间', '操作'], rows);
 }
 
 function renderDockerVolumes() {
@@ -2059,26 +2192,41 @@ function renderDockerSettings() {
     importDir: 'data/images/（本机大镜像放这里，用「服务器上已有路径」导入）',
     remoteTmp: '远程镜像 tar 直接填服务器上的绝对路径',
   }, null, 2);
-  renderDockerTemplates();
 }
 
+/** 兼容旧调用：现在每个 Docker 分区都是独立标签页。 */
 function switchDockerTab(tab) {
+  const map = {
+    containers: 'docker-containers', images: 'docker-images',
+    volumes: 'docker-volumes', networks: 'docker-networks',
+    templates: 'docker-compose', settings: 'docker',
+  };
   dockerState.tab = tab;
-  $$('.docker-tab').forEach((b) => b.classList.toggle('active', b.dataset.dockerTab === tab));
-  $$('.docker-panel').forEach((p) => { p.hidden = p.id !== `docker-panel-${tab}`; });
-  if (tab === 'templates' || tab === 'settings') renderDockerTemplates();
-  if (tab === 'settings') renderDockerSettings();
+  switchView(map[tab] || 'docker');
 }
 
 /* -------------------------------- 事件绑定 ------------------------------- */
 
 const loaders = {
-  overview: loadOverview, repos: loadRepos, ide: loadIde, storage: loadStorage,
-  builds: loadBuilds, servers: loadServers, extensions: loadExtensions,
-  gitsrc: loadGitSources, docker: loadDocker, proxy: loadProxy,
+  overview: loadOverview,
+  repos: loadRepos, 'repo-new': loadRepos, 'repo-clone': loadRepos,
+  ide: loadIde,
+  storage: loadStorage, 'storage-conn': loadStorage, 'storage-mounts': loadStorage, 'storage-drivers': loadStorage,
+  builds: loadBuilds, 'build-start': loadBuilds, deploys: loadBuilds,
+  servers: loadServers, 'server-new': loadServers,
+  extensions: loadExtensions, gitsrc: loadGitSources,
+  docker: loadDocker, 'docker-containers': loadDocker, 'docker-images': loadDocker,
+  'docker-volumes': loadDocker, 'docker-networks': loadDocker, 'docker-compose': loadDocker,
+  proxy: loadProxy,
   dbgate: loadExtExtras, backups: loadExtExtras,
   ai: loadAI, ops: loadOps,
 };
+
+/* 每个独立页顶部的子导航：点按钮打开对应标签，而不是把功能堆在一页里。 */
+document.addEventListener('click', (e) => {
+  const button = e.target && e.target.closest ? e.target.closest('[data-open-view]') : null;
+  if (button) switchView(button.dataset.openView);
+});
 
 $('#nav').addEventListener('click', (e) => {
   const button = e.target.closest('.nav-item');
@@ -2388,12 +2536,34 @@ $('#ext-repos-save').addEventListener('click', async () => {
 
 /* ----------------------------- 外部 Git 源 ----------------------------- */
 
+/** 外部 Git 源认证方式切换：Token / 账号密码二选一。 */
+function syncGitSourceAuthFields() {
+  const mode = ($('#gitsrc-auth-type') && $('#gitsrc-auth-type').value) || 'token';
+  const tokenField = $('#gitsrc-token-field');
+  const passFields = $('#gitsrc-password-fields');
+  if (tokenField) tokenField.hidden = mode !== 'token';
+  if (passFields) passFields.hidden = mode !== 'password';
+  const form = $('#gitsrc-form');
+  if (form && form.elements.token) form.elements.token.required = mode === 'token';
+  if (form && form.elements.password) form.elements.password.required = mode === 'password';
+}
+$('#gitsrc-auth-type').addEventListener('change', syncGitSourceAuthFields);
+
 $('#gitsrc-form').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const body = formData(e.target);
+  if (body.authType === 'password') {
+    body.token = '';
+    if (!body.username || !body.password) { toast('账号密码方式必须填写用户名和密码 / PAT', true); return; }
+  } else {
+    body.password = '';
+    if (!body.token) { toast('请填写访问令牌 Token，或切换为账号密码方式', true); return; }
+  }
   try {
-    await api('/git-sources', { method: 'POST', body: formData(e.target) });
+    await api('/git-sources', { method: 'POST', body });
     toast('Git 源已登记，仓库列表会自动聚合');
     e.target.reset();
+    syncGitSourceAuthFields();
     await loadGitSources();
     await loadRepos();
   } catch (err) { toast(err.message || String(err), true); }
@@ -2439,7 +2609,7 @@ $('#gitsrc-repos').addEventListener('click', (e) => {
   $('#clone-form').elements.cloneUrl.value = button.dataset.cloneRepo || '';
   $('#clone-form').elements.name.value = button.dataset.cloneName || '';
   $('#clone-source').value = button.dataset.cloneSource || '';
-  switchView('repos');
+  switchView('repo-clone');
   toast('已填入克隆表单，点击「克隆到工作区」执行');
 });
 
@@ -2449,10 +2619,11 @@ $('#docker-target').addEventListener('change', (e) => {
   dockerState.target = e.target.value || 'local';
   loadDocker();
 });
-$('#docker-tabbar').addEventListener('click', (e) => {
-  const button = e.target.closest('[data-docker-tab]');
-  if (button) switchDockerTab(button.dataset.dockerTab);
-});
+// 容器列表筛选：拆分后各页独立，筛选条件只作用于容器页。
+if ($('#docker-container-filter')) {
+  $('#docker-container-filter').addEventListener('input', renderDockerContainers);
+  $('#docker-container-state').addEventListener('change', renderDockerContainers);
+}
 $('#docker-log-close').addEventListener('click', () => { $('#docker-log-card').hidden = true; });
 
 function dockerShowLog(title, text) {
@@ -2468,8 +2639,9 @@ const dockerNeedConfirm = (label, owned) => {
     && confirm('再次确认：此操作不可撤销，继续？');
 };
 
-$('#view-docker').addEventListener('click', async (e) => {
-  const button = e.target.closest('[data-dk-op]');
+// 拆分成独立页后，Docker 操作按钮分散在多个 section，统一用文档级委托。
+document.addEventListener('click', async (e) => {
+  const button = e.target && e.target.closest ? e.target.closest('[data-dk-op]') : null;
   if (!button) return;
   const op = button.dataset.dkOp;
   const id = button.dataset.dkId || '';
@@ -2609,10 +2781,37 @@ $('#repo-form').addEventListener('submit', async (e) => {
   catch (err) { toast(err.message, true); }
 });
 
+/** 克隆凭据方式切换：只展示当前方式需要的字段，避免残留值被误提交。 */
+function syncCloneAuthFields() {
+  const mode = ($('#clone-auth-mode') && $('#clone-auth-mode').value) || 'source';
+  const inline = mode === 'password' || mode === 'token';
+  $('#clone-inline-fields').hidden = !inline;
+  $('#clone-username-field').hidden = mode !== 'password';
+  $('#clone-password-field').hidden = mode !== 'password';
+  $('#clone-token-field').hidden = mode !== 'token';
+  const src = $('#clone-source');
+  if (src) src.disabled = mode !== 'source';
+}
+$('#clone-auth-mode').addEventListener('change', syncCloneAuthFields);
+
 $('#clone-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  try { const d = await api('/repos/clone', { method: 'POST', body: formData(e.target) }); toast(`已克隆到 ${d.path}`); loadRepos(); }
-  catch (err) { toast(err.message, true); }
+  const body = formData(e.target);
+  const mode = String(body.authMode || 'source');
+  delete body.authMode;
+  if (mode !== 'password') { delete body.username; delete body.password; }
+  if (mode !== 'token') delete body.token;
+  if (mode === 'none') body.sourceId = '';
+  if (mode === 'password' && (!body.username || !body.password)) { toast('请填写用户名和密码 / PAT', true); return; }
+  if (mode === 'token' && !body.token) { toast('请填写访问令牌 Token', true); return; }
+  try {
+    const d = await api('/repos/clone', { method: 'POST', body });
+    toast(`已克隆到 ${d.path}${d.authenticated ? '（已携带凭据）' : ''}`);
+    // 本次填写的凭据不留在表单里，也不写入 state.json。
+    if (e.target.elements.password) e.target.elements.password.value = '';
+    if (e.target.elements.token) e.target.elements.token.value = '';
+    loadRepos();
+  } catch (err) { toast(err.message, true); }
 });
 
 $('#ide-open').addEventListener('click', openIde);
@@ -2641,14 +2840,9 @@ $('#mkdir-form').addEventListener('submit', async (e) => {
   } catch (err) { toast(err.message, true); }
 });
 $('#upload-input').addEventListener('change', (e) => uploadFiles(e.target.files));
-$('#openlist-config-toggle').addEventListener('click', () => {
-  const form = $('#openlist-config-form');
-  form.hidden = !form.hidden;
-  if (!form.hidden && storageState.connection) {
-    form.elements.url.value = storageState.connection.url || '';
-    form.elements.user.value = storageState.connection.user || 'admin';
-  }
-});
+$('#ol-conn-new').addEventListener('click', () => fillOpenlistConnectionForm(null));
+$('#ol-conn-cancel').addEventListener('click', closeOpenlistConnectionForm);
+$('#ol-conn-reload').addEventListener('click', () => loadStorage());
 $('#openlist-embed-toggle').addEventListener('click', () => {
   const card = $('#openlist-frame-card');
   card.hidden = !card.hidden;
@@ -2662,17 +2856,27 @@ $('#openlist-frame-close').addEventListener('click', () => {
 });
 $('#openlist-config-form').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const form = e.target;
+  const body = formData(form);
+  const id = String(body.id || '');
   try {
-    await api('/openlist/connection', { method: 'PUT', body: formData(e.target) });
-    e.target.elements.token.value = '';
-    e.target.elements.password.value = '';
-    toast('连接已保存，正在重新检测'); loadStorage();
-  } catch (err) { toast(err.message, true); }
+    if (id) await api(`/openlist/connections/${encodeURIComponent(id)}`, { method: 'PUT', body });
+    else await api('/openlist/connections', { method: 'POST', body });
+    toast(id ? '连接已更新，正在重新检测' : '连接已登记并设为当前，正在重新检测');
+    closeOpenlistConnectionForm();
+    currentStoragePath = '/';
+    await loadStorage();
+  } catch (err) { toast(err.message || String(err), true); }
 });
 $('#openlist-config-reset').addEventListener('click', async () => {
-  if (!confirm('恢复使用 .env / 环境变量里的 OpenList 配置？')) return;
-  try { await api('/openlist/connection/reset', { method: 'POST', body: {} }); toast('已恢复环境配置'); loadStorage(); }
-  catch (err) { toast(err.message, true); }
+  if (!confirm('恢复使用 .env / 环境变量里的默认 OpenList 连接？其它已登记连接会保留。')) return;
+  try {
+    await api('/openlist/connection/reset', { method: 'POST', body: {} });
+    toast('已恢复 .env 默认连接');
+    closeOpenlistConnectionForm();
+    currentStoragePath = '/';
+    await loadStorage();
+  } catch (err) { toast(err.message, true); }
 });
 $('#webdav-copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('#webdav-url').textContent.trim()); toast('WebDAV 地址已复制'); }

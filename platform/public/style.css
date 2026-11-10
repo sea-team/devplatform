@@ -434,10 +434,6 @@ tr:last-child td { border-bottom: 0; }
 .ext-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .field-help { display: block; margin-top: 5px; font-size: 11px; line-height: 1.5; color: var(--muted); }
 
-/* Docker 管理：六分区切换 */
-.docker-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; padding-bottom: 4px; }
-.docker-tab { border-color: var(--border); }
-.docker-tab.active { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); font-weight: 600; }
 /* v0.3.1：OpenList 管理工具条与代理配置页 */
 .row.wrap { justify-content: flex-start; }
 .file-toolbar {
@@ -450,8 +446,34 @@ tr:last-child td { border-bottom: 0; }
 #proxy-priority .arch-row span { line-height: 1.7; }
 #openlist-frame { height: 620px; }
 
-.docker-panel { animation: panel-in .16s ease-out; }
-@keyframes panel-in { from { opacity: .5; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+/* v0.3.2：功能拆成独立标签页后，每页顶部的子导航条 */
+.subnav {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  margin-bottom: 14px; padding: 8px 10px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+}
+.subnav-label {
+  font-size: 12px; font-weight: 650; color: var(--muted);
+  margin-right: 8px; white-space: nowrap;
+}
+.subnav-btn {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  border-radius: 7px; padding: 5px 12px; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.subnav-btn:hover { border-color: var(--primary); color: var(--primary); }
+.subnav-btn.active {
+  background: var(--primary-soft); color: var(--primary);
+  border-color: var(--primary); font-weight: 650;
+}
+/* Docker 列表：操作按钮分两行，避免 8 个按钮把列挤成一条 */
+.dk-ops { display: flex; flex-direction: column; gap: 5px; min-width: 210px; }
+.dk-ops .ext-actions { gap: 4px; }
+#docker-stat-grid { margin-bottom: 14px; }
+#view-docker-containers table, #view-docker-images table,
+#view-docker-volumes table, #view-docker-networks table,
+#view-docker-compose table, #view-docker table { min-width: 660px; }
+#docker-container-filter { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; }
+#ol-conn-list table { min-width: 720px; }
 
 @media (max-width: 1100px) {
   .stat-grid { grid-template-columns: repeat(2, 1fr); }

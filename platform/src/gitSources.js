@@ -19,8 +19,18 @@ const proxyModule = require('./proxy');
 
 const BUILTIN_ID = 'builtin-gitea';
 const TYPES = ['github', 'gitea', 'gitlab', 'generic'];
+// v0.3.2：既支持 Token，也支持「账号 + 密码 / 个人访问令牌」的 Basic 认证。
+const AUTH_TYPES = ['token', 'password'];
+// 表单回显的脱敏占位符：提交时沿用已保存的凭据，避免把 ****** 写回 state.json。
+const isMasked = (v) => String(v || '').includes('******');
+const keepSecret = (value, saved) => (isMasked(value) ? (saved || '') : String(value || ''));
+const hasCreds = (s) => Boolean(s && (s.token || (s.username && s.password)));
 
-/* ------------------------------ 数据存取 ------------------------------ */
+function assertCredentials(s) {
+  if (!hasCreds(s)) {
+    throw new Error(`Git 源「${s.label}」未配置凭据：请填写 Token，或选择「账号密码」并填写用户名与密码`);
+  }
+}
 
 function builtinSource() {
   return {
@@ -30,6 +40,8 @@ function builtinSource() {
     baseUrl: config.giteaUrl,
     token: config.giteaToken || '',
     username: '',
+    password: '',
+    authType: 'token',
     builtin: true,
     createdAt: null,
   };
@@ -54,11 +66,15 @@ function gitProxyFor(url, itemId = '') {
 }
 
 function publicSource(s) {
+  const authType = AUTH_TYPES.includes(s.authType) ? s.authType : 'token';
   return {
     id: s.id, label: s.label, type: s.type, baseUrl: s.baseUrl,
-    username: s.username || '', builtin: Boolean(s.builtin),
+    username: s.username || '', authType, builtin: Boolean(s.builtin),
     hasToken: Boolean(s.token),
-    tokenMasked: s.token ? `${String(s.token).slice(0, 3)}****${String(s.token).slice(-3)}` : '',
+    hasPassword: Boolean(s.password),
+    hasCreds: hasCreds(s),
+    tokenMasked: s.token ? `${String(s.token).slice(0, 3)}******${String(s.token).slice(-3)}` : '',
+    passwordMasked: s.password ? `******${String(s.password).slice(-2)}` : '',
     effectiveProxy: gitProxyFor(s.baseUrl, s.id).masked,
     host: proxyModule.hostOf(s.baseUrl),
     createdAt: s.createdAt || null,
@@ -81,11 +97,19 @@ function createSource(body = {}) {
   const label = String(body.label || '').trim().slice(0, 60);
   if (!label) throw new Error('请填写源名称');
   const baseUrl = normalizeBase(type, body.baseUrl || (type === 'github' ? 'https://api.github.com' : ''));
+  const authType = AUTH_TYPES.includes(String(body.authType)) ? String(body.authType) : 'token';
+  const username = String(body.username || '').trim().slice(0, 80);
   const token = String(body.token || '').trim().slice(0, 512);
-  if (!token) throw new Error('请填写访问令牌（Token）');
+  const password = String(body.password || '').trim().slice(0, 256);
+  if (authType === 'password') {
+    if (!username || !password) throw new Error('账号密码方式必须填写用户名和密码');
+  } else if (!token) {
+    throw new Error('Token 方式必须填写访问令牌；也可切换为「账号密码」认证');
+  }
   const source = {
-    id: uid('gitsrc'), label, type, baseUrl, token,
-    username: String(body.username || '').trim().slice(0, 80),
+    id: uid('gitsrc'), label, type, baseUrl, authType,
+    token: authType === 'token' ? token : '',
+    username, password: authType === 'password' ? password : '',
     builtin: false, createdAt: new Date().toISOString(),
   };
   update((s) => {
@@ -105,7 +129,12 @@ function updateSource(id, body = {}) {
   if (body.type !== undefined && TYPES.includes(String(body.type))) patch.type = String(body.type);
   if (body.baseUrl !== undefined) patch.baseUrl = normalizeBase(patch.type || found.type, body.baseUrl);
   if (body.username !== undefined) patch.username = String(body.username).trim().slice(0, 80);
-  if (body.token) patch.token = String(body.token).trim().slice(0, 512);
+  if (body.authType !== undefined && AUTH_TYPES.includes(String(body.authType))) patch.authType = String(body.authType);
+  if (body.token !== undefined) patch.token = keepSecret(body.token, found.token).trim().slice(0, 512);
+  if (body.password !== undefined) patch.password = keepSecret(body.password, found.password).trim().slice(0, 256);
+  // 切换认证方式时清掉另一种凭据，避免明文长期留在 state.json。
+  if (patch.authType === 'token') patch.password = '';
+  if (patch.authType === 'password') patch.token = '';
   update((s) => Object.assign(s.gitSources.find((x) => x.id === id), patch));
   return publicSource(findSource(id));
 }
@@ -128,6 +157,12 @@ function apiBase(s) {
 }
 
 function authHeaders(s) {
+  // 账号密码方式：Gitea / GitHub / GitLab 的 REST API 都接受 HTTP Basic。
+  // GitHub 早已停用账户密码登录，这里请把 PAT 填在「密码」里、用户名填 GitHub 账号。
+  if (s.authType === 'password') {
+    const basic = Buffer.from(`${s.username || 'git'}:${s.password || ''}`).toString('base64');
+    return { Authorization: `Basic ${basic}`, Accept: 'application/vnd.github+json', 'User-Agent': 'devplatform' };
+  }
   switch (s.type) {
     case 'github':
       return { Authorization: `Bearer ${s.token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'devplatform' };
@@ -159,7 +194,7 @@ function normalizeRepo(s, r) {
 }
 
 async function listReposOf(s) {
-  if (!s.token) throw Object.assign(new Error(`Git 源「${s.label}」未配置 Token`), { code: 'unconfigured' });
+  assertCredentials(s);
   const { url, kind } = apiBase(s);
   const pathname = kind === 'github' ? '/user/repos?per_page=100&sort=updated'
     : kind === 'gitlab' ? '/projects?membership=true&per_page=100&order_by=updated_at'
@@ -188,7 +223,7 @@ async function listAllRepos() {
 
 async function listBranches(sourceId, fullName) {
   const s = findSource(sourceId);
-  if (!s.token) throw new Error(`Git 源「${s.label}」未配置 Token`);
+  assertCredentials(s);
   if (!/^[A-Za-z0-9._/-]{1,200}$/.test(String(fullName))) throw new Error('仓库名不合法');
   const { url, kind } = apiBase(s);
   let pathname;
@@ -206,7 +241,7 @@ async function listBranches(sourceId, fullName) {
 
 async function createRepo(sourceId, body = {}) {
   const s = findSource(sourceId);
-  if (!s.token) throw new Error(`Git 源「${s.label}」未配置 Token`);
+  assertCredentials(s);
   const name = String(body.name || '').replace(/[^A-Za-z0-9_.-]/g, '-');
   if (!name) throw new Error('请填写仓库名');
   const { url, kind } = apiBase(s);
@@ -231,10 +266,30 @@ async function testSource(id) {
 /* ------------------------------ 克隆仓库 ------------------------------ */
 
 /**
- * 构造带临时凭据的 git clone 参数。凭据以 `git -c http.extraHeader=...` 传入，
- * 只在本次进程的参数中出现，不写入 .git/config、不落到磁盘。
- * SSH 地址（git@ / ssh://）不做处理，走本机 SSH 密钥。
+ * 生成临时凭据头。v0.3.2 起同时支持：
+ *  - 已登记 Git 源的 Token；
+ *  - 已登记 Git 源的「账号 + 密码」；
+ *  - 克隆表单本次直接填写的账号密码 / Token（不落盘，只在本次进程参数里出现）。
+ * 返回 secret 供日志脱敏使用。
  */
+function cloneCredential(source) {
+  if (!source) return null;
+  if (source.authType === 'password' && source.password) {
+    const user = source.username || 'git';
+    const basic = Buffer.from(`${user}:${source.password}`).toString('base64');
+    return { header: `Authorization: Basic ${basic}`, secrets: [source.password, basic] };
+  }
+  if (!source.token) return null;
+  if (source.type === 'gitlab') {
+    return { header: `PRIVATE-TOKEN: ${source.token}`, secrets: [source.token] };
+  }
+  const user = source.type === 'github'
+    ? 'x-access-token'
+    : (source.username || (source.type === 'gitea' ? 'token' : 'git'));
+  const basic = Buffer.from(`${user}:${source.token}`).toString('base64');
+  return { header: `Authorization: Basic ${basic}`, secrets: [source.token, basic] };
+}
+
 function cloneArgs(source, cloneUrl, resolved = null) {
   const args = ['clone'];
   let env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
@@ -258,30 +313,24 @@ function cloneArgs(source, cloneUrl, resolved = null) {
   }
   if (resolved) env = { ...env, ...proxyModule.envFor(resolved) };
 
-  if (isHttp && source && source.token) {
-    let header;
-    if (source.type === 'gitlab') header = `PRIVATE-TOKEN: ${source.token}`;
-    else {
-      const user = source.type === 'github'
-        ? 'x-access-token'
-        : (source.username || (source.type === 'gitea' ? 'token' : 'git'));
-      const basic = Buffer.from(`${user}:${source.token}`).toString('base64');
-      header = `Authorization: Basic ${basic}`;
-    }
-    args.push('-c', `http.extraHeader=${header}`);
-    // 只允许对这个源的地址附加凭据，避免被重定向到第三方时泄漏。
+  const cred = isHttp ? cloneCredential(source) : null;
+  if (cred) {
+    args.push('-c', `http.extraHeader=${cred.header}`);
+    // 只让凭据出现在本次进程参数里，不写入 .git/config，也不让 git 打印到日志。
     args.push('-c', 'http.extraHeaderRedact=true');
   }
   args.push(url);
-  return { args, env, auth: Boolean(isHttp && source && source.token), proxyUrl };
+  return { args, env, auth: Boolean(cred), proxyUrl, secrets: cred ? cred.secrets : [] };
 }
 
-function scrub(text, token) {
-  if (!token) return text;
-  return String(text).split(token).join('******').replace(/(Basic\s+)[A-Za-z0-9+/=]{8,}/gi, '$1******');
+function scrub(text, secrets = []) {
+  let out = String(text);
+  for (const secret of secrets.filter(Boolean)) out = out.split(secret).join('******');
+  return out.replace(/(Basic\s+)[A-Za-z0-9+/=]{8,}/gi, '$1******');
 }
 
-async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId } = {}) {
+async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId,
+  username, password, token } = {}) {
   const source = sourceId ? findSource(sourceId) : null;
   const url = String(cloneUrl || '').trim();
   if (!url) throw new Error('缺少 cloneUrl');
@@ -290,15 +339,31 @@ async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId } = {
   const target = safeWorkspacePath(repoName);
   if (fs.existsSync(target)) throw new Error(`目录已存在：${repoName}`);
 
+  // 本次表单直填的凭据优先于已登记源，且不写入 state.json。
+  const inlineUser = String(username || '').trim().slice(0, 80);
+  const inlinePass = String(password || '').trim().slice(0, 256);
+  const inlineToken = String(token || '').trim().slice(0, 512);
+  const inline = (inlinePass || inlineToken) ? {
+    type: source ? source.type : 'generic',
+    authType: inlinePass ? 'password' : 'token',
+    username: inlineUser, password: inlinePass, token: inlineToken,
+    label: '本次克隆',
+  } : null;
+  if (inline && inline.authType === 'password' && !inlineUser) {
+    throw new Error('填写密码时必须同时填写用户名');
+  }
+  const effective = inline || source;
+
   // 单个仓库代理可来自：克隆表单本次指定 > 代理页按仓库 id 登记的覆盖 > Host 规则 > Git 分组 > 全局。
   const resolved = proxyModule.resolve('git', {
     itemId: repoId || name || url, url, host: proxyModule.hostOf(url),
     inlineProxy: proxy || '',
   });
-  const { args, env, auth, proxyUrl } = cloneArgs(source, url, resolved);
+  const { args, env, auth, proxyUrl, secrets } = cloneArgs(effective, url, resolved);
   if (branch && /^[A-Za-z0-9._/-]{1,120}$/.test(String(branch))) args.splice(args.length - 1, 0, '-b', String(branch));
   args.push(target);
 
+  const allSecrets = [...secrets, source && source.token, source && source.password].filter(Boolean);
   await new Promise((resolve, reject) => {
     const child = spawn('git', args, { shell: false, env });
     let stderr = '';
@@ -306,11 +371,12 @@ async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId } = {
     child.on('error', reject);
     child.on('close', (code) => (code === 0
       ? resolve()
-      : reject(new Error(`git clone 失败：${scrub(stderr.slice(-600), source && source.token)}`))));
+      : reject(new Error(`git clone 失败：${scrub(stderr.slice(-600), allSecrets)}`))));
   });
   return {
     name: repoName, path: relativeWorkspacePath(target), cloneUrl: url,
     sourceId: sourceId || '', authenticated: auth,
+    credentialSource: inline ? '本次填写' : (source ? `Git 源「${source.label}」` : '无（公开仓库 / SSH 密钥）'),
     proxy: proxyModule.maskUrl(proxyUrl), proxySource: resolved.sourceLabel,
   };
 }
@@ -318,5 +384,6 @@ async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId } = {
 module.exports = {
   BUILTIN_ID, TYPES, listSources, createSource, updateSource, removeSource,
   listAllRepos, listReposOf, listBranches, createRepo, testSource,
-  cloneRepo, cloneArgs, allSources, findSource, publicSource, gitProxyFor,
+  cloneRepo, cloneArgs, cloneCredential, hasCreds,
+  allSources, findSource, publicSource, gitProxyFor,
 };

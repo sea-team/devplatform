@@ -12,7 +12,7 @@
  * 代理：OpenList 不属于 git/docker/server/ai 四个作用域，走全局代理 + NO_PROXY。
  */
 const path = require('path');
-const { config, state, update } = require('./core');
+const { config, state, update, uid } = require('./core');
 const { openlistApi } = require('./integrations');
 const proxyModule = require('./proxy');
 
@@ -55,58 +55,197 @@ const safeDir = (p) => {
 };
 
 /* ------------------------------ 连接配置 ------------------------------ */
+/**
+ * v0.3.2：支持同时登记多个 OpenList（本机 + 任意外部服务）。
+ * 只有 activeId 指向的连接会被写进运行时 config，所有既有 API 保持不变；
+ * 切换连接时清掉 openlistApi 的 token 缓存，避免拿旧服务的令牌请求新服务。
+ * 兼容：旧版 state.openlist 单连接会自动迁移成一条「面板配置连接」。
+ */
+const ENV_CONN_ID = 'env-default';
+const MASK = '******';
+const keep = (value, saved) => (String(value || '').includes(MASK) ? (saved || '') : String(value || ''));
 
-/** 程序启动时调用：把 state.json 中保存的连接覆盖到运行时 config。 */
-function applyConfig() {
-  const saved = state().openlist;
-  if (!saved) return;
-  if (saved.url) config.openlistUrl = String(saved.url).replace(/\/+$/, '');
-  if (saved.user !== undefined) config.openlistUser = String(saved.user);
-  if (saved.token !== undefined) config.openlistToken = String(saved.token);
-  if (saved.password !== undefined) config.openlistPassword = String(saved.password);
-}
-
-function connection() {
-  const conn = {
-    url: config.openlistUrl,
-    user: config.openlistUser || 'admin',
-    hasToken: Boolean(config.openlistToken),
-    hasPassword: Boolean(config.openlistPassword),
-    source: state().openlist ? '面板配置' : '.env / 环境变量',
-    manageUrl: `${config.openlistUrl}/@manage`,
-    storagesUrl: `${config.openlistUrl}/@manage/storages`,
-    webdav: openlistApi.webdavUrl(),
-    effectiveProxy: proxyModule.forGlobal(config.openlistUrl).masked,
+function envConnection() {
+  return {
+    id: ENV_CONN_ID, label: '本机 OpenList（.env）',
+    url: ENV.url, user: ENV.user || 'admin',
+    token: ENV.token || '', password: ENV.password || '',
+    source: 'env', createdAt: null,
   };
-  return conn;
 }
 
-function setConnection(body = {}) {
-  const patch = {};
-  if (body.url !== undefined) {
-    const url = String(body.url).trim().replace(/\/+$/, '');
-    if (!/^https?:\/\//i.test(url)) throw new Error('OpenList 地址必须是 http(s):// 开头');
-    new URL(url);
-    patch.url = url;
+function normalizeConnections() {
+  const s = state();
+  if (Array.isArray(s.openlistConnections) && s.openlistConnections.length) return s.openlistConnections;
+  const list = [envConnection()];
+  if (s.openlist) {
+    list.push({
+      id: uid('olconn'), label: '面板配置连接',
+      url: s.openlist.url || ENV.url, user: s.openlist.user || ENV.user || 'admin',
+      token: s.openlist.token || '', password: s.openlist.password || '',
+      source: 'panel', createdAt: new Date().toISOString(),
+    });
   }
-  if (body.user !== undefined) patch.user = String(body.user).trim().slice(0, 80);
-  // 表单里带 ****** 说明是脱敏回显，沿用已保存的值。
-  const keep = (value, saved) => (String(value || '').includes('******') ? saved : String(value || ''));
-  const current = state().openlist || {};
-  if (body.token !== undefined) patch.token = keep(body.token, current.token || '').slice(0, 512);
-  if (body.password !== undefined) patch.password = keep(body.password, current.password || '').slice(0, 256);
-  update((s) => { s.openlist = { ...(s.openlist || {}), ...patch }; });
+  update((st) => {
+    st.openlistConnections = list;
+    st.openlistActiveId = s.openlist ? list[1].id : list[0].id;
+  });
+  return state().openlistConnections;
+}
+
+function activeConnection() {
+  const list = normalizeConnections();
+  const activeId = state().openlistActiveId;
+  return list.find((c) => c.id === activeId) || list[0];
+}
+
+function publicConnection(c) {
+  const activeId = state().openlistActiveId;
+  const url = String(c.url || '').replace(/\/+$/, '');
+  return {
+    id: c.id, label: c.label || url, url, user: c.user || 'admin',
+    source: c.source || 'panel', createdAt: c.createdAt || null,
+    hasToken: Boolean(c.token), hasPassword: Boolean(c.password),
+    tokenMasked: c.token ? `${String(c.token).slice(0, 3)}******${String(c.token).slice(-3)}` : '',
+    passwordMasked: c.password ? `******${String(c.password).slice(-2)}` : '',
+    active: c.id === activeId,
+    manageUrl: `${url}/@manage`, storagesUrl: `${url}/@manage/storages`,
+    webdav: `${url}/dav/`,
+    effectiveProxy: proxyModule.forGlobal(url).masked,
+  };
+}
+
+/** 程序启动时调用：把当前 active 连接覆盖到运行时 config。 */
+function applyConfig() {
+  const active = activeConnection();
+  if (!active) return;
+  config.openlistUrl = String(active.url || ENV.url).replace(/\/+$/, '');
+  config.openlistUser = String(active.user || 'admin');
+  config.openlistToken = String(active.token || '');
+  config.openlistPassword = String(active.password || '');
+}
+
+/** 旧接口：返回当前连接（含多连接清单），前端与文档可继续沿用。 */
+function connection() {
+  const active = activeConnection();
+  const pub = publicConnection(active);
+  return {
+    ...pub,
+    // 兼容旧字段名
+    source: pub.source === 'env' ? '.env / 环境变量' : '面板配置',
+    effectiveProxy: pub.effectiveProxy,
+    activeId: state().openlistActiveId,
+    connections: normalizeConnections().map(publicConnection),
+  };
+}
+
+function validatedUrl(url) {
+  const value = String(url || '').trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(value)) throw new Error('OpenList 地址必须是 http(s):// 开头');
+  new URL(value);
+  return value;
+}
+
+function connectionPatch(body = {}, current = {}) {
+  const patch = {};
+  if (body.label !== undefined) patch.label = String(body.label).trim().slice(0, 60) || '未命名连接';
+  if (body.url !== undefined) patch.url = validatedUrl(body.url);
+  if (body.user !== undefined) patch.user = String(body.user).trim().slice(0, 80) || 'admin';
+  // 表单里带 ****** 说明是脱敏回显，沿用已保存的真实值。
+  if (body.token !== undefined) patch.token = keep(body.token, current.token).slice(0, 512);
+  if (body.password !== undefined) patch.password = keep(body.password, current.password).slice(0, 256);
+  return patch;
+}
+
+/** 旧接口：更新当前 active 连接（也可通过 body.id 指定某条）。 */
+function setConnection(body = {}) {
+  const list = normalizeConnections();
+  const id = String(body.id || state().openlistActiveId || '');
+  const target = list.find((c) => c.id === id) || activeConnection();
+  const patch = connectionPatch(body, target);
+  update((s) => {
+    const item = (s.openlistConnections || []).find((c) => c.id === target.id);
+    if (item) Object.assign(item, patch, { source: 'panel' });
+    s.openlist = { ...(s.openlist || {}), ...patch };
+  });
   applyConfig();
   openlistApi.resetToken();
   return connection();
 }
 
+/** 恢复 .env 默认连接并切换到它（旧接口 /connection/reset 的语义）。 */
 function clearConnection() {
-  update((s) => { s.openlist = null; });
-  config.openlistUrl = ENV.url;
-  config.openlistToken = ENV.token;
-  config.openlistUser = ENV.user;
-  config.openlistPassword = ENV.password;
+  normalizeConnections();
+  update((s) => {
+    const env = (s.openlistConnections || []).find((c) => c.id === ENV_CONN_ID);
+    if (env) Object.assign(env, envConnection());
+    else s.openlistConnections.unshift(envConnection());
+    s.openlistActiveId = ENV_CONN_ID;
+    s.openlist = null;
+  });
+  applyConfig();
+  openlistApi.resetToken();
+  return connection();
+}
+
+function listConnections() {
+  const list = normalizeConnections();
+  return { items: list.map(publicConnection), activeId: state().openlistActiveId };
+}
+
+function addConnection(body = {}) {
+  const patch = connectionPatch({ ...body, url: body.url, label: body.label }, {});
+  if (!patch.url) throw new Error('请填写 OpenList 服务地址');
+  if (!patch.label || patch.label === '未命名连接') patch.label = patch.url.replace(/^https?:\/\//, '').slice(0, 60);
+  const item = {
+    id: uid('olconn'), label: patch.label, url: patch.url,
+    user: patch.user || 'admin', token: patch.token || '', password: patch.password || '',
+    source: 'panel', createdAt: new Date().toISOString(),
+  };
+  update((s) => {
+    if (!Array.isArray(s.openlistConnections)) s.openlistConnections = [];
+    s.openlistConnections.push(item);
+    s.openlistActiveId = item.id;
+  });
+  applyConfig();
+  openlistApi.resetToken();
+  return connection();
+}
+
+function editConnection(id, body = {}) {
+  const list = normalizeConnections();
+  const target = list.find((c) => c.id === String(id));
+  if (!target) throw new Error(`OpenList 连接不存在：${id}`);
+  const patch = connectionPatch(body, target);
+  update((s) => {
+    const item = (s.openlistConnections || []).find((c) => c.id === target.id);
+    if (item) Object.assign(item, patch);
+  });
+  applyConfig();
+  openlistApi.resetToken();
+  return connection();
+}
+
+function removeConnection(id) {
+  const list = normalizeConnections();
+  if (list.length <= 1) throw new Error('至少需要保留一个 OpenList 连接');
+  const target = list.find((c) => c.id === String(id));
+  if (!target) throw new Error(`OpenList 连接不存在：${id}`);
+  update((s) => {
+    s.openlistConnections = (s.openlistConnections || []).filter((c) => c.id !== target.id);
+    if (s.openlistActiveId === target.id) s.openlistActiveId = s.openlistConnections[0].id;
+  });
+  applyConfig();
+  openlistApi.resetToken();
+  return connection();
+}
+
+function activateConnection(id) {
+  const list = normalizeConnections();
+  const target = list.find((c) => c.id === String(id));
+  if (!target) throw new Error(`OpenList 连接不存在：${id}`);
+  update((s) => { s.openlistActiveId = target.id; });
+  applyConfig();
   openlistApi.resetToken();
   return connection();
 }
@@ -128,6 +267,8 @@ async function status() {
   return {
     online: true,
     ...conn,
+    connectionId: conn.id,
+    connectionLabel: conn.label,
     version: settings.version || '',
     siteTitle: settings.site_title || settings.title || '',
     storageCount: storages.length,
@@ -140,10 +281,10 @@ async function status() {
 
 function hintFor(error) {
   const msg = String((error && error.message) || error);
-  if (/未配置/.test(msg)) return '在下方填写 Token 或管理员密码；也可改 dist/.env 后完全重启';
-  if (/ECONNREFUSED|fetch failed/i.test(msg)) return '服务未启动或地址是容器内服务名，请改成本机可访问地址';
+  if (/未配置/.test(msg)) return '在「连接管理」里填写 Token 或管理员密码；也可改 dist/.env 后完全重启';
+  if (/ECONNREFUSED|fetch failed/i.test(msg)) return '服务未启动或地址是容器内服务名；外部 OpenList 请填平台能访问到的 http(s) 地址';
   if (/登录失败|401|403/i.test(msg)) return 'Token 或管理员密码不正确；存储管理需要管理员权限的 Token';
-  if (/record not found|code=500|token 失效/i.test(msg)) return 'Token 已失效或无管理员权限：清空 OPENLIST_TOKEN 让平台改用管理员密码登录，或在 OpenList 后台重新生成管理员 Token';
+  if (/record not found|code=500|token 失效/i.test(msg)) return '当前连接的 Token 已失效或无管理员权限：在「连接管理」里清空 Token 改用管理员密码登录，或到该 OpenList 后台重新生成管理员 Token';
   return msg.slice(0, 180);
 }
 
@@ -332,6 +473,8 @@ async function download(p, maxBytes = 100 * 1024 * 1024) {
 
 module.exports = {
   ENV, applyConfig, connection, setConnection, clearConnection,
+  listConnections, addConnection, editConnection, removeConnection, activateConnection,
+  activeConnection, publicConnection,
   status, settings,
   listStorages, listDrivers, driverInfo, createStorage, updateStorage,
   deleteStorage, setStorageEnabled, reloadStorages,

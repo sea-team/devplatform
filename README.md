@@ -1477,8 +1477,11 @@ microVM（Firecracker / Kata / gVisor）解决的是「隔离不可信代码 / �
 | `github` | `baseUrl`（默认 `https://api.github.com`） | `Authorization: Bearer <token>` |
 | `gitea` / `generic` | `<baseUrl>/api/v1` | `Authorization: token <token>` |
 | `gitlab` | `<baseUrl>/api/v4` | `PRIVATE-TOKEN: <token>` |
+| 账号密码 / PAT（任意类型，v0.3.2） | 同上 | `Authorization: Basic base64(用户名:密码)` |
 
-「Git 源」页可登记 / 测试连通 / 查看该源仓库列表 / 删除；「Git 仓库」页自动聚合**所有源**的仓库（单源失败只记入 `errors`，不影响其它源），每个仓库都能一键填入克隆表单或直接开在线 IDE。创建仓库时可选择目标 Git 源，不再只能建到平台自带 Gitea。
+登记表单的「认证方式」可在 **Token** 与 **账号 + 密码 / PAT** 之间切换：自建 Gitea / GitLab 可直接填账号密码，GitHub 已停用密码登录，请在密码栏填 PAT、用户名栏填 GitHub 账号。切换方式时会清掉另一种凭据，避免明文长期留在 `state.json`；列表接口对 Token 与密码都做脱敏，脱敏值原样提交时后端沿用真实值。「克隆到工作区」页还可选择**本次直填**账号密码或 Token，凭据只进本次 `git clone` 进程参数，不保存、不落盘。
+
+「Git 源」页可登记 / 测试连通 / 查看该源仓库列表 / 删除；「仓库列表」页自动聚合**所有源**的仓库（单源失败只记入 `errors`，不影响其它源），每个仓库都能一键填入克隆表单或直接开在线 IDE。创建仓库时可选择目标 Git 源，不再只能建到平台自带 Gitea。v0.3.2 起「新建仓库 / 克隆到工作区 / 仓库列表 / Git 源」是四个独立标签页，见 §29。
 
 ### 21.2 凭据不落盘
 
@@ -1497,7 +1500,18 @@ microVM（Firecracker / Kata / gVisor）解决的是「隔离不可信代码 / �
 | `POST /git-sources/:id/test` | 列一次仓库验证连通性与 Token |
 | `GET /git-sources/:id/repos` / `/branches?repo=owner/name` | 单源仓库 / 分支列表 |
 | `GET/POST /repos` | 聚合所有源的仓库 / 在指定 `sourceId` 创建仓库 |
-| `POST /repos/clone` | 带临时凭据克隆到工作区（可选 `sourceId` / `name` / `branch`） |
+| `POST /repos/clone` | 带临时凭据克隆到工作区（可选 `sourceId` / `name` / `branch` / `proxy` / `repoId`，以及本次直填的 `username` / `password` / `token`） |
+
+### 21.4 克隆凭据的四种方式
+
+| 方式 | 说明 |
+|---|---|
+| 使用已登记 Git 源的凭据 | 从 `sourceId` 取 Token 或账号密码，最常用 |
+| 本次填写账号密码 | 只在本次 `git clone` 生效，适合临时借用他人凭据 |
+| 本次填写 Token | 同上，适合一次性 PAT |
+| 不带凭据 | 公开仓库，或 `git@` / `ssh://` 走本机 SSH 密钥 |
+
+四种方式都叠加分层代理解析（本次指定 > 单个仓库 > Git Host 规则 > Git 分组 > 全局），失败日志对密码、Token 与 Base64 串统一脱敏。
 
 ---
 
@@ -1515,6 +1529,8 @@ microVM（Firecracker / Kata / gVisor）解决的是「隔离不可信代码 / �
 | 设置 / 日志 | 端点 · 版本 · 安全策略 + **操作审计** |
 
 顶部「目标」下拉可切换 `本机 Docker` 或 `server:<id>`——远程目标复用 `remoteDocker.js` 下发 `docker ps / images / volume ls / network ls`，与远程安装、远程构建一条通道。
+
+v0.3.2 起六个分区**各自是独立标签页**（总览 / 设置、容器、镜像 / 仓库、存储卷、网络、容器编排），每页顶部有子导航条可一键跳转，不再把所有表单堆在一页。容器列表新增名称 / 镜像 / 状态筛选与运行数统计，操作按钮分成「电源操作 / 查看诊断」两行，表格设最小宽度并横向滚动，修掉多按钮挤压导致的显示异常。总览页补了容器 / 镜像 / 卷 / 网络四张统计卡与端点设置、安全策略说明。
 
 ### 22.2 只读 + 二次确认
 
@@ -1633,6 +1649,8 @@ DbGate 社区版按 GPL-3.0 分发，平台只提供官方镜像清单与连接�
 
 「存储 / 文件」页不再只是只读的目录列表：平台把 OpenList（兼容 AList V3 API）的**连接配置、挂载存储、驱动清单、站点设置与全部文件操作**接成原生 API，同时保留「打开 / 内嵌 OpenList 后台」入口处理更复杂的高级设置。
 
+> **v0.3.2 起支持多连接**：可同时登记本机与任意外部 OpenList，逐条切换当前连接；文件浏览、挂载存储、驱动清单始终作用于当前连接。相关区块也已拆成四个独立标签页，详见 §29。
+
 ### 26.1 页面能力
 
 | 区块 | 能力 |
@@ -1736,3 +1754,63 @@ Git 作用域额外支持 Host 规则（`github.com`、`*.gitea.internal`、完�
 验证：`npm run check`（21 个后端模块）、`scripts/check-frontend.js`（12 个模块页 + DOM stub 跑 boot）、`scripts/smoke-proxy-openlist.js`（**45 项全通过**：四组优先级链、direct / 通配 / NO_PROXY / 脱敏 / 回显保护、HTTP CONNECT 与 SOCKS5 隧道转发真实请求、`tunnelAgent` 转发 Docker Engine TCP、代理连通性、git clone 注入、OpenList 连接 / 状态 / 设置白名单 / 挂载 CRUD / 驱动模板 / 文件全操作 / 直链 / 下载 / 上传 / 非法参数拦截 / 旧接口回归）、完整 SEA 构建（release.json = 0.3.1，bundle 含新模块）。
 
 前端资源版本升至 `?v=20261110c`；已发布包升级到 v0.3.1 后前端会自动刷新（静态资源 `cache-control: no-cache`）。
+
+---
+
+## 29. v0.3.2：页面拆分 · 凭据增强 · 多 OpenList 连接
+
+### 29.1 从「一页塞全部」到 25 个独立标签页
+
+侧边栏保持 12 个主模块，把原本挤在一页的表单与列表拆成独立 `.page`，每页顶部有 `subnav` 子导航条，点按钮即打开对应标签（表单内容、终端会话不会互相干扰）。`VIEW_META` / `MODULE_ICONS` / `loaders` / `NAV_GROUP` 同步注册，侧边栏主项仍保持高亮。
+
+| 模块 | 拆分后的独立页 |
+|---|---|
+| Git 仓库 | 仓库列表 · 新建仓库 · 克隆到工作区 · 外部 Git 源 |
+| 存储 / 文件 | 文件浏览 · 连接管理 · 挂载存储 · WebDAV / 驱动 |
+| 构建 · 部署 | 构建记录 / 日志 · 启动构建 · 部署记录 |
+| 服务器 | 服务器列表 · 添加服务器 |
+| Docker 管理 | 总览 / 设置 · 容器 · 镜像 / 仓库 · 存储卷 · 网络 · 容器编排 |
+
+关键实现策略：**所有既有 DOM id 保持不变，只把卡片移到新的 section**，因此事件绑定、自检脚本与旧接口全部沿用，回归风险最低。跨页跳转（如仓库列表点「克隆」）改为 `switchView('repo-clone')` 并自动预填表单。
+
+### 29.2 单项代理配置补齐说明
+
+「代理配置 → 单项代理覆盖」原本只有一个裸文本框，现在补上完整的填写指引：作用域 / 对象 / 代理地址三步、可填的协议与示例（`http://user:pass@host:port`、`socks5://`、`direct`）、留空 = 删除覆盖、四条优先级链、NO_PROXY 与凭据脱敏说明。分组代理、Git Host 规则、服务器表单、AI 表单、克隆表单的代理输入框也各自加了语义提示。
+
+### 29.3 外部 Git 源与克隆支持账号密码
+
+`gitSources.js` 新增 `authType: token | password`；账号密码方式统一走 HTTP Basic（GitHub 请在密码栏填 PAT）。凭据写入 `state.json`（600），列表输出 `hasCreds / authType / tokenMasked / passwordMasked`，脱敏值回显时后端沿用真实值，切换认证方式会清掉另一种明文凭据。
+
+克隆表单新增「凭据方式」：使用已登记源凭据 / 本次填写账号密码 / 本次填写 Token / 不带凭据。本次直填的凭据只进 `git clone` 进程参数，**不写 state.json、不进 .git/config**；`scrub()` 现在对密码、Token 与 Base64 串统一脱敏。
+
+### 29.4 多个 OpenList 连接
+
+`state.openlistConnections` 保存连接数组，`openlistActiveId` 指向当前生效项。切换时 `applyConfig()` 把该连接的 url / user / token / password 写回运行时 `config` 并清掉 `openlistApi` 的 token 缓存，因此所有既有文件 / 挂载 / 驱动接口无需改动。旧版 `state.openlist` 单连接会在首次启动时自动迁移成一条「面板配置连接」。
+
+| 端点 | 用途 |
+|---|---|
+| `GET /openlist/connections` | 连接清单 + 当前 activeId（凭据脱敏） |
+| `POST /openlist/connections` | 新增连接并自动设为当前 |
+| `PUT/DELETE /openlist/connections/:id` | 编辑 / 删除（至少保留一条） |
+| `POST /openlist/connections/:id/activate` | 切换当前连接 |
+
+旧的 `/openlist/connection` 三件套保持兼容。外部服务请填平台（或平台所在容器）能访问到的 `http(s)://` 地址；容器内的 `localhost` 指向平台自身而非外部服务。管理接口（挂载 / 驱动 / 设置）必须有管理员权限的 Token，凭据失效时状态页会明确显示 `[管理权限不可用]` 而不是伪装成空列表。
+
+### 29.5 Docker 列表与子页重构
+
+容器列表加名称 / 镜像 / 状态筛选、运行数统计与统计卡；操作按钮分成「电源操作」「查看诊断」两行，表格设最小宽度 + 横向滚动，修掉按钮挤压造成的显示异常；`renderDocker*` 全部补了字段缺失的防御（空 id / 空 tags 不再抛异常）。六个分区各自有独立页、说明文字与表单提示，总览页补端点设置、安全策略与操作审计。`[data-dk-op]` 事件委托改为文档级，保证拆页后所有按钮仍可用。
+
+> 本次开发时 `10.0.0.246:8008` 宝塔面板所有路径均返回 nginx 404（安全入口可能已变更），因此按宝塔 Docker 模块的既有信息架构（设置 / 镜像仓库 / 容器 / 存储卷 / 网络 / 编排）组织，未做界面像素级仿制。
+
+### 29.6 改动文件与验证
+
+| 文件 | 职责 |
+|---|---|
+| `platform/src/gitSources.js` | 账号密码认证、Basic 头、克隆临时凭据、脱敏 |
+| `platform/src/openlist.js` | 多连接 CRUD / 切换 / 迁移 / 脱敏 |
+| `platform/src/core.js` | `defaultState` 新增 `openlistConnections` / `openlistActiveId` |
+| `platform/src/server.js` | 新增 5 条多连接路由 |
+| `platform/public/index.html` / `app.js` / `style.css` | 25 个独立页、子导航、多连接 UI、Docker 重构、代理说明 |
+| `scripts/check-frontend.js` / `scripts/smoke-proxy-openlist.js` | 页面数与新接口断言、端到端覆盖 |
+
+验证：`npm run check`（21 个后端模块）、`scripts/check-frontend.js`（**30 项全通过**，25 个页面 + DOM stub boot）、`scripts/smoke-proxy-openlist.js`（**59 项全通过**，含账号密码登记 / 脱敏 / 切换清理、三种克隆凭据头、多连接增改切删与最后一条保护、原有 45 项代理 / OpenList 回归）。前端资源版本升至 `?v=20261110d`，`package.json` / `package-lock.json` 升到 `0.3.2`。

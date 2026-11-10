@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261110c" />
+  <link rel="stylesheet" href="/style.css?v=20261110d" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -96,31 +96,14 @@
           </div>
         </section>
 
-        <!-- 仓库 -->
+        <!-- 仓库列表（独立页） -->
         <section class="page" id="view-repos">
-          <div class="grid-2">
-            <div class="card">
-              <div class="card-head"><h2>新建仓库</h2><span class="muted">创建后自动初始化</span></div>
-              <form id="repo-form" class="form">
-                <label>目标 Git 源<select name="sourceId" id="repo-source"></select></label>
-                <label>仓库名称<input name="name" placeholder="my-project" required /></label>
-                <label>描述<input name="description" placeholder="项目简介" /></label>
-                <label class="check"><input type="checkbox" name="private" /> 设为私有仓库</label>
-                <div class="form-actions"><button class="btn btn-primary btn-block" type="submit">创建仓库</button></div>
-              </form>
-            </div>
-            <div class="card">
-              <div class="card-head"><h2>克隆到工作区</h2><span class="muted">克隆后可直接用在线 IDE 打开</span></div>
-              <form id="clone-form" class="form">
-                <label>Git 源（用于临时携带凭据）<select name="sourceId" id="clone-source"></select></label>
-                <label>仓库地址<input name="cloneUrl" placeholder="从下方列表点「克隆」自动填入，也可手填 http(s)/git@ 地址" required /></label>
-                <label>本地目录名（可选）<input name="name" placeholder="留空则用仓库名" /></label>
-                <label>本次克隆代理（可选）<input name="proxy" placeholder="留空按代理规则继承；填 direct 强制直连" /></label>
-                <input type="hidden" name="repoId" id="clone-repo-id" value="" />
-                <div class="form-actions"><button class="btn btn-block" type="submit">克隆到工作区</button></div>
-              </form>
-              <div class="hint" style="margin-top:10px">凭据通过临时 <code>http.extraHeader</code> 传递，不会写入 .git/config 或落到磁盘。代理优先级：本次指定 &gt; 单个仓库 &gt; Git Host 匹配 &gt; 全局。</div>
-            </div>
+          <div class="subnav">
+            <span class="subnav-label">Git 仓库</span>
+            <button class="subnav-btn active" data-open-view="repos">仓库列表</button>
+            <button class="subnav-btn" data-open-view="repo-new">新建仓库</button>
+            <button class="subnav-btn" data-open-view="repo-clone">克隆到工作区</button>
+            <button class="subnav-btn" data-open-view="gitsrc">外部 Git 源</button>
           </div>
           <div class="card">
             <div class="card-head"><h2>仓库列表</h2><button class="btn btn-ghost btn-sm" data-reload="repos">刷新</button></div>
@@ -129,11 +112,83 @@
           </div>
         </section>
 
+        <!-- 新建仓库（独立页） -->
+        <section class="page" id="view-repo-new">
+          <div class="subnav">
+            <span class="subnav-label">Git 仓库</span>
+            <button class="subnav-btn" data-open-view="repos">仓库列表</button>
+            <button class="subnav-btn active" data-open-view="repo-new">新建仓库</button>
+            <button class="subnav-btn" data-open-view="repo-clone">克隆到工作区</button>
+            <button class="subnav-btn" data-open-view="gitsrc">外部 Git 源</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>新建仓库</h2><span class="muted">在所选 Git 源上创建，创建后自动初始化</span></div>
+            <form id="repo-form" class="form">
+              <div class="grid-2">
+                <label>目标 Git 源<select name="sourceId" id="repo-source"></select></label>
+                <label>仓库名称<input name="name" placeholder="my-project" required /></label>
+              </div>
+              <label>描述<input name="description" placeholder="项目简介" /></label>
+              <label class="check"><input type="checkbox" name="private" /> 设为私有仓库</label>
+              <div class="form-actions"><button class="btn btn-primary" type="submit">创建仓库</button></div>
+            </form>
+            <div class="notice">创建用的凭据来自「外部 Git 源」页登记的信息（Token 或账号密码）。内置 Gitea 的凭据来自 <code>.env</code>。创建完成后可到「仓库列表」点「克隆」拉到工作区。</div>
+          </div>
+        </section>
+
+        <!-- 克隆到工作区（独立页） -->
+        <section class="page" id="view-repo-clone">
+          <div class="subnav">
+            <span class="subnav-label">Git 仓库</span>
+            <button class="subnav-btn" data-open-view="repos">仓库列表</button>
+            <button class="subnav-btn" data-open-view="repo-new">新建仓库</button>
+            <button class="subnav-btn active" data-open-view="repo-clone">克隆到工作区</button>
+            <button class="subnav-btn" data-open-view="gitsrc">外部 Git 源</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>克隆到工作区</h2><span class="muted">克隆后可直接用在线 IDE 打开</span></div>
+            <form id="clone-form" class="form">
+              <div class="grid-2">
+                <label>仓库地址<input name="cloneUrl" placeholder="从「仓库列表」点克隆自动填入，也可手填 http(s)/git@ 地址" required /></label>
+                <label>本地目录名（可选）<input name="name" placeholder="留空则用仓库名" /></label>
+              </div>
+              <div class="grid-2">
+                <label>凭据方式<select name="authMode" id="clone-auth-mode">
+                  <option value="source">使用已登记 Git 源的凭据</option>
+                  <option value="password">本次填写账号密码</option>
+                  <option value="token">本次填写访问令牌 Token</option>
+                  <option value="none">不带凭据（公开仓库 / SSH 密钥）</option>
+                </select></label>
+                <label>Git 源（配合上一项）<select name="sourceId" id="clone-source"></select></label>
+              </div>
+              <div id="clone-inline-fields" class="grid-2" hidden>
+                <label id="clone-username-field">用户名<input name="username" id="clone-username" placeholder="Git 账号，GitHub 请填用户名" autocomplete="off" /></label>
+                <label id="clone-password-field">密码 / 个人访问令牌<input name="password" id="clone-password" type="password" placeholder="GitHub 请填 PAT，不要填登录密码" autocomplete="new-password" /></label>
+                <label id="clone-token-field" hidden>访问令牌 Token<input name="token" id="clone-token" type="password" placeholder="ghp_... / Gitea Token / GitLab PAT" autocomplete="new-password" /></label>
+              </div>
+              <label>本次克隆代理（可选）<input name="proxy" placeholder="留空按代理规则继承；填 direct 强制直连" /></label>
+              <input type="hidden" name="repoId" id="clone-repo-id" value="" />
+              <div class="form-actions"><button class="btn btn-primary" type="submit">克隆到工作区</button></div>
+            </form>
+            <div class="notice">
+              <b>凭据安全</b>：本次填写的账号密码 / Token 只在 <code>git clone</code> 进程参数里出现，通过临时 <code>http.extraHeader</code> 传递，<b>不会写入 .git/config、不会落到工作区、也不会保存进 state.json</b>；失败日志会自动脱敏。SSH 地址（<code>git@</code> / <code>ssh://</code>）走本机 SSH 密钥，账号密码无效。<br />
+              <b>代理优先级</b>：本次指定 &gt; 单个仓库代理 &gt; Git Host 匹配规则 &gt; Git 分组代理 &gt; 全局代理；<code>direct</code> 表示强制直连。更多说明见「代理配置」页。
+            </div>
+          </div>
+        </section>
+
         <!-- 外部 Git 源 -->
         <section class="page" id="view-gitsrc">
+          <div class="subnav">
+            <span class="subnav-label">Git 仓库</span>
+            <button class="subnav-btn" data-open-view="repos">仓库列表</button>
+            <button class="subnav-btn" data-open-view="repo-new">新建仓库</button>
+            <button class="subnav-btn" data-open-view="repo-clone">克隆到工作区</button>
+            <button class="subnav-btn active" data-open-view="gitsrc">外部 Git 源</button>
+          </div>
           <div class="card">
             <div class="card-head"><h2>登记外部 Git 源</h2><span class="muted">GitHub / 自建 Gitea / GitLab</span></div>
-            <div class="hint" id="gitsrc-hint">平台自带 Gitea 已内置；登记外部源后，仓库列表会一并聚合，可直接克隆到工作区并用在线 IDE 开发。</div>
+            <div class="hint" id="gitsrc-hint">平台自带 Gitea 已内置；登记外部源后，仓库列表会一并聚合，可直接克隆到工作区并用在线 IDE 开发。支持 Token 与账号密码两种认证方式。</div>
             <form id="gitsrc-form" class="form" style="margin-top:14px">
               <div class="grid-2">
                 <label>名称<input name="label" placeholder="例如 公司 Gitea" required /></label>
@@ -144,10 +199,24 @@
                   <option value="generic">其它（Gitea 兼容）</option>
                 </select></label>
                 <label>服务地址<input name="baseUrl" placeholder="https://api.github.com 或 http://10.0.0.246:3000" required /></label>
-                <label>用户名（可选）<input name="username" placeholder="GitLab / 自建服务可留空" /></label>
+                <label>认证方式<select name="authType" id="gitsrc-auth-type">
+                  <option value="token">访问令牌 Token（推荐）</option>
+                  <option value="password">账号 + 密码 / PAT</option>
+                </select></label>
               </div>
-              <label>访问令牌 Token<input name="token" type="password" placeholder="ghp_... / Gitea Token / GitLab PAT" required /></label>
-              <div class="form-actions"><button class="btn btn-primary" type="submit">登记 Git 源</button><span class="muted">Token 只写入本机 state.json（600 权限），列表接口一律脱敏</span></div>
+              <div class="grid-2">
+                <label>用户名（账号密码方式必填，Token 方式可选）<input name="username" id="gitsrc-username" placeholder="GitHub 账号 / Gitea 用户名" autocomplete="off" /></label>
+                <label id="gitsrc-token-field">访问令牌 Token<input name="token" type="password" placeholder="ghp_... / Gitea Token / GitLab PAT" autocomplete="new-password" /></label>
+              </div>
+              <div class="grid-2" id="gitsrc-password-fields" hidden>
+                <label>密码 / 个人访问令牌<input name="password" type="password" placeholder="GitHub 必须填 PAT（已停用密码登录）" autocomplete="new-password" /></label>
+              </div>
+              <div class="notice">
+                <b>Token 方式</b>：GitHub 用 <code>Bearer</code>、GitLab 用 <code>PRIVATE-TOKEN</code>、Gitea 用 <code>token</code> 头，权限最完整。<br />
+                <b>账号密码方式</b>：统一走 HTTP Basic 调用 REST API 与克隆；自建 Gitea / GitLab 可直接填账号密码，GitHub 请在密码栏填 PAT（GitHub 自 2021 起停用密码认证）。<br />
+                凭据只写入本机 <code>data/state.json</code>（600 权限），列表接口一律脱敏；登记后点「测试连通」验证。
+              </div>
+              <div class="form-actions"><button class="btn btn-primary" type="submit">登记 Git 源</button></div>
             </form>
           </div>
           <div class="card">
@@ -161,87 +230,196 @@
           </div>
         </section>
 
-        <!-- Docker 管理 -->
+        <!-- Docker 管理 · 总览 / 设置（独立页） -->
         <section class="page" id="view-docker">
+          <div class="subnav">
+            <span class="subnav-label">Docker 管理</span>
+            <button class="subnav-btn active" data-open-view="docker">总览 / 设置</button>
+            <button class="subnav-btn" data-open-view="docker-containers">容器</button>
+            <button class="subnav-btn" data-open-view="docker-images">镜像 / 仓库</button>
+            <button class="subnav-btn" data-open-view="docker-volumes">存储卷</button>
+            <button class="subnav-btn" data-open-view="docker-networks">网络</button>
+            <button class="subnav-btn" data-open-view="docker-compose">容器编排</button>
+          </div>
           <div class="card">
             <div class="card-head"><h2>Docker 运行环境</h2>
               <select id="docker-target" style="max-width:280px"><option value="local">本机 Docker</option></select>
             </div>
-            <div class="hint" id="docker-hint">容器 / 镜像 / 存储卷 / 网络 / 编排模板 / 设置，参照宝塔 Docker 模块组织。</div>
-            <div class="hint" id="docker-status" style="margin-top:8px">检测中…</div>
-            <div class="docker-tabs" id="docker-tabbar">
-              <button class="btn btn-sm docker-tab active" data-docker-tab="containers">容器</button>
-              <button class="btn btn-sm docker-tab" data-docker-tab="images">镜像</button>
-              <button class="btn btn-sm docker-tab" data-docker-tab="volumes">存储卷</button>
-              <button class="btn btn-sm docker-tab" data-docker-tab="networks">网络</button>
-              <button class="btn btn-sm docker-tab" data-docker-tab="templates">编排模板</button>
-              <button class="btn btn-sm docker-tab" data-docker-tab="settings">设置 / 审计</button>
+            <div class="hint" id="docker-hint">容器 / 镜像 / 存储卷 / 网络 / 编排模板 / 设置，参照宝塔 Docker 模块组织，各功能已拆成独立标签页。</div>
+            <div class="notice" id="docker-status">检测中…</div>
+          </div>
+          <div class="stat-grid" id="docker-stat-grid"></div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2>设置 / 端点</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
+              <div class="hint">当前目标、Docker 版本、安全策略与离线镜像目录；切换目标后所有子页会同步刷新。</div>
+              <pre class="log" id="docker-settings" style="margin-top:12px">—</pre>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>安全策略</h2><span class="muted">只读 + 二次确认</span></div>
+              <div class="arch">
+                <div class="arch-row"><b>平台容器</b><span>带 devplatform.ext 标签，可直接启停 / 删除</span></div>
+                <div class="arch-row"><b>其它容器</b><span>默认只读，写操作需两次确认并逐条审计</span></div>
+                <div class="arch-row"><b>镜像 / 卷 / 网络</b><span>删除一律要求确认；不提供任意命令执行入口</span></div>
+                <div class="arch-row"><b>编排模板</b><span>只登记 YAML 文本，不在平台内直接执行</span></div>
+              </div>
             </div>
           </div>
+          <div class="card">
+            <div class="card-head"><h2>操作审计</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
+            <div class="hint">非平台容器的所有写操作都会记录在这里，最多保留最近 100 条。</div>
+            <div id="docker-audit" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+        </section>
 
-          <div class="card docker-panel" id="docker-panel-containers">
+        <!-- Docker 管理 · 容器（独立页） -->
+        <section class="page" id="view-docker-containers">
+          <div class="subnav">
+            <span class="subnav-label">Docker 管理</span>
+            <button class="subnav-btn" data-open-view="docker">总览 / 设置</button>
+            <button class="subnav-btn active" data-open-view="docker-containers">容器</button>
+            <button class="subnav-btn" data-open-view="docker-images">镜像 / 仓库</button>
+            <button class="subnav-btn" data-open-view="docker-volumes">存储卷</button>
+            <button class="subnav-btn" data-open-view="docker-networks">网络</button>
+            <button class="subnav-btn" data-open-view="docker-compose">容器编排</button>
+          </div>
+          <div class="card">
             <div class="card-head"><h2>容器</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
             <div class="hint">带 devplatform.ext 标签的是平台自建容器，可直接管理；其它容器默认只读，启停 / 删除需二次确认。</div>
+            <div class="row gap wrap" style="margin-top:12px">
+              <input id="docker-container-filter" placeholder="按名称 / 镜像 / 状态筛选" style="max-width:280px" />
+              <select id="docker-container-state" style="max-width:160px">
+                <option value="all">全部状态</option>
+                <option value="running">仅运行中</option>
+                <option value="stopped">仅已停止</option>
+              </select>
+              <span class="muted small" id="docker-container-count">—</span>
+            </div>
             <div id="docker-containers" class="table-wrap" style="margin-top:12px"></div>
           </div>
+          <div class="card" id="docker-log-card" hidden>
+            <div class="card-head"><h2>容器日志 / 输出</h2><button class="btn btn-ghost btn-sm" id="docker-log-close">收起</button></div>
+            <pre class="log" id="docker-log">—</pre>
+          </div>
+        </section>
 
-          <div class="card docker-panel" id="docker-panel-images" hidden>
-            <div class="card-head"><h2>镜像</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
-            <div class="grid-2" style="margin-top:12px">
+        <!-- Docker 管理 · 镜像 / 仓库（独立页） -->
+        <section class="page" id="view-docker-images">
+          <div class="subnav">
+            <span class="subnav-label">Docker 管理</span>
+            <button class="subnav-btn" data-open-view="docker">总览 / 设置</button>
+            <button class="subnav-btn" data-open-view="docker-containers">容器</button>
+            <button class="subnav-btn active" data-open-view="docker-images">镜像 / 仓库</button>
+            <button class="subnav-btn" data-open-view="docker-volumes">存储卷</button>
+            <button class="subnav-btn" data-open-view="docker-networks">网络</button>
+            <button class="subnav-btn" data-open-view="docker-compose">容器编排</button>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2>从仓库拉取镜像</h2><span class="muted">registry → 镜像名:标签</span></div>
               <form id="docker-pull-form" class="form">
-                <label>拉取镜像<div class="row"><input name="image" placeholder="mysql" required /><input name="tag" placeholder="8.4" value="latest" style="max-width:110px" /></div></label>
+                <div class="grid-2">
+                  <label>镜像名<input name="image" placeholder="mysql / nginx / ghcr.io/org/app" required /></label>
+                  <label>标签<input name="tag" placeholder="latest" value="latest" /></label>
+                </div>
+                <div class="hint">拉不动时可在「代理配置」页设置 Docker 分组代理；也可在 <code>.env</code> 配 <code>DOCKER_IMAGE_PREFIX</code> 走加速器。</div>
                 <div class="form-actions"><button class="btn btn-primary btn-sm" type="submit">拉取镜像</button></div>
               </form>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>离线导入镜像</h2><span class="muted">适合无外网环境</span></div>
               <form id="docker-load-form" class="form">
-                <label>离线导入（≤100MB tar）<input type="file" name="file" accept=".tar,.tar.gz" /></label>
+                <label>上传 tar 文件（≤100MB）<input type="file" name="file" accept=".tar,.tar.gz" /></label>
                 <label>或填写服务器上已有路径<input name="path" placeholder="/data/images/mysql.tar（大镜像推荐）" /></label>
+                <div class="hint">大镜像请把 tar 放到目标服务器的 <code>data/images/</code> 后填绝对路径，避免浏览器上传超时。</div>
                 <div class="form-actions"><button class="btn btn-sm" type="submit">导入镜像</button></div>
               </form>
             </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>本地镜像</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
+            <div class="hint">「导出」把镜像打包成 tar 下载；删除镜像需二次确认，正在被容器使用的镜像无法删除。</div>
             <div id="docker-images" class="table-wrap" style="margin-top:12px"></div>
           </div>
+        </section>
 
-          <div class="card docker-panel" id="docker-panel-volumes" hidden>
-            <div class="card-head"><h2>存储卷</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
-            <form id="docker-volume-form" class="form row" style="margin-top:12px">
-              <input name="name" placeholder="新卷名称" required />
-              <button class="btn btn-sm btn-primary" type="submit">创建卷</button>
+        <!-- Docker 管理 · 存储卷（独立页） -->
+        <section class="page" id="view-docker-volumes">
+          <div class="subnav">
+            <span class="subnav-label">Docker 管理</span>
+            <button class="subnav-btn" data-open-view="docker">总览 / 设置</button>
+            <button class="subnav-btn" data-open-view="docker-containers">容器</button>
+            <button class="subnav-btn" data-open-view="docker-images">镜像 / 仓库</button>
+            <button class="subnav-btn active" data-open-view="docker-volumes">存储卷</button>
+            <button class="subnav-btn" data-open-view="docker-networks">网络</button>
+            <button class="subnav-btn" data-open-view="docker-compose">容器编排</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>创建存储卷</h2><span class="muted">持久化数据，与容器生命周期解耦</span></div>
+            <form id="docker-volume-form" class="form row">
+              <input name="name" placeholder="新卷名称，例如 dp-mysql-data" required />
+              <button class="btn btn-primary" type="submit">创建卷</button>
             </form>
+            <div class="notice">命名卷由 Docker 管理，删除后数据不可恢复；平台自建扩展的卷名一般以 <code>dp-ext-</code> 开头。</div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>存储卷列表</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
+            <div class="hint">「挂载点」是宿主机上的真实路径，可用于备份与离线迁移。</div>
             <div id="docker-volumes" class="table-wrap" style="margin-top:12px"></div>
           </div>
+        </section>
 
-          <div class="card docker-panel" id="docker-panel-networks" hidden>
-            <div class="card-head"><h2>网络</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
-            <form id="docker-network-form" class="form row" style="margin-top:12px">
-              <input name="name" placeholder="新网络名称" required />
-              <button class="btn btn-sm btn-primary" type="submit">创建网络</button>
+        <!-- Docker 管理 · 网络（独立页） -->
+        <section class="page" id="view-docker-networks">
+          <div class="subnav">
+            <span class="subnav-label">Docker 管理</span>
+            <button class="subnav-btn" data-open-view="docker">总览 / 设置</button>
+            <button class="subnav-btn" data-open-view="docker-containers">容器</button>
+            <button class="subnav-btn" data-open-view="docker-images">镜像 / 仓库</button>
+            <button class="subnav-btn" data-open-view="docker-volumes">存储卷</button>
+            <button class="subnav-btn active" data-open-view="docker-networks">网络</button>
+            <button class="subnav-btn" data-open-view="docker-compose">容器编排</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>创建网络</h2><span class="muted">同一网络内的容器可用服务名互访</span></div>
+            <form id="docker-network-form" class="form row">
+              <input name="name" placeholder="新网络名称，例如 dp-net" required />
+              <button class="btn btn-primary" type="submit">创建网络</button>
             </form>
+            <div class="notice">默认的 <code>bridge</code> / <code>host</code> / <code>none</code> 属于 Docker 内置网络，不能删除。</div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>网络列表</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
             <div id="docker-networks" class="table-wrap" style="margin-top:12px"></div>
           </div>
+        </section>
 
-          <div class="card docker-panel" id="docker-panel-templates" hidden>
-            <div class="card-head"><h2>Compose 编排模板</h2><span class="muted">只登记文本，不在平台内执行，避免任意编排执行入口</span></div>
-            <form id="docker-template-form" class="form" style="margin-top:12px">
+        <!-- Docker 管理 · 容器编排（独立页） -->
+        <section class="page" id="view-docker-compose">
+          <div class="subnav">
+            <span class="subnav-label">Docker 管理</span>
+            <button class="subnav-btn" data-open-view="docker">总览 / 设置</button>
+            <button class="subnav-btn" data-open-view="docker-containers">容器</button>
+            <button class="subnav-btn" data-open-view="docker-images">镜像 / 仓库</button>
+            <button class="subnav-btn" data-open-view="docker-volumes">存储卷</button>
+            <button class="subnav-btn" data-open-view="docker-networks">网络</button>
+            <button class="subnav-btn active" data-open-view="docker-compose">容器编排</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>新增 Compose 编排模板</h2><span class="muted">只登记文本，不在平台内执行</span></div>
+            <form id="docker-template-form" class="form">
               <div class="grid-2">
                 <label>模板名称<input name="name" placeholder="lnmp" required /></label>
                 <label>说明<input name="description" placeholder="用途描述" /></label>
               </div>
-              <label>YAML 内容<textarea name="content" rows="7" placeholder="services: ..." required></textarea></label>
-              <div class="form-actions"><button class="btn btn-primary btn-sm" type="submit">保存模板</button></div>
+              <label>YAML 内容<textarea name="content" rows="9" placeholder="services:&#10;  web:&#10;    image: nginx:latest" required></textarea></label>
+              <div class="notice">为避免在平台上开放任意编排执行入口，模板仅作登记与查阅；实际部署请复制 YAML 到目标服务器执行，或在「扩展 / 数据库」页使用清单化安装。</div>
+              <div class="form-actions"><button class="btn btn-primary" type="submit">保存模板</button></div>
             </form>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>已保存的编排模板</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
             <div id="docker-templates" class="table-wrap" style="margin-top:12px"></div>
-          </div>
-
-          <div class="card docker-panel" id="docker-panel-settings" hidden>
-            <div class="card-head"><h2>设置与操作审计</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
-            <div class="hint">Docker 端点、版本与安全策略；非平台容器的所有写操作都会记录在这里。</div>
-            <pre class="log" id="docker-settings" style="margin-top:12px">—</pre>
-            <div id="docker-audit" class="table-wrap" style="margin-top:12px"></div>
-          </div>
-
-          <div class="card" id="docker-log-card" hidden>
-            <div class="card-head"><h2>容器日志 / 输出</h2><button class="btn btn-ghost btn-sm" id="docker-log-close">收起</button></div>
-            <pre class="log" id="docker-log">—</pre>
           </div>
         </section>
 
@@ -264,39 +442,19 @@
           </div>
         </section>
 
-        <!-- 存储 / 文件：OpenList 管理集成 -->
+        <!-- 存储 / 文件 · 文件浏览（独立页） -->
         <section class="page" id="view-storage">
-          <div class="card">
-            <div class="card-head"><h2>OpenList 连接</h2><span class="muted" id="openlist-status-text">检测中…</span></div>
-            <div class="row gap wrap">
-              <a class="btn btn-primary btn-sm" id="openlist-open" href="#" target="_blank" rel="noopener">打开 OpenList 后台</a>
-              <button class="btn btn-sm" id="openlist-embed-toggle">内嵌后台</button>
-              <button class="btn btn-ghost btn-sm" id="openlist-refresh">刷新状态</button>
-              <button class="btn btn-ghost btn-sm" id="openlist-config-toggle">连接设置</button>
-            </div>
-            <div class="hint" id="openlist-status-detail">-</div>
-            <form id="openlist-config-form" class="form" hidden>
-              <div class="grid-3">
-                <label>服务地址<input name="url" id="ol-cfg-url" placeholder="http://127.0.0.1:5244" /></label>
-                <label>管理员账号<input name="user" id="ol-cfg-user" placeholder="admin" /></label>
-                <label>API Token<input name="token" id="ol-cfg-token" type="password" placeholder="留空不修改" /></label>
-              </div>
-              <label>管理员密码（无 Token 时用于自动换取 Token）<input name="password" id="ol-cfg-password" type="password" placeholder="留空不修改" /></label>
-              <div class="form-actions">
-                <button class="btn btn-primary btn-sm" type="submit">保存连接</button>
-                <button class="btn btn-ghost btn-sm" type="button" id="openlist-config-reset">恢复 .env 配置</button>
-              </div>
-              <div class="notice">连接信息只写本机 <code>data/state.json</code>（600 权限）；挂载存储增删、驱动管理需要管理员权限的 Token。</div>
-            </form>
-            <div class="card" id="openlist-frame-card" hidden style="margin-top:12px">
-              <div class="card-head"><h2>OpenList 后台</h2><button class="btn btn-ghost btn-sm" id="openlist-frame-close">收起</button></div>
-              <iframe id="openlist-frame" class="ide-frame" title="OpenList 管理后台"></iframe>
-            </div>
+          <div class="subnav">
+            <span class="subnav-label">存储 / 文件</span>
+            <button class="subnav-btn active" data-open-view="storage">文件浏览</button>
+            <button class="subnav-btn" data-open-view="storage-conn">连接管理</button>
+            <button class="subnav-btn" data-open-view="storage-mounts">挂载存储</button>
+            <button class="subnav-btn" data-open-view="storage-drivers">WebDAV / 驱动</button>
           </div>
-
           <div class="card">
             <div class="card-head"><h2>文件浏览</h2><span class="muted" id="storage-provider"></span></div>
-            <form id="storage-path-form" class="row">
+            <div class="hint" id="storage-current-conn">当前连接加载中…</div>
+            <form id="storage-path-form" class="row" style="margin-top:12px">
               <input id="storage-path" value="/" placeholder="/" />
               <button class="btn" type="submit">浏览</button>
               <button class="btn btn-ghost" type="button" id="storage-up">上一级</button>
@@ -313,55 +471,174 @@
               <button class="btn btn-sm btn-danger" data-ol-action="remove">删除所选</button>
             </div>
             <div id="file-list" class="table-wrap"></div>
-            <div class="row gap wrap">
+            <div class="row gap wrap" style="margin-top:12px">
               <form id="mkdir-form" class="row">
                 <input name="name" placeholder="新目录名" required />
                 <button class="btn btn-sm" type="submit">新建目录</button>
               </form>
               <label class="file-btn">上传文件<input type="file" id="upload-input" multiple /></label>
             </div>
+            <div class="notice">文件操作作用于「连接管理」里当前激活的 OpenList；切换连接后请点「刷新目录」。下载由平台后端代取，浏览器无需直连 OpenList 或对象存储。</div>
             <pre class="log short" id="storage-result" hidden>—</pre>
           </div>
+        </section>
 
+        <!-- 存储 / 文件 · OpenList 连接管理（独立页，支持多连接） -->
+        <section class="page" id="view-storage-conn">
+          <div class="subnav">
+            <span class="subnav-label">存储 / 文件</span>
+            <button class="subnav-btn" data-open-view="storage">文件浏览</button>
+            <button class="subnav-btn active" data-open-view="storage-conn">连接管理</button>
+            <button class="subnav-btn" data-open-view="storage-mounts">挂载存储</button>
+            <button class="subnav-btn" data-open-view="storage-drivers">WebDAV / 驱动</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>OpenList 连接状态</h2><span class="muted" id="openlist-status-text">检测中…</span></div>
+            <div class="row gap wrap">
+              <a class="btn btn-primary btn-sm" id="openlist-open" href="#" target="_blank" rel="noopener">打开后台</a>
+              <button class="btn btn-sm" id="openlist-embed-toggle">内嵌后台</button>
+              <button class="btn btn-ghost btn-sm" id="openlist-refresh">刷新状态</button>
+            </div>
+            <div class="notice" id="openlist-status-detail">-</div>
+            <div class="card" id="openlist-frame-card" hidden style="margin-top:12px">
+              <div class="card-head"><h2>OpenList 后台</h2><button class="btn btn-ghost btn-sm" id="openlist-frame-close">收起</button></div>
+              <iframe id="openlist-frame" class="ide-frame" title="OpenList 管理后台"></iframe>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>已登记的连接</h2>
+              <div class="row gap">
+                <button class="btn btn-ghost btn-sm" id="ol-conn-reload">刷新</button>
+                <button class="btn btn-primary btn-sm" id="ol-conn-new">＋ 新增连接</button>
+              </div>
+            </div>
+            <div class="hint">可同时登记本机与任意外部 OpenList。点「设为当前」后，文件浏览 / 挂载存储 / 驱动清单都会切到该服务；只有当前连接生效，凭据互不混用。</div>
+            <div id="ol-conn-list" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2 id="ol-conn-title">新增连接</h2><span class="muted">凭据只写本机 state.json（600 权限）</span></div>
+            <form id="openlist-config-form" class="form" hidden>
+              <input type="hidden" name="id" id="ol-conn-id" value="" />
+              <div class="grid-3">
+                <label>连接名称<input name="label" id="ol-cfg-label" placeholder="例如 办公室内网 OpenList" /></label>
+                <label>服务地址<input name="url" id="ol-cfg-url" placeholder="http://127.0.0.1:5244 或 https://pan.example.com" /></label>
+                <label>管理员账号<input name="user" id="ol-cfg-user" placeholder="admin" /></label>
+              </div>
+              <div class="grid-2">
+                <label>API Token<input name="token" id="ol-cfg-token" type="password" placeholder="留空不修改；带 ****** 表示沿用已保存值" autocomplete="new-password" /></label>
+                <label>管理员密码（无 Token 时自动换取）<input name="password" id="ol-cfg-password" type="password" placeholder="留空不修改" autocomplete="new-password" /></label>
+              </div>
+              <div class="notice">
+                外部 OpenList 请填平台（或平台所在容器）能访问到的 <code>http(s)://</code> 地址，容器内的 <code>localhost</code> 指向平台自身而不是外部服务。<br />
+                挂载存储增删、驱动管理、站点设置需要<b>管理员权限</b>的 Token；仅公开文件浏览可用匿名或只读 Token。切换 / 修改连接后平台会清掉缓存令牌重新鉴权。
+              </div>
+              <div class="form-actions">
+                <button class="btn btn-primary" type="submit">保存连接</button>
+                <button class="btn btn-ghost" type="button" id="ol-conn-cancel">取消</button>
+                <button class="btn btn-ghost" type="button" id="openlist-config-reset">恢复 .env 默认连接</button>
+              </div>
+            </form>
+            <div class="hint" id="ol-conn-tip">点「＋ 新增连接」登记外部 OpenList，或在上方列表里编辑 / 切换已有连接。</div>
+          </div>
+        </section>
+
+        <!-- 存储 / 文件 · 挂载存储（独立页） -->
+        <section class="page" id="view-storage-mounts">
+          <div class="subnav">
+            <span class="subnav-label">存储 / 文件</span>
+            <button class="subnav-btn" data-open-view="storage">文件浏览</button>
+            <button class="subnav-btn" data-open-view="storage-conn">连接管理</button>
+            <button class="subnav-btn active" data-open-view="storage-mounts">挂载存储</button>
+            <button class="subnav-btn" data-open-view="storage-drivers">WebDAV / 驱动</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>挂载存储</h2>
+              <div class="row gap">
+                <button class="btn btn-ghost btn-sm" id="storage-storages-reload">重载</button>
+                <button class="btn btn-primary btn-sm" id="storage-add-toggle">＋ 新增存储</button>
+              </div>
+            </div>
+            <div class="hint">这里管理的是<b>当前激活的 OpenList 连接</b>下的挂载点。增删改会立即作用到远端服务，请谨慎操作；管理接口需要管理员 Token。</div>
+            <div id="mount-list" class="list" style="margin-top:12px"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>新增 / 编辑挂载</h2><span class="muted">驱动配置请在右侧「WebDAV / 驱动」页查阅模板</span></div>
+            <form id="storage-add-form" class="form" hidden>
+              <div class="grid-2">
+                <label>挂载路径<input name="mountPath" placeholder="/local" required /></label>
+                <label>驱动<select name="driver" id="ol-driver"></select></label>
+              </div>
+              <label>驱动配置 addition（JSON）<textarea name="addition" rows="5" placeholder='{"root_folder_path":"/data"}'></textarea></label>
+              <div class="grid-2">
+                <label>备注<input name="remark" placeholder="可选" /></label>
+                <label>排序序号<input name="order" type="number" value="0" /></label>
+              </div>
+              <input type="hidden" name="id" id="ol-storage-id" value="" />
+              <div class="form-actions">
+                <button class="btn btn-primary" type="submit">保存存储</button>
+                <button class="btn btn-ghost" type="button" id="storage-add-cancel">取消</button>
+              </div>
+            </form>
+            <div class="hint">点「＋ 新增存储」展开表单；编辑已有挂载请点列表里的「编辑」。</div>
+          </div>
+        </section>
+
+        <!-- 存储 / 文件 · WebDAV / 驱动（独立页） -->
+        <section class="page" id="view-storage-drivers">
+          <div class="subnav">
+            <span class="subnav-label">存储 / 文件</span>
+            <button class="subnav-btn" data-open-view="storage">文件浏览</button>
+            <button class="subnav-btn" data-open-view="storage-conn">连接管理</button>
+            <button class="subnav-btn" data-open-view="storage-mounts">挂载存储</button>
+            <button class="subnav-btn active" data-open-view="storage-drivers">WebDAV / 驱动</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>WebDAV 地址</h2><span class="muted">可挂载到本机 / rclone</span></div>
+            <div class="notice" id="webdav-url">-</div>
+            <div class="row gap" style="margin-top:8px">
+              <button class="btn btn-ghost btn-sm" id="webdav-copy">复制 WebDAV 地址</button>
+              <button class="btn btn-ghost btn-sm" id="storage-drivers-reload">刷新驱动</button>
+            </div>
+            <p class="muted small">rclone：<code>rclone config → webdav → url: http://localhost:5244/dav/</code>；外部连接请使用上方显示的实际地址。</p>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>可用驱动清单</h2><span class="muted">点「查看配置」带出字段模板</span></div>
+            <div class="hint">不同 OpenList 版本支持的驱动不同；这里显示的是当前激活连接返回的清单。</div>
+            <div id="storage-driver-list" class="list" style="margin-top:12px;max-height:420px;overflow:auto"></div>
+          </div>
+        </section>
+
+        <!-- 构建部署 · 记录与日志（独立页） -->
+        <section class="page" id="view-builds">
+          <div class="subnav">
+            <span class="subnav-label">构建 · 部署</span>
+            <button class="subnav-btn active" data-open-view="builds">构建记录 / 日志</button>
+            <button class="subnav-btn" data-open-view="build-start">启动构建</button>
+            <button class="subnav-btn" data-open-view="deploys">部署记录</button>
+          </div>
           <div class="grid-2">
             <div class="card">
-              <div class="card-head"><h2>挂载存储</h2>
-                <div class="row gap">
-                  <button class="btn btn-ghost btn-sm" id="storage-storages-reload">重载</button>
-                  <button class="btn btn-sm" id="storage-add-toggle">新增存储</button>
-                </div>
-              </div>
-              <div id="mount-list" class="list"></div>
-              <form id="storage-add-form" class="form" hidden style="margin-top:12px">
-                <div class="grid-2">
-                  <label>挂载路径<input name="mountPath" placeholder="/local" required /></label>
-                  <label>驱动<select name="driver" id="ol-driver"></select></label>
-                </div>
-                <label>驱动配置 addition（JSON）<textarea name="addition" rows="4" placeholder='{"root_folder_path":"/data"}'></textarea></label>
-                <label>备注<input name="remark" placeholder="可选" /></label>
-                <input type="hidden" name="id" id="ol-storage-id" value="" />
-                <div class="form-actions">
-                  <button class="btn btn-primary btn-sm" type="submit">保存存储</button>
-                  <button class="btn btn-ghost btn-sm" type="button" id="storage-add-cancel">取消</button>
-                </div>
-                <div class="hint">点右侧驱动清单可带出配置模板。增删改会立即作用到 OpenList，请谨慎操作。</div>
-              </form>
+              <div class="card-head"><h2>构建记录</h2><button class="btn btn-ghost btn-sm" data-reload="builds">刷新</button></div>
+              <div class="hint">点一条记录查看实时日志；构建环境按「远程 Docker → 本机 Docker → WSL2 → 本地工具链」自动降级。</div>
+              <div id="build-list" class="list"></div>
             </div>
             <div class="card">
-              <div class="card-head"><h2>WebDAV / 驱动清单</h2><span class="muted">可挂载到本机 / rclone</span></div>
-              <div class="hint" id="webdav-url">-</div>
-              <div class="row gap" style="margin-top:8px">
-                <button class="btn btn-ghost btn-sm" id="webdav-copy">复制 WebDAV 地址</button>
-                <button class="btn btn-ghost btn-sm" id="storage-drivers-reload">刷新驱动</button>
-              </div>
-              <div id="storage-driver-list" class="list" style="margin-top:10px;max-height:280px;overflow:auto"></div>
-              <p class="muted small">rclone：<code>rclone config → webdav → url: http://localhost:5244/dav/</code></p>
+              <div class="card-head"><h2>构建日志</h2><span class="muted" id="log-target">选择一条构建记录</span></div>
+              <pre class="log" id="build-log">—</pre>
             </div>
           </div>
         </section>
 
-        <!-- 构建部署 -->
-        <section class="page" id="view-builds">
+        <!-- 构建部署 · 启动构建（独立页） -->
+        <section class="page" id="view-build-start">
+          <div class="subnav">
+            <span class="subnav-label">构建 · 部署</span>
+            <button class="subnav-btn" data-open-view="builds">构建记录 / 日志</button>
+            <button class="subnav-btn active" data-open-view="build-start">启动构建</button>
+            <button class="subnav-btn" data-open-view="deploys">部署记录</button>
+          </div>
           <div class="card">
             <div class="card-head"><h2>启动构建</h2><span class="muted" id="executor-label"></span></div>
             <form id="build-form" class="form">
@@ -371,36 +648,59 @@
               </div>
               <label>编译环境 / 构建后端<select name="backend" id="build-backend"></select></label>
               <div class="hint" id="build-backends">检测中：Windows 无 Docker 时自动把编译任务推到已登记的 Linux 服务器，不引入 microVM。</div>
-              <label class="check"><input type="checkbox" name="runTests" checked /> 构建后运行测试</label>
-              <label class="check"><input type="checkbox" name="autoDeploy" id="auto-deploy" /> 构建成功后自动部署</label>
+              <div class="grid-2">
+                <label class="check"><input type="checkbox" name="runTests" checked /> 构建后运行测试</label>
+                <label class="check"><input type="checkbox" name="autoDeploy" id="auto-deploy" /> 构建成功后自动部署</label>
+              </div>
               <div class="grid-3" id="deploy-fields" hidden>
                 <label>目标服务器<select name="serverId" id="deploy-server"></select></label>
                 <label>部署目录<input name="targetDir" placeholder="留空则使用服务器默认目录 /data/platform" /></label>
                 <label>部署后命令（可选）<input name="command" placeholder="systemctl restart myapp" /></label>
               </div>
-              <button class="btn btn-primary" type="submit">开始构建</button>
+              <div class="notice">构建子进程会继承「代理配置」里 Docker 分组 / 全局代理的环境变量，用于 <code>npm</code> / <code>go</code> / <code>pip</code> / <code>cargo</code> 拉包；内网依赖请加到 NO_PROXY。</div>
+              <div class="form-actions"><button class="btn btn-primary" type="submit">开始构建</button></div>
             </form>
-          </div>
-          <div class="grid-2">
-            <div class="card">
-              <div class="card-head"><h2>构建记录</h2><button class="btn btn-ghost btn-sm" data-reload="builds">刷新</button></div>
-              <div id="build-list" class="list"></div>
-            </div>
-            <div class="card">
-              <div class="card-head"><h2>构建日志</h2><span class="muted" id="log-target">选择一条构建记录</span></div>
-              <pre class="log" id="build-log">—</pre>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-head"><h2>部署记录</h2></div>
-            <div id="deploy-list" class="table-wrap"></div>
           </div>
         </section>
 
-        <!-- 服务器 -->
-        <section class="page" id="view-servers">
+        <!-- 构建部署 · 部署记录（独立页） -->
+        <section class="page" id="view-deploys">
+          <div class="subnav">
+            <span class="subnav-label">构建 · 部署</span>
+            <button class="subnav-btn" data-open-view="builds">构建记录 / 日志</button>
+            <button class="subnav-btn" data-open-view="build-start">启动构建</button>
+            <button class="subnav-btn active" data-open-view="deploys">部署记录</button>
+          </div>
           <div class="card">
-            <div class="card-head"><h2>添加服务器</h2><span class="muted">通过 SSH 连接，凭据保存在本机 data/state.json</span></div>
+            <div class="card-head"><h2>部署记录</h2><button class="btn btn-ghost btn-sm" data-reload="builds">刷新</button></div>
+            <div class="hint">产物通过 SSH + SFTP 上传到目标服务器，部署后命令在远端执行。</div>
+            <div id="deploy-list" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+        </section>
+
+        <!-- 服务器 · 列表（独立页） -->
+        <section class="page" id="view-servers">
+          <div class="subnav">
+            <span class="subnav-label">服务器</span>
+            <button class="subnav-btn active" data-open-view="servers">服务器列表</button>
+            <button class="subnav-btn" data-open-view="server-new">添加服务器</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>已登记服务器</h2><button class="btn btn-ghost btn-sm" data-reload="servers">刷新</button></div>
+            <div class="hint">每台服务器卡片可测试连通、打开 Web 终端、管理远程文件，并单独配置代理。</div>
+          </div>
+          <div id="server-list" class="server-grid"></div>
+        </section>
+
+        <!-- 服务器 · 添加（独立页） -->
+        <section class="page" id="view-server-new">
+          <div class="subnav">
+            <span class="subnav-label">服务器</span>
+            <button class="subnav-btn" data-open-view="servers">服务器列表</button>
+            <button class="subnav-btn active" data-open-view="server-new">添加服务器</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>添加服务器</h2><span class="muted">通过 SSH 连接，凭据保存在本机 data/state.json（600 权限）</span></div>
             <form id="server-form" class="form">
               <div class="grid-3">
                 <label>名称<input name="name" placeholder="生产服务器" required /></label>
@@ -410,15 +710,17 @@
                 <label>登录密码<input name="password" type="password" placeholder="密码登录时填写" autocomplete="new-password" /></label>
                 <label>私钥密码 / Passphrase<input name="passphrase" type="password" placeholder="加密私钥的口令" autocomplete="new-password" /></label>
                 <label>默认部署目录<input name="deployDir" placeholder="/data/platform" value="/data/platform" /></label>
-                <label>单个服务器代理（可选）<input name="proxy" placeholder="留空继承服务器代理 / 全局代理" /></label>
               </div>
               <label>私钥 PEM 内容（可选）<textarea name="privateKey" rows="2" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
               <label>或私钥文件路径（可选）<input name="privateKeyPath" placeholder="C:/Users/you/.ssh/id_rsa （容器内请填挂载后的路径）" /></label>
-              <div class="notice">私钥带口令时务必填写「私钥密码」，否则 SSH 会报解密失败。凭据只保存在本机 <code>data/state.json</code>，接口不会回传明文。</div>
+              <label>单个服务器代理（可选）<input name="proxy" placeholder="留空继承「服务器代理」分组 / 全局代理；direct 强制直连" /></label>
+              <div class="notice">
+                <b>代理填写说明</b>：支持 <code>http://user:pass@host:port</code>、<code>https://…</code>、<code>socks5://…</code>（SSH 走隧道）。<b>留空</b>表示继承下一级；填 <code>direct</code> 表示明确直连，会清除子进程代理变量。内网 IP 建议在「代理配置 → 全局 NO_PROXY」里排除。<br />
+                私钥带口令时务必填写「私钥密码」，否则 SSH 会报解密失败。接口不会回传凭据明文，表单里显示 <code>******</code> 时保留原值即可。
+              </div>
               <div class="form-actions"><button class="btn btn-primary" type="submit">保存服务器</button></div>
             </form>
           </div>
-          <div id="server-list" class="server-grid"></div>
         </section>
 
         <!-- 扩展 / 数据库 -->
@@ -480,9 +782,10 @@
               <input type="hidden" name="kind" id="provider-kind" value="api" />
               <div class="grid-3">
                 <label>服务名称<input name="name" placeholder="DeepSeek / 本机 Codex" required /></label>
-                <label>代理地址（可选）<input name="proxy" placeholder="http://127.0.0.1:7890" /></label>
+                <label>代理地址（可选）<input name="proxy" placeholder="http://127.0.0.1:7890 / direct / 留空继承 AI 分组代理" /></label>
                 <label class="check"><input type="checkbox" name="enabled" checked /> 启用该服务</label>
               </div>
+              <div class="hint">单个 AI 服务代理 &gt; AI 服务分组代理 &gt; 全局代理。API 服务走 HTTP 代理转发，本地 CLI 注入 <code>HTTP_PROXY / HTTPS_PROXY / ALL_PROXY</code>；留空继承下一级，<code>direct</code> 强制直连。格式与示例见「代理配置」页。</div>
 
               <div id="api-fields">
                 <div class="grid-3">
@@ -554,11 +857,13 @@
 
           <div class="card">
             <div class="card-head"><h2>分组代理</h2><span class="muted">留空继承全局代理</span></div>
+            <div class="hint">四类对象各自一条分组规则：Git 仓库 / Docker 容器 / 服务器 SSH / AI 服务。分组代理优先于全局代理、低于单项覆盖与 Git Host 规则；填 <code>direct</code> 可让整组强制直连。</div>
             <div id="proxy-groups" class="form"></div>
           </div>
 
           <div class="card">
             <div class="card-head"><h2>Git Host 匹配规则</h2><span class="muted">单个仓库代理之后、Git 分组代理之前生效</span></div>
+            <div class="hint">按仓库地址的主机名匹配，支持精确值（<code>github.com</code>）与通配符（<code>*.gitea.internal</code>）；多条规则按添加顺序，先命中先生效。常用来「外网走代理、内网直连」。</div>
             <form id="proxy-rule-form" class="row">
               <input name="pattern" placeholder="github.com 或 *.gitea.internal" required />
               <input name="url" placeholder="http://127.0.0.1:7890 或 direct" required />
@@ -570,6 +875,13 @@
 
           <div class="card">
             <div class="card-head"><h2>单项代理覆盖</h2><span class="muted">仓库 / 容器 / 服务器 / AI 服务，优先级最高</span></div>
+            <div class="notice">
+              <b>这一栏怎么填</b><br />
+              ① <b>作用域</b>：选要为哪一类对象单独指定代理；② <b>对象</b>：从下拉里选具体仓库 / 容器 / 服务器 / AI 服务（下拉没有时可在「对象标识」里手填 id）；③ <b>代理地址</b>：填这条对象专属的代理。<br />
+              <b>可填的值</b>：<code>http://127.0.0.1:7890</code>、<code>http://user:pass@proxy.example.com:8080</code>、<code>https://…</code>、<code>socks5://127.0.0.1:1080</code>（仅 SSH 隧道与本地 CLI 生效）、<code>direct</code>（明确直连，清除子进程继承的代理变量）。<b>留空并点「保存覆盖」= 删除这条覆盖</b>，让对象回到下一级规则。<br />
+              <b>优先级</b>：单个仓库代理 &gt; Git Host 匹配规则 &gt; Git 分组代理 &gt; 全局代理；单个容器 &gt; Docker 分组 &gt; 全局；单个服务器 &gt; 服务器分组 &gt; 全局；单个 AI 服务 &gt; AI 服务分组 &gt; 全局。<b>命中即停止</b>。<br />
+              <b>示例</b>：让 <code>github.com</code> 走 <code>http://127.0.0.1:7890</code>、公司内网 Gitea 直连 → 在「Git Host 匹配规则」加 <code>*.gitea.internal → direct</code>；只让某个私有仓库走代理 → 在这里选该仓库并填代理地址。URL 中的账号密码只写 <code>state.json</code>（600 权限），界面一律显示 <code>******</code>。
+            </div>
             <form id="proxy-override-form" class="form">
               <div class="grid-3">
                 <label>作用域<select name="scope" id="proxy-override-scope">
@@ -579,9 +891,9 @@
                   <option value="ai">单个 AI 服务</option>
                 </select></label>
                 <label>对象<select name="id" id="proxy-override-id"></select></label>
-                <label>代理地址<input name="url" placeholder="留空并保存 = 删除覆盖；direct = 强制直连" /></label>
+                <label>代理地址<input name="url" placeholder="http://127.0.0.1:7890 / socks5://... / direct / 留空删除" /></label>
               </div>
-              <label>或手动填写对象标识<input name="customId" id="proxy-override-custom" placeholder="仓库 id / 容器名 / 服务器 id / AI 服务 id" /></label>
+              <label>或手动填写对象标识<input name="customId" id="proxy-override-custom" placeholder="仓库 id / 容器名 / 服务器 id / AI 服务 id，可从各列表的「代理」按钮自动带入" /></label>
               <div class="form-actions">
                 <button class="btn btn-primary btn-sm" type="submit">保存覆盖</button>
                 <button class="btn btn-ghost btn-sm" type="button" id="proxy-entities-reload">刷新对象列表</button>
@@ -647,6 +959,6 @@
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261110b"></script>
+  <script src="/app.js?v=20261110d"></script>
 </body>
 </html>

@@ -27,9 +27,13 @@ const refs = [...new Set([...app.matchAll(/\$\('#([A-Za-z0-9_-]+)'\)/g)].map((m)
 const missing = refs.filter((id) => !ids.has(id) && id !== 'ops-hint');
 note(missing.length === 0, 'app.js 引用的静态 id 均存在', missing.length ? `缺失：${missing.join(', ')}` : `${refs.length} 个引用`);
 
-const sections = [...html.matchAll(/class="page" id="view-([a-z]+)"/g)].map((m) => m[1]);
-note(sections.length === 12 && sections.includes('gitsrc') && sections.includes('docker') && sections.includes('proxy'),
-  '12 个模块页面已转为可标签化的 .page（含 Git 源 / Docker / 代理配置）', sections.join(', '));
+const sections = [...html.matchAll(/class="page" id="view-([a-z0-9-]+)"/g)].map((m) => m[1]);
+const SUBPAGES = ['repo-new', 'repo-clone', 'storage-conn', 'storage-mounts', 'storage-drivers',
+  'build-start', 'deploys', 'server-new', 'docker-containers', 'docker-images',
+  'docker-volumes', 'docker-networks', 'docker-compose'];
+note(sections.length === 25 && sections.includes('gitsrc') && sections.includes('docker')
+  && sections.includes('proxy') && SUBPAGES.every((v) => sections.includes(v)),
+'25 个独立页面（12 主模块 + 13 个子功能页）均已转为可标签化的 .page', sections.join(', '));
 note(['/git-sources', '/docker/overview', '/extensions/backups', '/extensions/dbgate', '/builds/backends']
   .every((p) => app.includes(p)) && app.includes('function loadGitSources') && app.includes('function loadDocker'),
 'Git 源 / Docker 管理 / 备份 / DbGate / 构建后端接口已全部接线');
@@ -46,6 +50,28 @@ note(['id="openlist-config-form"', 'id="ol-driver"', 'id="storage-select-all"', 
 note(['data-proxy-repo', 'data-dk-op="proxy"', 'data-server-proxy', 'data-ai-proxy']
   .every((s) => app.includes(s)) && app.includes('function gotoProxyOverride'),
   '四类对象均可一键跳到代理页预填单项覆盖');
+
+// v0.3.2：单项代理说明、Git 账号密码、多 OpenList 连接、页面拆分。
+note(html.includes('这一栏怎么填') && html.includes('留空并点「保存覆盖」')
+  && html.includes('socks5://127.0.0.1:1080') && html.includes('单个仓库代理 &gt; Git Host'),
+'单项代理覆盖已补齐格式 / 优先级 / 示例 / 留空与 direct 语义说明');
+note(html.includes('id="gitsrc-auth-type"') && html.includes('id="gitsrc-password-fields"')
+  && html.includes('id="clone-auth-mode"') && html.includes('id="clone-inline-fields"')
+  && app.includes("body.authType === 'password'") && app.includes('syncCloneAuthFields'),
+'外部 Git 源与克隆表单均支持账号密码 / Token 两种方式');
+note(['/openlist/connections', 'data-olc-op="activate"', 'function renderOpenlistConnections',
+  'function fillOpenlistConnectionForm']
+  .every((s) => app.includes(s)) && html.includes('id="ol-conn-list"'),
+'OpenList 多连接的登记 / 切换 / 编辑 / 删除已接线');
+note((html.match(/data-open-view=/g) || []).length >= 20
+  && app.includes("document.addEventListener('click'") && app.includes('switchView(button.dataset.openView)'),
+'每个独立页都带子导航条，点击后打开对应标签');
+note(html.includes('id="docker-container-filter"') && html.includes('id="docker-stat-grid"')
+  && app.includes('function renderDockerContainers') && app.includes('class="dk-ops"'),
+'Docker 列表筛选、统计卡与操作按钮分组已补齐');
+note(html.includes('id="storage-current-conn"') && html.includes('id="view-server-new"')
+  && html.includes('id="view-deploys"'),
+'服务器 / 存储 / 构建部署的表单与列表已拆到独立页');
 
 const scripts = [...html.matchAll(/<script src="\/vendor\/([^"]+)"/g)].map((m) => m[1]);
 const cmIndex = scripts.indexOf('codemirror.js');

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * v0.3.1 冒烟：分层代理 + OpenList 管理集成。
+ * v0.3.1 / v0.3.2 冒烟：分层代理 + OpenList 管理 + 账号密码认证 + 多 OpenList 连接。
  * 本机起一个假的 OpenList(AList V3) API、一个假的 HTTP 代理(CONNECT + 绝对 URI 转发)，
  * 再拉起真正的平台 server.js，逐条调用新接口，不依赖任何外部网络或 Docker。
  *
@@ -405,7 +405,80 @@ async function api(pathname, options = {}) {
     note(Boolean(savedAi) && !String(savedAi.proxy).includes('******') && String(savedAi.proxy).includes('u:p@'),
       '脱敏值原样提交时业务对象保留真实代理地址');
 
-    /* ---------- 6. 既有接口回归 ---------- */
+    /* ---------- 6. v0.3.2：Git 源账号密码 ---------- */
+    const gs = await api('/git-sources', { method: 'POST', body: {
+      label: '账号密码源', type: 'gitea', baseUrl: `http://127.0.0.1:${olPort}`,
+      authType: 'password', username: 'alice', password: 's3cret',
+    } });
+    note(gs.authType === 'password' && gs.hasCreds && gs.hasPassword
+      && !gs.passwordMasked.includes('s3cret'), '外部 Git 源支持账号密码登记且列表脱敏');
+    const gsList = await api('/git-sources');
+    const pubGs = (gsList.items || []).find((x) => x.id === gs.id);
+    note(Boolean(pubGs) && pubGs.authType === 'password' && pubGs.hasCreds,
+      '账号密码源被聚合进仓库列表的来源清单');
+    await api(`/git-sources/${gs.id}`, { method: 'PUT', body: { username: 'alice', password: gs.passwordMasked } });
+    let gsState = JSON.parse(fs.readFileSync(path.join(TMP, 'state.json'), 'utf8'));
+    let rawGs = (gsState.gitSources || []).find((x) => x.id === gs.id);
+    note(Boolean(rawGs) && rawGs.password === 's3cret', 'Git 源脱敏值回显沿用真实密码');
+    await api(`/git-sources/${gs.id}`, { method: 'PUT', body: { authType: 'token', token: 'tok-123' } });
+    gsState = JSON.parse(fs.readFileSync(path.join(TMP, 'state.json'), 'utf8'));
+    rawGs = (gsState.gitSources || []).find((x) => x.id === gs.id);
+    note(Boolean(rawGs) && rawGs.authType === 'token' && rawGs.token === 'tok-123' && rawGs.password === '',
+      '切换认证方式会清掉另一种明文凭据');
+    await api(`/git-sources/${gs.id}`, { method: 'DELETE' });
+
+    // cloneArgs 是纯函数：验证账号密码生成的 Basic 头、Token 头与 GitLab 头。
+    const gsMod = require(path.join(PLATFORM, 'src', 'gitSources.js'));
+    const caPwd = gsMod.cloneArgs({ type: 'gitea', authType: 'password', username: 'alice', password: 's3cret' },
+      'http://example.com/x.git', null);
+    const pwdHeader = caPwd.args.find((a) => String(a).startsWith('http.extraHeader=')) || '';
+    note(caPwd.auth === true && pwdHeader.includes('Authorization: Basic ')
+      && !pwdHeader.includes('s3cret') && caPwd.secrets.includes('s3cret'),
+    '克隆时账号密码生成 Basic 头，且不写入 .git/config');
+    const caToken = gsMod.cloneArgs({ type: 'github', authType: 'token', token: 'ghp_abc' },
+      'https://github.com/o/r.git', null);
+    note(caToken.args.some((a) => String(a).includes('eC1hY2Nlc3MtdG9rZW46Z2hwX2FiYw==')),
+      'GitHub Token 克隆走 x-access-token Basic 头');
+    const caGitlab = gsMod.cloneArgs({ type: 'gitlab', authType: 'token', token: 'glpat-xyz' },
+      'https://gitlab.example.com/o/r.git', null);
+    note(caGitlab.args.some((a) => String(a).includes('PRIVATE-TOKEN: glpat-xyz')),
+      'GitLab Token 克隆走 PRIVATE-TOKEN 头');
+
+    /* ---------- 7. v0.3.2：多 OpenList 连接 ---------- */
+    const conns0 = await api('/openlist/connections');
+    note(Array.isArray(conns0.items) && conns0.items.some((c) => c.active),
+      '默认存在一条来自 .env 的 OpenList 连接');
+    const added = await api('/openlist/connections', { method: 'POST', body: {
+      label: '外部 OpenList', url: `http://127.0.0.1:${olPort}`, user: 'ext', token: 'ext-token',
+    } });
+    const conns1 = await api('/openlist/connections');
+    note(conns1.items.length === conns0.items.length + 1
+      && conns1.items.some((c) => c.id === added.id && c.active && c.hasToken),
+    '可新增外部 OpenList 连接并自动设为当前');
+    const stExternal = await api('/openlist/status');
+    note(stExternal.connectionId === added.id && stExternal.online === true
+      && stExternal.url === `http://127.0.0.1:${olPort}`,
+    '切换连接后状态接口作用到新的 OpenList 服务');
+    await api(`/openlist/connections/${added.id}`, { method: 'PUT', body: {
+      label: '外部改名', token: added.tokenMasked,
+    } });
+    const connState = JSON.parse(fs.readFileSync(path.join(TMP, 'state.json'), 'utf8'));
+    const rawConn = (connState.openlistConnections || []).find((c) => c.id === added.id);
+    note(Boolean(rawConn) && rawConn.token === 'ext-token' && rawConn.label === '外部改名',
+      '连接编辑时脱敏回显保留真实 Token');
+    const back = await api('/openlist/connections/env-default/activate', { method: 'POST', body: {} });
+    const stBack = await api('/openlist/status');
+    note(back.activeId === 'env-default' && stBack.connectionId === 'env-default',
+      '可切回 .env 默认连接，其它连接仍保留登记');
+    await api(`/openlist/connections/${added.id}`, { method: 'DELETE' });
+    const conns2 = await api('/openlist/connections');
+    note(conns2.items.length === conns0.items.length, '删除连接只移除登记');
+    let lastConnBlocked = false;
+    try { await api('/openlist/connections/env-default', { method: 'DELETE' }); }
+    catch { lastConnBlocked = true; }
+    note(lastConnBlocked, '至少保留一个 OpenList 连接的约束生效');
+
+    /* ---------- 8. 既有接口回归 ---------- */
     const overview = await api('/overview');
     note(overview.mode === 'normal' && typeof overview.counts.proxyRules === 'number',
       '总览接口回归（含代理规则计数）');
