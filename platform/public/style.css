@@ -136,6 +136,45 @@ code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-
 .form .field-help { color: var(--muted); font-size: 11px; font-weight: 400; margin-top: -2px; }
 .form-actions { display: flex; align-items: center; gap: 10px; padding-top: 2px; }
 
+/* v0.3.7 · 字段控件统一排版。
+   不少卡片里直接写 <label>文字<select>…</select></label>，但并不在 .form 内，
+   以前会退化成浏览器默认的「文字与控件横排紧贴」（Docker 面板偏好即是）。
+   这里统一成「标签在上、控件在下 + 全宽控件」，.form 内外一套样式。 */
+.grid-2 > label:not(.check), .grid-3 > label:not(.check), label.field {
+  display: flex; flex-direction: column; gap: 7px; min-width: 0;
+  color: #475569; font-size: 12px; font-weight: 550;
+}
+.grid-2 > label:not(.check) > input:not([type=checkbox]):not([type=radio]):not([type=file]),
+.grid-3 > label:not(.check) > input:not([type=checkbox]):not([type=radio]):not([type=file]),
+.grid-2 > label:not(.check) > select, .grid-3 > label:not(.check) > select,
+.grid-2 > label:not(.check) > textarea, .grid-3 > label:not(.check) > textarea,
+label.field > input:not([type=checkbox]):not([type=radio]):not([type=file]),
+label.field > select, label.field > textarea {
+  border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px;
+  background: var(--surface); color: var(--text); outline: none; width: 100%;
+  box-sizing: border-box; font-weight: 400; min-height: 38px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.grid-2 > label:not(.check) > select, .grid-3 > label:not(.check) > select,
+label.field > select { cursor: pointer; }
+.grid-2 > label:not(.check) > :is(input, select, textarea):focus,
+.grid-3 > label:not(.check) > :is(input, select, textarea):focus,
+label.field > :is(input, select, textarea):focus {
+  border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft);
+}
+.grid-2 > label:not(.check) > .field-help, label.field > .field-help {
+  color: var(--muted); font-size: 11px; font-weight: 400;
+}
+
+/* 面板偏好：把两组设置做成并排卡片，避免标签和下拉框挤成一行 */
+.dk-pref { margin-top: 14px; }
+.dk-pref > label {
+  padding: 13px 15px 15px; border: 1px solid var(--border);
+  border-radius: 11px; background: var(--surface-2);
+}
+.dk-pref > label > select { max-width: 100%; }
+.dk-pref .pref-note { color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.5; }
+
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .row > input, .row > select { flex: 1; min-width: 140px; }
 .row.gap { margin-top: 16px; justify-content: space-between; }
@@ -233,6 +272,8 @@ tr:last-child td { border-bottom: 0; }
 
 /* ---------- 服务器远程操作：Web 终端 / SFTP 文件管理 ---------- */
 .modal { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; }
+.modal[hidden] { display: none; }
+.modal-panel.modal-narrow { width: min(720px, 96vw); }
 .modal-mask { position: absolute; inset: 0; background: rgba(15, 23, 42, .45); backdrop-filter: blur(2px); }
 .modal-panel {
   position: relative; width: min(1120px, 96vw); max-height: 92vh;
@@ -541,6 +582,38 @@ tr:last-child td { border-bottom: 0; }
 .dk-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .dk-chips .chip { cursor: pointer; font-size: 11px; padding: 3px 9px; }
 .dk-chips .muted.small { font-size: 11px; margin-right: 4px; }
+/* 扩展一键体检结果 */
+.ext-diagnose { margin: 12px 0 14px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.ext-diag-card {
+  padding: 10px 12px; margin-bottom: 8px; border: 1px solid var(--border);
+  border-left: 3px solid var(--amber); border-radius: 9px;
+  background: var(--surface); font-size: 12px; line-height: 1.6;
+}
+.ext-diag-card.ok { border-left-color: #15803d; }
+.ext-diag-card.bad { border-left-color: #dc2626; }
+.ext-diag-checks { display: flex; flex-wrap: wrap; gap: 7px 18px; margin: 8px 0; }
+.ext-diag-hint { color: var(--amber); font-size: 11px; margin-top: 4px; word-break: break-word; }
+.ext-diag-card .dk-raw { margin-top: 6px; }
+.ext-diag-card .log.short { max-height: 150px; min-height: 0; }
+
+/* 仓库列表：Git 源故障逐条提示，不再挤成一行 */
+.repo-src-error {
+  display: flex; flex-direction: column; gap: 5px; margin-top: 8px;
+  padding: 9px 12px; border: 1px solid var(--border); border-left: 3px solid var(--amber);
+  border-radius: 8px; background: var(--surface-2); font-size: 12px; line-height: 1.6;
+}
+.repo-src-error .repo-src-hint { color: var(--muted); font-size: 11px; word-break: break-all; }
+.repo-src-error .row { margin-top: 2px; }
+
+/* Git 运行时可执行文件探测明细 */
+.git-probe-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.git-probe-line {
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace;
+  padding: 4px 8px; border-radius: 6px; background: var(--surface-2);
+  word-break: break-all;
+}
+.git-probe-line.bad { color: var(--muted); }
+.git-probe-line.ok { color: var(--green, #15803d); }
 .dk-raw summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 4px 0; }
 .dk-raw pre { margin-top: 8px; }
 body.dk-compact th, body.dk-compact td { padding: 6px 9px; font-size: 12px; }

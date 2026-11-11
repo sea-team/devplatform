@@ -82,7 +82,25 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
-note(html.includes('?v=20261111a'), '静态资源版本已升到 20261111a');
+note(html.includes('?v=20261111b'), '静态资源版本已升到 20261111b');
+
+// v0.3.7：Git 源弹窗、运行时检测明细、工作区仓库、扩展体检、表单控件统一排版。
+note(html.includes('id="gitsrc-modal"') && html.includes('id="gitsrc-add"')
+  && html.includes('data-gitsrc-close') && app.includes('function openGitSourceModal')
+  && app.includes('closeGitSourceModal()'),
+'Git 源登记与编辑共用弹窗，含新增入口 / 遮罩 / ESC 关闭链路');
+note(app.includes('git-probe-list') && app.includes('function refreshGitRuntime')
+  && app.includes("d.tried") && app.includes('data-git-probe'),
+'Git 运行时展示可执行文件探测明细与明确检测反馈');
+note(app.includes('r.isLocal') && app.includes('data-repo-fix')
+  && app.includes('工作区') && html.includes('id="repo-source-hint"'),
+'仓库列表展示工作区本地仓库并把源故障拆成可操作提示');
+note(html.includes('id="ext-diagnose-btn"') && html.includes('id="ext-diagnose"')
+  && app.includes('/extensions/diagnose') && app.includes('data-ext-rebuild'),
+'扩展一键体检与异常实例一键重建入口齐全');
+note(html.includes('dk-pref') && css.includes('.grid-2 > label:not(.check)')
+  && css.includes('.dk-pref > label'),
+'面板偏好与 .form 外标签统一为「标签在上、控件在下」排版');
 
 // v0.3.6：Git 源编辑、路径条、服务器轮询、409 冲突提示与 Docker 分区接线。
 note(html.includes('id="gitsrc-cancel"') && html.includes('id="gitsrc-form-title"')

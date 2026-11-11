@@ -6,6 +6,7 @@
  * 无 Docker 时由上层降级为 external（只登记外部连接），本模块不隐式安装任何东西。
  */
 const net = require('net');
+const os = require('os');
 const docker = require('./dockerApi');
 const remoteDocker = require('./remoteDocker');
 const dbgateSync = require('./dbgateSync');
@@ -14,6 +15,27 @@ const { config, imageCandidates } = require('./core');
 
 const LABEL = 'devplatform.ext';
 let _statusCache = { at: 0, value: null };
+
+/**
+ * v0.3.7 · 旧内核兼容判定。
+ * 容器与宿主机共享内核，os.release() 拿到的就是宿主内核版本。
+ * Node 20+ 在 Linux 4.x + Docker 默认 seccomp 下创建平台工作线程会被拦截，
+ * 表现为 `uv_thread_create` 断言 → exit 139 无限重启（DbGate latest 即此例）。
+ * 内核 < 5 时给平台自建容器加 seccomp:unconfined 兼容；新内核保持默认安全策略。
+ */
+function kernelCompat() {
+  const release = String(os.release() || '');
+  const m = release.match(/^(\d+)\.(\d+)/);
+  if (!m) return { enabled: false, release, reason: '非 Linux 内核，无需兼容处理' };
+  const major = Number(m[1]);
+  const enabled = major < 5;
+  return {
+    enabled, release,
+    reason: enabled
+      ? `宿主内核 ${release} 较旧，已为自建容器启用 seccomp 兼容模式`
+      : `宿主内核 ${release}，使用 Docker 默认安全策略`,
+  };
+}
 
 /** 实例的 target：'local' | 'server:<id>'。旧数据没有该字段时一律视为本机。 */
 function targetOf(inst) {
@@ -170,6 +192,7 @@ async function install(inst, manifest, rendered) {
     if (!pulled) throw (lastError || new Error('镜像拉取失败'));
   }
 
+  const compat = kernelCompat();
   const spec = {
     Image: image,
     Env: env,
@@ -185,6 +208,9 @@ async function install(inst, manifest, rendered) {
       RestartPolicy: { Name: 'unless-stopped' },
     },
   };
+  // 旧内核（4.x）上 Node 20+ 镜像会因 seccomp 拦住 clone3 而无法创建线程，
+  // 只给平台自建容器加兼容参数，宿主上的其它容器不受影响。
+  if (compat.enabled) spec.HostConfig.SecurityOpt = ['seccomp:unconfined'];
   if (Array.isArray(rendered.command) && rendered.command.length) spec.Cmd = rendered.command;
 
   const created = await docker.createContainer(spec, containerName);
@@ -198,9 +224,22 @@ async function install(inst, manifest, rendered) {
   }
   const healthy = await waitTcp(inst.host, inst.port, 60000);
   return {
-    containerId: id, containerName, volumeName, healthy, image: imageRef,
+    containerId: id, containerName, volumeName, healthy, image: imageRef, compat,
     detail: healthy ? '容器运行中，端口可连通' : '容器已启动，但 60 秒内端口未就绪（可看日志）',
   };
+}
+
+/**
+ * 用实例现有配置重建容器（保留卷与凭据），用于修复崩溃循环 / 应用兼容参数。
+ * 只动平台自建的那一个容器，其它容器一律不碰。
+ */
+async function rebuild(inst, manifest, rendered) {
+  const existing = await findContainer(inst);
+  if (existing) {
+    await docker.stopContainer(existing.Id).catch(() => {});
+    await docker.removeContainer(existing.Id, true).catch(() => {});
+  }
+  return install(inst, manifest, rendered);
 }
 
 async function action(inst, actionName) {
@@ -295,6 +334,63 @@ async function externalHealth(inst) {
   };
 }
 
+/** v0.3.7 · 单实例体检：容器状态 + 端口 + 内部检查 + 日志特征 + 修复建议。 */
+async function diagnose(inst, manifest) {
+  const started = Date.now();
+  const out = {
+    id: inst.id, catalogId: inst.catalogId, name: inst.name,
+    mode: inst.mode, port: inst.port, host: inst.host,
+    healthy: false, checks: [], container: null, logsTail: '',
+    problem: '', hints: [], ms: 0, compat: kernelCompat(),
+  };
+  if (inst.mode === 'docker' && !isRemote(inst)) {
+    try {
+      const id = await resolveId(inst);
+      const info = await docker.inspectContainer(id);
+      const st = info.State || {};
+      out.container = {
+        id: id.slice(0, 12), name: String(info.Name || '').replace(/^\//, ''),
+        status: st.Status || '', running: Boolean(st.Running),
+        exitCode: st.ExitCode, restartCount: info.RestartCount || 0,
+        image: (info.Config && info.Config.Image) || '',
+        securityOpt: (info.HostConfig && info.HostConfig.SecurityOpt) || null,
+      };
+    } catch (e) { out.container = { error: e.message }; }
+  }
+  let h;
+  try {
+    h = inst.mode === 'docker' ? await health(inst, manifest) : await externalHealth(inst);
+  } catch (e) { h = { healthy: false, running: false, tcp: false, execOk: null, detail: e.message }; }
+  out.healthy = Boolean(h.healthy);
+  out.checks = [
+    { name: '容器运行', ok: h.running === null || h.running === undefined ? null : Boolean(h.running), detail: out.container ? (out.container.status || '-') : '外部连接模式无容器' },
+    { name: '端口连通', ok: Boolean(h.tcp), detail: `${inst.host}:${inst.port}` },
+    { name: '内部健康检查', ok: h.execOk === undefined || h.execOk === null ? null : h.execOk, detail: h.execOk === false ? '检查命令返回非零' : (h.execOk ? '通过' : '清单未定义检查命令') },
+    { name: '总体可用', ok: out.healthy, detail: h.detail },
+  ];
+  try { out.logsTail = String((await logs(inst, 40)) || '').slice(-1400); }
+  catch (e) { out.logsTail = `日志读取失败：${e.message}`; }
+  const tail = out.logsTail || '';
+  if (/uv_thread_create|WorkerThreadsTaskRunner|node_platform\.cc/i.test(tail)) {
+    out.problem = 'NODE_THREAD_CREATE_FAILED';
+    out.hints.push(`Node 启动阶段无法创建工作线程：宿主内核 ${out.compat.release} 过旧 / Docker seccomp 拦截。点「重建容器」会自动带上 seccomp 兼容参数；也可改用基于 Node 18 的镜像 tag。`);
+  } else if ((out.container && out.container.exitCode === 137) || /OOMKilled|Killed process/i.test(tail)) {
+    out.problem = 'OOM_KILLED';
+    out.hints.push('容器被 OOM Killer 终止：请释放宿主机内存或为该容器设置内存上限后重建。');
+  } else if (!h.tcp && out.container && out.container.running) {
+    out.problem = 'PORT_UNREACHABLE';
+    const localHost = /^(127\.0\.0\.1|localhost|::1)$/.test(String(inst.host || ''));
+    out.hints.push(localHost
+      ? `实例对外地址仍是 ${inst.host}：平台运行在容器内时，容器里的 127.0.0.1 既不是宿主机，浏览器也无法用这个地址访问。请在 .env 设置 DP_EXT_BIND_IP=0.0.0.0（或宿主机内网 IP）、DP_EXT_HOST=宿主机内网 IP（例如 10.0.0.246），重启平台后重建该实例。`
+      : '容器在运行但端口不通：检查端口映射，以及在容器内运行时把 DP_EXT_HOST 设为宿主机 IP。');
+  }
+  if (!out.healthy && !out.hints.length) {
+    out.hints.push('查看下方容器日志尾部，或到「Docker 管理」检查容器状态与端口映射。');
+  }
+  out.ms = Date.now() - started;
+  return out;
+}
+
 /** 远程服务器的 Docker 是否可用（安装表单选择远程目标时显示）。 */
 async function remoteDockerStatus(serverId) {
   try { return await remoteDocker.dockerVersion(serverId); }
@@ -302,6 +398,6 @@ async function remoteDockerStatus(serverId) {
 }
 
 module.exports = {
-  dockerStatus, remoteDockerStatus, install, action, remove, logs, health, externalHealth,
-  tcpProbe, targetOf, isRemote, serverIdOf,
+  dockerStatus, remoteDockerStatus, install, rebuild, action, remove, logs, health, externalHealth,
+  diagnose, kernelCompat, tcpProbe, targetOf, isRemote, serverIdOf,
 };

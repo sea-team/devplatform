@@ -52,8 +52,36 @@ async function httpJSON(url, options = {}) {
   try {
     response = await fetch(url, init);
   } catch (e) {
-    throw httpProblem(502, `无法连接上游服务：${String(e.message || e).slice(0, 180)}`,
-      '检查目标服务是否启动、地址在平台容器内是否可达、以及代理 / NO_PROXY 配置');
+    // v0.3.7：Node 的 fetch 失败只会说 "fetch failed"，真正原因在 e.cause.code。
+    // 把 DNS / 拒绝连接 / 超时 / 自签证书等翻译成可操作的中文，别让用户只看到一句笼统报错。
+    const cause = (e && e.cause) || null;
+    const code = String((cause && cause.code) || (e && e.code) || '').toUpperCase();
+    const detail = String((cause && cause.message) || (e && e.message) || e).slice(0, 160);
+    const CAUSE_TEXT = {
+      ECONNREFUSED: '目标主机拒绝连接（服务未启动或端口不对）',
+      ENOTFOUND: '域名解析失败（DNS 查不到该主机名）',
+      EAI_AGAIN: '域名解析暂时失败',
+      ETIMEDOUT: '连接超时',
+      ECONNRESET: '连接被对端重置',
+      EHOSTUNREACH: '目标主机不可达',
+      ENETUNREACH: '网络不可达',
+      CERT_HAS_EXPIRED: 'TLS 证书已过期',
+      SELF_SIGNED_CERT_IN_CHAIN: '自签名证书不被信任',
+      DEPTH_ZERO_SELF_SIGNED_CERT: '自签名证书不被信任',
+      UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'TLS 证书链不完整，无法验证',
+      ERR_TLS_CERT_ALTNAME_INVALID: '证书域名与服务地址不匹配',
+    };
+    const certLike = /cert|ssl|tls|self[- ]signed/i.test(detail);
+    const reason = CAUSE_TEXT[code] || (certLike ? 'TLS 证书校验失败（自签名或证书链不完整）' : '');
+    let host = '';
+    try { host = new URL(url).host; } catch { /* 忽略非法 URL */ }
+    const msg = `无法连接上游服务${host ? ` [${host}]` : ''}：${reason || detail}${reason && code ? `（${code}）` : ''}`;
+    const hint = certLike
+      ? '自建服务若用自签证书：把内网 CA 证书加入平台容器的信任链，或在受信任的内网改用 http；请配置受信任证书，不要直接跳过证书校验。也可到「代理配置」为该源单独设置代理。'
+      : (/ENOTFOUND|EAI_AGAIN/.test(code)
+        ? '检查服务地址是否写错、平台容器内 DNS 能否解析；若该域名要走代理，请到「代理配置」设置 Git 分组代理或单项代理。'
+        : '检查目标服务是否启动、端口与防火墙、地址在平台容器内是否可达，以及代理 / NO_PROXY 配置');
+    throw httpProblem(502, msg, hint);
   }
   const text = await response.text();
   let payload;

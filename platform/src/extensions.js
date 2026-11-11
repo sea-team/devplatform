@@ -392,9 +392,56 @@ function injectEnv(id, targetPath, extraTargets = []) {
   return { path: written[0], paths: written, envKey, written: true, count: written.length };
 }
 
+/** v0.3.7 · 一键体检所有实例：逐项检查容器 / 端口 / 健康检查 / 日志特征。 */
+async function diagnoseAll() {
+  const list = instances().map(publicInstance);
+  const results = [];
+  for (const inst of list) {
+    try {
+      results.push(await runtime.diagnose(findInstance(inst.id), getManifest(inst.catalogId)));
+    } catch (e) {
+      results.push({
+        id: inst.id, catalogId: inst.catalogId, name: inst.name,
+        mode: inst.mode, port: inst.port, host: inst.host, healthy: false,
+        checks: [], container: null, logsTail: '', problem: 'DIAGNOSE_FAILED',
+        hints: [`体检失败：${e.message}`], ms: 0,
+      });
+    }
+  }
+  return {
+    items: results,
+    total: results.length,
+    healthy: results.filter((r) => r.healthy).length,
+    compat: runtime.kernelCompat(),
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+/** 用实例现有配置重建容器（保留卷与凭据），修复崩溃循环 / 应用旧内核兼容参数。 */
+async function rebuildInstance(id) {
+  const inst = findInstance(id);
+  if (!inst) throw new Error(`扩展实例不存在：${id}`);
+  if (inst.mode !== 'docker') throw new Error('外部连接模式只登记连接信息，没有容器可重建');
+  const manifest = getManifest(inst.catalogId);
+  setInstance(id, { status: 'installing', statusDetail: '正在重建容器' });
+  try {
+    const result = await runtime.rebuild(inst, manifest, renderEnv(manifest, inst));
+    setInstance(id, {
+      ...result,
+      status: result.healthy ? 'online' : 'partial',
+      statusDetail: result.healthy ? '已重建，健康检查通过' : '已重建，但端口尚未就绪（可看日志）',
+    });
+    return { ...result, instance: publicInstance(findInstance(id)) };
+  } catch (e) {
+    setInstance(id, { status: 'offline', statusDetail: `重建失败：${e.message}` });
+    throw e;
+  }
+}
+
 module.exports = {
   listCatalog, listInstances, publicInstance, findInstance,
   createInstance, actionInstance, removeInstance, healthOf, logsOf,
+  diagnoseAll, rebuildInstance,
   connectionOfInstance, injectEnv, customDir,
   allManifests, getManifest, renderEnv, setInstance, templateVars,
 };

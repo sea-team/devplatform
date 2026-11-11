@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261111a" />
+  <link rel="stylesheet" href="/style.css?v=20261111b" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -208,42 +208,15 @@
             <button class="subnav-btn active" data-open-view="gitsrc">外部 Git 源</button>
           </div>
           <div class="card">
-            <div class="card-head"><h2 id="gitsrc-form-title">登记外部 Git 源</h2><span class="muted">GitHub / 自建 Gitea / GitLab</span></div>
-            <div class="hint" id="gitsrc-hint">平台自带 Gitea 已内置；登记外部源后，仓库列表会一并聚合，可直接克隆到工作区并用在线 IDE 开发。支持 Token 与账号密码两种认证方式。</div>
-            <form id="gitsrc-form" class="form" style="margin-top:14px">
-              <div class="grid-2">
-                <label>名称<input name="label" placeholder="例如 公司 Gitea" required /></label>
-                <label>类型<select name="type">
-                  <option value="gitea">Gitea / 兼容 API</option>
-                  <option value="github">GitHub</option>
-                  <option value="gitlab">GitLab</option>
-                  <option value="generic">其它（Gitea 兼容）</option>
-                </select></label>
-                <label>服务地址<input name="baseUrl" placeholder="https://api.github.com 或 http://10.0.0.246:3000" required /></label>
-                <label>认证方式<select name="authType" id="gitsrc-auth-type">
-                  <option value="token">访问令牌 Token（推荐）</option>
-                  <option value="password">账号 + 密码 / PAT</option>
-                </select></label>
+            <div class="card-head">
+              <h2>已登记的源</h2>
+              <div class="row gap" style="align-items:center">
+                <button class="btn btn-ghost btn-sm" data-reload="gitsrc">刷新</button>
+                <button class="btn btn-primary btn-sm" type="button" id="gitsrc-add">＋ 登记 Git 源</button>
               </div>
-              <div class="grid-2">
-                <label>用户名（账号密码方式必填，Token 方式可选）<input name="username" id="gitsrc-username" placeholder="GitHub 账号 / Gitea 用户名" autocomplete="off" /></label>
-                <label id="gitsrc-token-field">访问令牌 Token<input name="token" id="gitsrc-token" type="password" placeholder="ghp_... / Gitea Token / GitLab PAT" autocomplete="new-password" /></label>
-              </div>
-              <div class="grid-2" id="gitsrc-password-fields" hidden>
-                <label>密码 / 个人访问令牌<input name="password" id="gitsrc-password" type="password" placeholder="GitHub 必须填 PAT（已停用密码登录）" autocomplete="new-password" /></label>
-              </div>
-              <div class="notice">
-                <b>Token 方式</b>：GitHub 用 <code>Bearer</code>、GitLab 用 <code>PRIVATE-TOKEN</code>、Gitea 用 <code>token</code> 头，权限最完整。<br />
-                <b>账号密码方式</b>：统一走 HTTP Basic 调用 REST API 与克隆；自建 Gitea / GitLab 可直接填账号密码，GitHub 请在密码栏填 PAT（GitHub 自 2021 起停用密码认证）。<br />
-                凭据只写入本机 <code>data/state.json</code>（600 权限），列表接口一律脱敏；登记后点「测试连通」验证。<br />
-                <b>编辑已登记的源</b>：点列表里的「编辑」回填表单，名称 / 类型 / 地址 / 认证方式都能改；凭据栏留空表示沿用原值（列表里显示的是脱敏值，不会写回）。
-              </div>
-              <div class="form-actions"><button class="btn btn-primary" type="submit" id="gitsrc-submit">登记 Git 源</button><button class="btn btn-ghost" type="button" id="gitsrc-cancel" hidden>取消编辑</button></div>
-            </form>
-          </div>
-          <div class="card">
-            <div class="card-head"><h2>已登记的源</h2><button class="btn btn-ghost btn-sm" data-reload="gitsrc">刷新</button></div>
-            <div id="gitsrc-list" class="table-wrap"></div>
+            </div>
+            <div class="hint">平台自带 Gitea 已内置；登记外部源后，仓库列表会一并聚合，可直接克隆到工作区并用在线 IDE 开发。支持 Token 与账号密码两种认证方式，登记与编辑都在弹窗中完成。</div>
+            <div id="gitsrc-list" class="table-wrap" style="margin-top:12px"></div>
           </div>
           <div class="card" id="gitsrc-repos-card" hidden>
             <div class="card-head"><h2 id="gitsrc-repos-title">源仓库列表</h2><button class="btn btn-ghost btn-sm" id="gitsrc-repos-close">收起</button></div>
@@ -281,14 +254,20 @@
             </div>
             <div class="card">
               <div class="card-head"><h2>面板偏好 / 安全策略</h2><span class="muted">偏好只存本机浏览器</span></div>
-              <div class="grid-2" style="margin-top:12px">
-                <label>数据自动刷新<select id="docker-poll-interval">
-                  <option value="0">关闭</option><option value="15000">15 秒</option>
-                  <option value="30000">30 秒</option><option value="60000">60 秒</option>
-                </select></label>
-                <label>表格密度<select id="docker-density">
-                  <option value="normal">标准</option><option value="compact">紧凑</option>
-                </select></label>
+              <div class="grid-2 dk-pref">
+                <label>数据自动刷新
+                  <select id="docker-poll-interval">
+                    <option value="0">关闭</option><option value="15000">15 秒</option>
+                    <option value="30000">30 秒</option><option value="60000">60 秒</option>
+                  </select>
+                  <span class="pref-note">只在 Docker 页生效；切到后台标签时自动暂停，切回前台立即补一次。</span>
+                </label>
+                <label>表格密度
+                  <select id="docker-density">
+                    <option value="normal">标准</option><option value="compact">紧凑</option>
+                  </select>
+                  <span class="pref-note">紧凑模式缩小行高与内边距，容器较多时一屏能看更多。</span>
+                </label>
               </div>
               <div class="arch" style="margin-top:12px">
                 <div class="arch-row"><b>平台容器</b><span>带 devplatform.ext 标签，可直接启停 / 删除</span></div>
@@ -872,7 +851,14 @@
             <form id="ext-install-form" class="form"></form>
           </div>
           <div class="card">
-            <div class="card-head"><h2>实例列表</h2><span class="muted">凭据默认脱敏，明文连接串按需单独读取</span></div>
+            <div class="card-head">
+              <h2>实例列表</h2>
+              <div class="row gap" style="align-items:center">
+                <span class="muted">凭据默认脱敏，明文连接串按需单独读取</span>
+                <button class="btn btn-sm" type="button" id="ext-diagnose-btn">检测各项功能</button>
+              </div>
+            </div>
+            <div id="ext-diagnose" class="ext-diagnose" hidden></div>
             <div id="ext-list" class="table-wrap"></div>
           </div>
           <div class="card" id="ext-log-card" hidden>
@@ -1146,12 +1132,58 @@
       </div>
     </main>
   </div>
+  <!-- Git 源登记 / 编辑弹窗（登记与编辑共用同一个表单） -->
+  <div class="modal" id="gitsrc-modal" hidden aria-modal="true" role="dialog" aria-labelledby="gitsrc-form-title">
+    <div class="modal-mask" data-gitsrc-close></div>
+    <div class="modal-panel modal-narrow">
+      <div class="modal-head">
+        <div><h2 id="gitsrc-form-title">登记外部 Git 源</h2><span class="muted">GitHub / 自建 Gitea / GitLab</span></div>
+        <button class="btn btn-ghost btn-sm" type="button" data-gitsrc-close>✕ 关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="hint" id="gitsrc-hint">登记外部源后，仓库列表会一并聚合。支持 Token 与账号密码两种认证方式；凭据栏留空表示编辑时沿用原值。</div>
+        <form id="gitsrc-form" class="form" style="margin-top:14px">
+          <div class="grid-2">
+            <label>名称<input name="label" placeholder="例如 公司 Gitea" required /></label>
+            <label>类型<select name="type">
+              <option value="gitea">Gitea / 兼容 API</option>
+              <option value="github">GitHub</option>
+              <option value="gitlab">GitLab</option>
+              <option value="generic">其它（Gitea 兼容）</option>
+            </select></label>
+            <label>服务地址<input name="baseUrl" placeholder="https://api.github.com 或 http://10.0.0.246:3000" required /></label>
+            <label>认证方式<select name="authType" id="gitsrc-auth-type">
+              <option value="token">访问令牌 Token（推荐）</option>
+              <option value="password">账号 + 密码 / PAT</option>
+            </select></label>
+          </div>
+          <div class="grid-2">
+            <label>用户名（账号密码方式必填，Token 方式可选）<input name="username" id="gitsrc-username" placeholder="GitHub 账号 / Gitea 用户名" autocomplete="off" /></label>
+            <label id="gitsrc-token-field">访问令牌 Token<input name="token" id="gitsrc-token" type="password" placeholder="ghp_... / Gitea Token / GitLab PAT" autocomplete="new-password" /></label>
+          </div>
+          <div class="grid-2" id="gitsrc-password-fields" hidden>
+            <label>密码 / 个人访问令牌<input name="password" id="gitsrc-password" type="password" placeholder="GitHub 必须填 PAT（已停用密码登录）" autocomplete="new-password" /></label>
+          </div>
+          <div class="notice">
+            <b>Token 方式</b>：GitHub 用 <code>Bearer</code>、GitLab 用 <code>PRIVATE-TOKEN</code>、Gitea 用 <code>token</code> 头，权限最完整。<br />
+            <b>账号密码方式</b>：统一走 HTTP Basic 调用 REST API 与克隆；自建 Gitea / GitLab 可直接填账号密码，GitHub 请在密码栏填 PAT（GitHub 自 2021 起停用密码认证）。<br />
+            凭据只写入本机 <code>data/state.json</code>（600 权限），列表接口一律脱敏；登记后可点列表里的「测试连通」验证。<br />
+            <b>编辑已登记的源</b>：名称 / 类型 / 地址 / 认证方式都能改；凭据栏留空表示沿用原值（列表里显示的是脱敏值，不会写回）。
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit" id="gitsrc-submit">登记 Git 源</button>
+            <button class="btn btn-ghost" type="button" id="gitsrc-cancel">取消</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
   <div id="toast" class="toast"></div>
   <script src="/vendor/xterm.min.js"></script>
   <script src="/vendor/addon-fit.min.js"></script>
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261111a"></script>
+  <script src="/app.js?v=20261111b"></script>
 </body>
 </html>

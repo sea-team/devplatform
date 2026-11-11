@@ -61,6 +61,8 @@ const SKIP = new Set([
   'POST /api/ai/local/test',
   'POST /api/extensions/backups/:id/restore',
   'POST /api/extensions/instances/:id/upgrade',
+  // v0.3.7：重建会删除并重新创建容器，巡检绝不触发。
+  'POST /api/extensions/instances/:id/rebuild',
   'POST /api/extensions/instances/:id/inject',
   'POST /api/extensions/instances/:id/action',
   'POST /api/docker/images/load',

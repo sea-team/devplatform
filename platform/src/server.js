@@ -939,6 +939,16 @@ app.get('/api/extensions/instances', wrap(async (req, res) => {
   ok(res, extensions.listInstances());
 }));
 
+// v0.3.7：一键体检全部实例（容器状态 / 端口 / 内部检查 / 日志特征 / 修复建议）。
+app.post('/api/extensions/diagnose', wrap(async (req, res) => {
+  ok(res, await extensions.diagnoseAll());
+}));
+
+// 用实例现有配置重建容器（保留卷与凭据），修复崩溃循环或应用旧内核兼容参数。
+app.post('/api/extensions/instances/:id/rebuild', wrap(async (req, res) => {
+  ok(res, await extensions.rebuildInstance(req.params.id));
+}));
+
 app.post('/api/extensions/instances', wrap(async (req, res) => {
   ok(res, await extensions.createInstance(req.body || {}));
 }));

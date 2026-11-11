@@ -2116,3 +2116,42 @@ node scripts/api-sweep.js --base http://10.0.0.246:9000 --json
 | 自检 | `npm run check`、`check-frontend.js`、四套冒烟（40 / 31 / 28 / 60 项）、release.yml YAML 解析全部通过 |
 
 > v0.3.6 只提交到 `main`，未打 tag、未触发 Release；需要发版时补一个 `v0.3.6` tag 即可（release notes 已包含本版说明）。
+
+---
+
+## 34. v0.3.7：弹窗交互、工作区仓库、扩展体检与表单排版
+
+### 34.1 五类反馈
+
+| 用户反馈 | 落地结果 |
+|---|---|
+| Git 源「登记 / 编辑」改为弹窗 | 新增 `gitsrc` 弹窗（遮罩 / Esc / 取消关闭），列表卡片只留「＋ 登记 Git 源」；表单 id 不变，提交后自动关闭并刷新列表与仓库聚合 |
+| Git 运行时检测要显示结果 | 检测卡片展示可执行文件、版本、探测来源、平台、工作区 / 宿主机映射、SSH 兜底状态与检测时间；新增可展开的逐条探测明细（`tried`），「重新检测」带按钮态与即时反馈 |
+| 仓库列表看不到已克隆的 `secure` | `/api/repos` 增加工作区扫描：枚举含 `.git` 的目录、读取 remote 与更新时间，以「工作区」来源置顶；源故障拆成逐条错误卡片 + 「编辑源 / 代理配置」入口，远端源全挂也不影响本地仓库 |
+| 扩展 / 数据库要检测各项功能、DbGate 不可用 | 新增 `POST /api/extensions/diagnose` 一键体检（容器状态 / 端口 / 内部检查 / 日志特征 / 修复建议）与 `POST /api/extensions/instances/:id/rebuild` 保留卷与凭据重建容器 |
+| Docker 面板偏好标签与下拉框挤在一起 | `.form` 外的 `label` 没有纵向排版样式，退化成浏览器默认横排；统一 `.grid-2/.grid-3 > label` 与 `label.field` 的标签 / 控件 / 说明三段式，偏好区改为卡片 + 说明文字，同类位置一并生效 |
+
+### 34.2 关键排查结论（10.0.0.246）
+
+- **DbGate 崩溃**：容器 `dp-ext-dbgate` 状态 `Restarting (139)`，日志为 `Assertion failed: (0) == (uv_thread_create(...)) at ../src/node_platform.cc:104`。容器无 `PidsLimit` / 内存限制，宿主 `threads-max=63707`、负载约 1.4，排除资源耗尽；宿主是 **Debian 9 / 内核 4.9**，而 `dbgate/dbgate:latest` 内置 **Node 22.23.4** —— Node 20+ 在旧内核 + Docker 默认 seccomp 下创建工作线程被拦截，属已知的 `clone3` 兼容问题。
+- **兼容策略**：`extRuntime.kernelCompat()` 用 `os.release()`（容器共享宿主内核）判定，内核主版本 < 5 时仅给**平台自建容器**加 `SecurityOpt: ["seccomp:unconfined"]`；新内核仍用 Docker 默认安全策略，不触碰宿主机其它容器。
+- **外部源报错笼统**：Node 的 fetch 失败只给 `fetch failed`，真实原因在 `e.cause.code`；`httpJSON` 现把 DNS / 拒绝连接 / 超时 / 自签证书分别翻译成可操作提示。
+
+### 34.3 版本与文件
+
+`platform/package.json` → `0.3.7`，静态资源 `?v=20261111b`；`check-frontend.js` 新增 5 条本版断言；`smoke-api-status.js` 的版本号断言改为读取 `package.json`，不再随发版硬编码。
+
+### 34.4 实测（10.0.0.246 与本机，2026-11-11）
+
+| 验证项 | 结果 |
+|---|---|
+| 版本 / 部署 | 本机 SEA exe 重编译重启、`remote.js deploy 10.0.0.246` 成功，两端 `/api/health` 均为 `0.3.7` |
+| 仓库列表 | `/api/repos` 返回 1 条「工作区 / `secure`」，读到分支 `master` 与 remote `https://47.100.44.43:6443/root/secure.git`；远端源全挂也照常显示 |
+| 源错误诊断 | 笼统的 `fetch failed` 细化为 `无法连接上游服务 [47.100.44.43:6443]：TLS 证书已过期（CERT_HAS_EXPIRED）` 并附证书链修复建议 |
+| 扩展体检 | 2 个实例：Redis 正常；DbGate 精确定位 `NODE_THREAD_CREATE_FAILED`（exit 139、重启 30 次、日志含 `uv_thread_create`） |
+| DbGate 重建 | 调用 `POST /api/extensions/instances/:id/rebuild`，容器带 `SecurityOpt=['seccomp:unconfined']` 重建后 **running / exitCode 0 / restartCount 0**，日志出现 `DbGate API listening on port 3000`，线程断言消失 |
+| 残留项 | 实例对外地址仍是 `127.0.0.1`，体检报 `PORT_UNREACHABLE` 并给出 `DP_EXT_BIND_IP=0.0.0.0`、`DP_EXT_HOST=10.0.0.246` 的配置指引；**未擅自修改生产 `.env`**，需用户确认后再改并重建实例 |
+| 全接口巡检 | 本机 138 项、远端 `--full` 148 项，均 **0 个 500**、0 超时、0 降级异常、0 错误体缺 status |
+| 自检 | `npm run check`、`check-frontend.js`（含 5 条本版断言）、四套冒烟（40 / 31 / 28 / 60 项）、release.yml YAML 全通过 |
+
+> v0.3.7 只提交到 `main`，未打 tag、未触发 Release；release notes 已包含本版说明。

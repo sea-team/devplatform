@@ -453,12 +453,40 @@ async function loadRepos() {
     const options = sources.map((s) => `<option value="${esc(s.id)}">${esc(s.label)}${s.hasCreds ? '' : '（未配置凭据）'}</option>`).join('');
     if ($('#repo-source')) $('#repo-source').innerHTML = options;
     if ($('#clone-source')) $('#clone-source').innerHTML = '<option value="">手动填写地址（不带凭据）</option>' + options;
-    const errors = (d.errors || []).map((x) => `${x.label}：${x.error}`).join('；');
-    $('#repo-source-hint').textContent = errors
-      ? `部分源不可用：${errors}`
-      : `已聚合 ${sources.length} 个 Git 源共 ${(d.items || []).length} 个仓库；外部源在「Git 源」页登记`;
-    $('#repo-list').innerHTML = table(['仓库', '来源', '描述', '更新时间', '操作'], (d.items || []).map((r) => `
-      <tr>
+    // v0.3.7：源故障不再只是一句「部分源不可用」，逐条给出原因与修复入口；
+    // 且远端源全挂时，工作区本地仓库仍然照常显示。
+    const errors = d.errors || [];
+    const errBox = $('#repo-source-hint');
+    if (errBox) {
+      if (errors.length) {
+        errBox.innerHTML = `<div class="row gap wrap" style="align-items:center">
+            <b style="color:var(--amber)">${errors.length} 个 Git 源暂时不可用</b>
+            <span class="muted">不影响下方「工作区」里已克隆的本地仓库</span></div>`
+          + errors.map((x) => `<div class="repo-src-error">
+              <span>⚠ <b>${esc(x.label)}</b>：${esc(x.error)}</span>
+              ${x.hint ? `<span class="repo-src-hint">↳ ${esc(x.hint)}</span>` : ''}
+              <span class="row gap">
+                <button class="btn btn-sm" data-repo-fix="gitsrc">编辑源</button>
+                <button class="btn btn-sm" data-repo-fix="proxy">代理配置</button>
+              </span></div>`).join('');
+        errBox.querySelectorAll('[data-repo-fix]').forEach((b) => b.addEventListener('click', () => switchView(b.dataset.repoFix)));
+      } else {
+        errBox.textContent = `已聚合 ${sources.length} 个 Git 源、工作区 ${(d.workspace && d.workspace.count) || 0} 个本地仓库，共 ${(d.items || []).length} 条；外部源在「Git 源」页登记`;
+      }
+    }
+    const rows = (d.items || []).map((r) => {
+      // 工作区内已克隆的仓库：直接进 IDE，不重复提供「克隆」按钮。
+      if (r.isLocal) return `<tr>
+        <td><b>${esc(r.name)}</b><div class="desc muted">${esc(r.fullName)}</div></td>
+        <td>${badge('工作区', 'green')}</td>
+        <td>${esc(r.description || '-')}<div class="desc muted">${esc(r.localPath || '')}</div></td>
+        <td class="muted">${esc(fmtTime(r.updatedAt))}</td>
+        <td class="actions"><div class="ext-actions">
+          <button class="btn btn-sm" data-ide="${esc(r.name)}">IDE 打开</button>
+          ${r.cloneUrl ? `<button class="btn btn-sm" data-copy="${esc(r.cloneUrl)}">复制地址</button>` : ''}
+        </div></td>
+      </tr>`;
+      return `<tr>
         <td><b>${esc(r.name)}</b><div class="desc muted">${esc(r.fullName)}</div></td>
         <td>${badge(esc(r.sourceLabel), r.sourceId === 'builtin-gitea' ? 'blue' : 'amber')}</td>
         <td>${esc(r.description || '-')}${r.private ? ' ' + badge('私有', 'gray') : ''}</td>
@@ -469,7 +497,10 @@ async function loadRepos() {
           <button class="btn btn-sm" data-copy="${esc(r.cloneUrl || '')}">复制地址</button>
           <button class="btn btn-sm" data-proxy-repo="${esc(r.id)}">代理</button>
         </div></td>
-      </tr>`));
+      </tr>`;
+    });
+    $('#repo-list').innerHTML = rows.length ? table(['仓库', '来源', '描述', '更新时间', '操作'], rows)
+      : '<div class="empty">尚未发现仓库：可到「克隆到工作区」拉取第一个仓库，或在「外部 Git 源」登记远程服务。</div>';
     $$('[data-ide]').forEach((b) => b.addEventListener('click', () => {
       $('#ide-path').value = b.dataset.ide;
       switchView('ide');
@@ -513,8 +544,41 @@ async function loadGitRuntime() {
       : (fb.ready
         ? `执行通道：SSH 宿主机 ${esc(fb.serverName || '')}（${esc(fb.serverHost || '')}）→ ${esc(fb.hostWorkspaceDir || '')}`
         : `兜底未就绪：${esc(fb.reason || '未登记 SSH 服务器')}`);
-    const lines = String(d.hint || '').split('\n').map((line) => `<div>${esc(line)}</div>`).join('');
-    box.innerHTML = `${stateBadge} <span class="muted">${channel}</span><div style="margin-top:6px">${lines}</div>`;
+    const kv = (k, v) => `<div class="dk-kv-row"><span class="dk-kv-key">${esc(k)}</span><span class="dk-kv-val">${esc(v || '—')}</span></div>`;
+    const tried = Array.isArray(d.tried) ? d.tried : [];
+    const triedHtml = tried.length
+      ? tried.map((t) => {
+        const ok = /可用|OK|found|v?\d+\.\d+/i.test(String(t)) && !/不存在|exit=null|ENOENT|不可用/i.test(String(t));
+        return `<div class="git-probe-line ${ok ? 'ok' : 'bad'}">${ok ? '✔' : '✖'} ${esc(t)}</div>`;
+      }).join('')
+      : '<div class="muted">没有探测记录</div>';
+    const hintLines = String(d.hint || '').split('\n').map((line) => `<div>${esc(line)}</div>`).join('');
+    // v0.3.7：把「检测」的完整结果展示出来，而不是只显示一句概要。
+    box.innerHTML = `
+      <div class="row gap wrap" style="align-items:center">
+        ${stateBadge}<span>${channel}</span>
+        <span class="muted small">检测于 ${esc(new Date().toLocaleTimeString('zh-CN', { hour12: false }))}</span>
+        <button class="btn btn-sm" type="button" data-git-probe>重新检测</button>
+      </div>
+      <div class="dk-kv" style="margin-top:10px">
+        ${kv('可执行文件', d.bin || '未找到')}
+        ${kv('Git 版本', d.version || '—')}
+        ${kv('探测来源', d.source || (d.configuredBin ? '手工指定' : '自动探测'))}
+        ${kv('手工指定路径', d.configuredBin || '未指定')}
+        ${kv('运行平台', d.platform || '—')}
+        ${kv('工作区', d.workspaceDir || '—')}
+        ${kv('宿主机映射', d.hostWorkspaceDir || '—')}
+        ${kv('克隆通道', d.channel || '—')}
+        ${kv('SSH 兜底', fb.enabled === false ? '已关闭' : (fb.ready
+          ? `就绪 · ${fb.serverName || ''}（${fb.serverHost || ''}）` : `未就绪 · ${fb.reason || '未登记 SSH 服务器'}`))}
+      </div>
+      <div class="notice" style="margin-top:10px">${hintLines}</div>
+      <details class="dk-raw" style="margin-top:8px">
+        <summary>可执行文件探测明细（${tried.length} 条）</summary>
+        <div class="git-probe-list">${triedHtml}</div>
+      </details>
+      ${d.installHint ? `<div class="hint" style="margin-top:8px">安装建议：<code>${esc(d.installHint)}</code></div>` : ''}`;
+    box.querySelectorAll('[data-git-probe]').forEach((b) => b.addEventListener('click', refreshGitRuntime));
     if ($('#git-runtime-bin')) $('#git-runtime-bin').value = d.configuredBin || '';
     if ($('#git-runtime-fallback')) $('#git-runtime-fallback').value = fb.enabled === false ? 'off' : 'on';
     // v0.3.4：显示当前环境档案与「实际生效」的克隆通道，异常时引导去环境适配页处置。
@@ -529,6 +593,20 @@ async function loadGitRuntime() {
     }).catch(() => { if ($('#git-runtime-env')) $('#git-runtime-env').textContent = '环境档案读取失败，请打开「环境适配」页查看'; });
   } catch (e) {
     box.textContent = `Git 运行时检测失败：${e.message}`;
+  }
+}
+
+/** 重新探测并给出明确反馈，避免点了按钮却看不到结果变化。 */
+async function refreshGitRuntime() {
+  const btn = $('#git-runtime-refresh');
+  if (btn) { btn.disabled = true; btn.textContent = '检测中…'; }
+  try {
+    await api('/git/runtime/refresh', { method: 'POST', body: {} });
+    await loadGitRuntime();
+    toast('检测完成：可执行文件结果与探测明细已更新');
+  } catch (err) { toast(err.message, true); }
+  finally {
+    if (btn) { btn.disabled = false; btn.textContent = '仅重新检测'; }
   }
 }
 
@@ -2274,6 +2352,65 @@ async function loadExtensions() {
   } catch (e) { toast(e.message, true); }
 }
 
+/* --------------------- 扩展一键体检（v0.3.7） --------------------- */
+/** 逐实例展示容器状态 / 端口 / 内部检查 / 日志特征与修复建议。 */
+async function runExtDiagnose() {
+  const box = $('#ext-diagnose');
+  const btn = $('#ext-diagnose-btn');
+  if (!box) return;
+  box.hidden = false;
+  box.innerHTML = '<div class="hint">正在逐项检测：容器状态、端口连通、内部健康检查与日志特征…</div>';
+  if (btn) { btn.disabled = true; btn.textContent = '检测中…'; }
+  try {
+    const d = await api('/extensions/diagnose', { method: 'POST', body: {} });
+    const items = d.items || [];
+    const mark = (v) => (v === null || v === undefined)
+      ? '<span class="muted">—</span>'
+      : (v ? '<span style="color:#15803d">✔</span>' : '<span style="color:#dc2626">✖</span>');
+    box.innerHTML = `
+      <div class="row gap wrap" style="align-items:center;margin-bottom:10px">
+        <b>${esc(d.healthy)} / ${esc(d.total)} 项正常</b>
+        <span class="muted small">检测于 ${esc(fmtTime(d.checkedAt))}</span>
+        <span class="muted small">${esc((d.compat && d.compat.reason) || '')}</span>
+        <button class="btn btn-sm" type="button" data-ext-diag="again">重新检测</button>
+        <button class="btn btn-sm btn-ghost" type="button" data-ext-diag="close">收起</button>
+      </div>`
+      + (items.length ? items.map((r) => `
+        <div class="ext-diag-card ${r.healthy ? 'ok' : 'bad'}">
+          <div class="row gap wrap" style="align-items:center">
+            <b>${esc(r.name)}</b>
+            ${badge(r.healthy ? '正常' : '异常', r.healthy ? 'green' : 'red')}
+            <span class="muted small">${esc(r.mode)} · ${esc(r.host)}:${esc(r.port)} · ${esc(r.ms)}ms</span>
+            ${r.mode === 'docker' ? `<button class="btn btn-sm" type="button" data-ext-rebuild="${esc(r.id)}">重建容器</button>` : ''}
+          </div>
+          <div class="ext-diag-checks">${(r.checks || []).map((c) => `<span>${mark(c.ok)} ${esc(c.name)} <span class="muted">${esc(c.detail || '')}</span></span>`).join('')}</div>
+          ${r.container ? `<div class="muted small">容器 ${esc(r.container.name || r.container.id || r.container.error || '-')} · ${esc(r.container.status || '')} · 退出码 ${esc(r.container.exitCode)} · 重启 ${esc(r.container.restartCount)} 次${r.container.securityOpt ? ' · 兼容模式已启用' : ''}</div>` : ''}
+          ${(r.hints || []).map((h) => `<div class="ext-diag-hint">↳ ${esc(h)}</div>`).join('')}
+          ${r.logsTail ? `<details class="dk-raw"><summary>日志尾部</summary><pre class="log short">${esc(r.logsTail)}</pre></details>` : ''}
+        </div>`).join('') : '<div class="empty">还没有已登记的实例</div>');
+    box.querySelectorAll('[data-ext-diag]').forEach((b) => b.addEventListener('click', () => {
+      if (b.dataset.extDiag === 'close') box.hidden = true;
+      else runExtDiagnose();
+    }));
+    box.querySelectorAll('[data-ext-rebuild]').forEach((b) => b.addEventListener('click', async () => {
+      const id = b.dataset.extRebuild;
+      if (!confirm('将用当前配置重建该实例的容器（数据卷与凭据保留），确认继续？')) return;
+      try {
+        toast('正在重建容器…');
+        await api(`/extensions/instances/${encodeURIComponent(id)}/rebuild`, { method: 'POST', body: {} });
+        toast('容器已重建，正在复检');
+        await loadExtensions();
+        await runExtDiagnose();
+      } catch (err) { toast(err.message, true); }
+    }));
+  } catch (e) {
+    box.innerHTML = `<div class="notice warn">${esc(e.message)}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '检测各项功能'; }
+  }
+}
+if ($('#ext-diagnose-btn')) $('#ext-diagnose-btn').addEventListener('click', runExtDiagnose);
+
 /* ------------------------------ 外部 Git 源 ------------------------------ */
 
 async function loadGitSources() {
@@ -2878,19 +3015,34 @@ function syncGitSourceAuthFields() {
 }
 $('#gitsrc-auth-type').addEventListener('change', syncGitSourceAuthFields);
 
-/** 退出编辑态，恢复成「登记新源」。 */
+/** 退出编辑态，恢复成「登记新源」（弹窗内表单复位）。 */
 function resetGitSourceForm() {
   gitsrcEditId = '';
   const form = $('#gitsrc-form');
   if (form) form.reset();
   $('#gitsrc-form-title').textContent = '登记外部 Git 源';
   $('#gitsrc-submit').textContent = '登记 Git 源';
-  $('#gitsrc-cancel').hidden = true;
   const token = $('#gitsrc-token');
   const password = $('#gitsrc-password');
   if (token) token.placeholder = 'ghp_... / Gitea Token / GitLab PAT';
   if (password) password.placeholder = 'GitHub 必须填 PAT（已停用密码登录）';
   syncGitSourceAuthFields();
+}
+
+/** v0.3.7 · 登记 / 编辑共用同一个弹窗。 */
+function openGitSourceModal(source) {
+  const modal = $('#gitsrc-modal');
+  if (!modal) return;
+  if (source) fillGitSourceForm(source);
+  else resetGitSourceForm();
+  modal.hidden = false;
+  const first = $('#gitsrc-form') && $('#gitsrc-form').elements.label;
+  if (first) setTimeout(() => first.focus(), 30);
+}
+function closeGitSourceModal() {
+  const modal = $('#gitsrc-modal');
+  if (modal) modal.hidden = true;
+  resetGitSourceForm();
 }
 
 function fillGitSourceForm(s) {
@@ -2907,12 +3059,16 @@ function fillGitSourceForm(s) {
   $('#gitsrc-password').placeholder = s.hasPassword ? `留空沿用原值（当前 ${s.passwordMasked || '已保存'}）` : '留空表示不设置密码';
   $('#gitsrc-form-title').textContent = `编辑 Git 源 · ${s.label}`;
   $('#gitsrc-submit').textContent = '保存修改';
-  $('#gitsrc-cancel').hidden = false;
   syncGitSourceAuthFields();
-  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  toast('已回填表单；凭据留空表示沿用原值');
 }
-$('#gitsrc-cancel').addEventListener('click', resetGitSourceForm);
+
+$('#gitsrc-add').addEventListener('click', () => openGitSourceModal());
+$('#gitsrc-cancel').addEventListener('click', closeGitSourceModal);
+$$('[data-gitsrc-close]').forEach((b) => b.addEventListener('click', closeGitSourceModal));
+document.addEventListener('keydown', (e) => {
+  const modal = $('#gitsrc-modal');
+  if (e.key === 'Escape' && modal && !modal.hidden) closeGitSourceModal();
+});
 
 $('#gitsrc-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -2935,7 +3091,7 @@ $('#gitsrc-form').addEventListener('submit', async (e) => {
     if (editing) await api(`/git-sources/${encodeURIComponent(gitsrcEditId)}`, { method: 'PUT', body });
     else await api('/git-sources', { method: 'POST', body });
     toast(editing ? 'Git 源已更新，仓库列表会自动重新聚合' : 'Git 源已登记，仓库列表会自动聚合');
-    resetGitSourceForm();
+    closeGitSourceModal();
     await loadGitSources();
     await loadRepos();
   } catch (err) { toast(err.message || String(err), true); }
@@ -2949,7 +3105,8 @@ $('#gitsrc-list').addEventListener('click', async (e) => {
   try {
     if (op === 'edit') {
       const source = gitsrcCache.find((s) => s.id === id);
-      if (source) fillGitSourceForm(source);
+      if (source) openGitSourceModal(source);
+      else toast('源信息尚未加载完成，请刷新后重试', true);
     } else if (op === 'test') {
       toast('正在测试连通性…');
       const d = await api(`/git-sources/${id}/test`, { method: 'POST', body: {} });
@@ -3227,13 +3384,7 @@ $('#git-runtime-form').addEventListener('submit', async (e) => {
   } catch (err) { toast(err.message, true); }
 });
 
-$('#git-runtime-refresh').addEventListener('click', async () => {
-  try {
-    await api('/git/runtime/refresh', { method: 'POST', body: {} });
-    await loadGitRuntime();
-    toast('已重新检测 Git 运行时');
-  } catch (err) { toast(err.message, true); }
-});
+$('#git-runtime-refresh').addEventListener('click', refreshGitRuntime);
 
 /* ----------------- 环境适配中心：配置 / 体检 / 处置（v0.3.4） ----------------- */
 const envConfigForm = $('#env-config-form');

@@ -216,7 +216,57 @@ async function listReposOf(s) {
   return payload.map((r) => normalizeRepo(s, r));
 }
 
-/** 聚合所有源；单个源失败不影响其它源，错误单独返回供前端提示。 */
+/**
+ * v0.3.7 · 扫描工作区里已经克隆好的本地仓库（目录中含 .git）。
+ * 远程源一个都连不上时，这些仓库也必须出现在「仓库列表」里——用户克隆成功后
+ * 看不到任何数据，就是因为它以前只聚合远端 API 的结果。
+ */
+function listWorkspaceRepos() {
+  const root = config.workspaceDir;
+  let entries = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); }
+  catch (e) { return { items: [], error: `工作区目录不可读：${e.message}` }; }
+  const items = [];
+  for (const ent of entries) {
+    if (!ent.isDirectory()) continue;
+    const dir = path.join(root, ent.name);
+    let gitStat;
+    try { gitStat = fs.statSync(path.join(dir, '.git')); } catch { continue; }
+    let remote = '';
+    let branch = '';
+    try {
+      if (gitStat.isDirectory()) {
+        const cfg = fs.readFileSync(path.join(dir, '.git', 'config'), 'utf8');
+        const m = cfg.match(/^\s*url\s*=\s*(.+)$/m);
+        if (m) remote = m[1].trim();
+        const head = fs.readFileSync(path.join(dir, '.git', 'HEAD'), 'utf8').trim();
+        branch = head.startsWith('ref:') ? head.replace(/^ref:\s*refs\/heads\//, '') : head.slice(0, 8);
+      }
+    } catch { /* 配置读不到也要把仓库列出来 */ }
+    let updatedAt = gitStat.mtime.toISOString();
+    try { updatedAt = fs.statSync(dir).mtime.toISOString(); } catch { /* noop */ }
+    items.push({
+      sourceId: 'workspace', sourceLabel: '工作区', sourceType: 'workspace',
+      id: `workspace:${ent.name}`,
+      name: ent.name,
+      fullName: `工作区/${ent.name}`,
+      owner: '',
+      cloneUrl: remote,
+      sshUrl: '',
+      htmlUrl: '',
+      description: [branch ? `分支 ${branch}` : '', remote ? '已关联远端' : '仅本地仓库'].filter(Boolean).join(' · '),
+      private: false,
+      defaultBranch: branch || 'main',
+      updatedAt,
+      localPath: relativeWorkspacePath(dir),
+      isLocal: true,
+    });
+  }
+  items.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  return { items, error: '' };
+}
+
+/** 聚合「工作区本地仓库 + 所有远端源」；单个源失败不影响其它源，错误单独返回供前端提示。 */
 async function listAllRepos() {
   const sources = allSources();
   const results = await Promise.allSettled(sources.map(listReposOf));
@@ -224,9 +274,24 @@ async function listAllRepos() {
   const errors = [];
   results.forEach((r, i) => {
     if (r.status === 'fulfilled') items.push(...r.value);
-    else errors.push({ sourceId: sources[i].id, label: sources[i].label, error: String(r.reason && r.reason.message || r.reason) });
+    else {
+      const reason = r.reason || {};
+      errors.push({
+        sourceId: sources[i].id,
+        label: sources[i].label,
+        error: String(reason.message || reason),
+        hint: String(reason.hint || ''),
+      });
+    }
   });
-  return { items, errors, sources: sources.map(publicSource) };
+  const local = listWorkspaceRepos();
+  // 本地仓库排在最前：即使所有远端源都挂了，用户也能立刻打开 IDE 或复制地址。
+  items.unshift(...local.items);
+  if (local.error) errors.push({ sourceId: 'workspace', label: '工作区', error: local.error, hint: '' });
+  return {
+    items, errors, sources: sources.map(publicSource),
+    workspace: { count: local.items.length, dir: config.workspaceDir },
+  };
 }
 
 async function listBranches(sourceId, fullName) {
