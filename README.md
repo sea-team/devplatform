@@ -2419,3 +2419,5 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 | `ghcr.io/a/b` | `docker.m.daocloud.io/` | `ghcr.io/a/b`（第三方仓库不加速） |
 
 修复后 246 的 `smoke` 构建恢复成功（`dist/smoke.txt`），前端自检新增该项断言。
+
+**发布**：`main=31edc1c`，annotated tag `v0.3.11`，CI success，Release 2026-11-11T14:25:48Z 发布，6 个资产齐全（`devplatform.exe` 90,089,984 B、`SHA256SUMS.txt` 445 B），draft / prerelease 均为 false。
