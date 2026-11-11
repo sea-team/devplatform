@@ -317,7 +317,12 @@ function write(values = {}, options = {}) {
   let backup = '';
   if (original) {
     const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
-    backup = `${file}.bak.${stamp}`;
+    // 容器里 /app/.env 是「单文件 bind mount」，同目录 /app 实际映射到宿主机的代码目录，
+    // 备份放那儿会混进代码目录、还可能被下次部署打包。统一放到 DP_ENV_BACKUP_DIR
+    // （容器部署由 remote.js 注入 /app/data，宿主机上就是 <部署目录>/data，已被打包排除）。
+    const backupDir = process.env.DP_ENV_BACKUP_DIR || path.dirname(file);
+    try { fs.mkdirSync(backupDir, { recursive: true }); } catch { /* 目录已存在 */ }
+    backup = path.join(backupDir, `${path.basename(file)}.bak.${stamp}`);
     fs.copyFileSync(file, backup);
     try { fs.chmodSync(backup, 0o600); } catch { /* Windows 忽略 */ }
   }

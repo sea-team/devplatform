@@ -100,6 +100,8 @@ async function cmdProbe(host) {
 
 const EXCLUDE_DIRS = new Set(['node_modules', 'data', '.git', 'workspace', 'dist', '.workbuddy']);
 const EXCLUDE_FILES = new Set(['.env', 'state.json', 'state.json.tmp']);
+// .env.bak.* 含明文凭据（环境配置页每次写入都会生成），绝不能进部署包。
+const isExcludedFile = (name) => EXCLUDE_FILES.has(name) || /^\.env\.bak\./.test(name);
 // Linux 部署包用不到 Windows 随包二进制 / 离线补充包 / 原生服务运行时，
 // 这三个目录合计数百 MB，不排除会把每次部署的上传体积放大上千倍。
 const EXCLUDE_PATH = /^(?:windows\/(?:bin|bootstrap|runtime)|\.native-probe)(?:\/|$)/;
@@ -108,7 +110,7 @@ function collectFiles() {
   const files = [];
   const walk = (absDir, relDir) => {
     for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
-      if (EXCLUDE_DIRS.has(entry.name) || EXCLUDE_FILES.has(entry.name)) continue;
+      if (EXCLUDE_DIRS.has(entry.name) || isExcludedFile(entry.name)) continue;
       const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
       if (EXCLUDE_PATH.test(rel)) continue;
       const abs = path.join(absDir, entry.name);
@@ -320,7 +322,12 @@ async function startInContainer(server, target, host) {
     // v0.3.8：把宿主机 .env 以单文件方式挂进容器，控制台「环境配置」页才能读到真实配置文件。
     // --env-file 只在容器启动时注入进程环境；页面写回文件后，标注「需重启」的键要重新 deploy 才生效。
     // 单文件挂载点不能用 tmp + rename 覆盖（会顶掉挂载 inode），平台侧已改为原地写入。
-    ...(hasEnvFile ? [`-v ${target}/.env:/app/.env:rw`, '-e DP_ENV_FILE=/app/.env'] : []),
+    ...(hasEnvFile ? [
+      `-v ${target}/.env:/app/.env:rw`,
+      '-e DP_ENV_FILE=/app/.env',
+      // .env 备份含明文凭据：放到 /app/data（宿主机 <部署目录>/data，打包时已排除）。
+      '-e DP_ENV_BACKUP_DIR=/app/data',
+    ] : []),
     // 平台通过 docker.sock 直接调 Docker Engine API 做隔离构建，不需要宿主机 docker CLI。
     '-v /var/run/docker.sock:/var/run/docker.sock',
     '-e PORT=9000 -e DATA_DIR=/app/data -e WORKSPACE_DIR=/workspace',
