@@ -419,10 +419,17 @@ async function diagnoseAll() {
 
 /** 用实例现有配置重建容器（保留卷与凭据），修复崩溃循环 / 应用旧内核兼容参数。 */
 async function rebuildInstance(id) {
-  const inst = findInstance(id);
+  let inst = findInstance(id);
   if (!inst) throw new Error(`扩展实例不存在：${id}`);
   if (inst.mode !== 'docker') throw new Error('外部连接模式只登记连接信息，没有容器可重建');
   const manifest = getManifest(inst.catalogId);
+  // v0.3.8：.env 的 DP_EXT_HOST 改过之后，重建必须把实例对外地址同步成当前运行时地址。
+  // 否则端口虽然绑到了 0.0.0.0，平台仍按旧的 127.0.0.1 探测（容器里的 loopback），
+  // 状态会永远停在 partial，连接串也还是浏览器访问不到的地址。
+  // 远程安装（target=server:*）的 host 属于那台服务器，不能被本机 DP_EXT_HOST 覆盖。
+  const localTarget = !String(inst.target || 'local').startsWith('server:');
+  const desiredHost = localTarget && config.extHost ? config.extHost : inst.host;
+  if (desiredHost !== inst.host) inst = setInstance(id, { host: desiredHost });
   setInstance(id, { status: 'installing', statusDetail: '正在重建容器' });
   try {
     const result = await runtime.rebuild(inst, manifest, renderEnv(manifest, inst));
