@@ -68,8 +68,18 @@ function loadEnv({ gitAvailable = false, fallbackReady = true, container = true,
     serverHost: '10.0.0.246', hostWorkspaceDir: '/data/platform/workspace',
     source: 'HOST_WORKSPACE_DIR', reason: fallbackReady ? '' : '兜底关闭',
   };
+  // v0.3.9：宿主机 Git 实测替身。容器内有 Git 时跳过探测；否则按兜底就绪情况返回实测结果。
+  const hostGitProbe = () => ({
+    checked: true, skipped: gitAvailable, available: !gitAvailable && fb.ready,
+    bin: fb.ready ? '/usr/bin/git' : '', version: fb.ready ? '2.11.0' : '',
+    host: '10.0.0.246', serverName: '测试宿主机', workspaceWritable: fb.ready,
+    detail: fb.ready ? 'GIT_BIN=/usr/bin/git git version 2.11.0 WS_WRITABLE' : '',
+    error: fb.ready ? '' : 'SSH 宿主机兜底未就绪', checkedAt: '2026-11-11T00:00:00.000Z',
+  });
   const gitRt = {
     refresh: () => ({ available: gitAvailable }),
+    probeHostGit: async () => hostGitProbe(),
+    hostGitSummary: () => hostGitProbe(),
     resolve: () => ({ available: gitAvailable, bin: gitAvailable ? '/usr/bin/git' : '', version: gitAvailable ? '2.11.0' : '', source: 'PATH' }),
     describe: () => ({
       available: gitAvailable, bin: gitAvailable ? '/usr/bin/git' : '', version: gitAvailable ? '2.11.0' : '',
@@ -118,6 +128,13 @@ async function testAutoDerive() {
     '自动处置后克隆实际通道为 ssh-host', healed.applied.gitClone);
   note(healed.checks.some((c) => c.id === 'fallback' && /实测/.test(c.detail)),
     '深度体检会实测宿主机 Git 与工作区可写');
+  // v0.3.9：宿主机 Git 属于已检测到的可用 Git，体检不应再报「提醒 / 未找到可用的 Git」。
+  const gitCheck = healed.checks.find((c) => c.id === 'git');
+  note(Boolean(gitCheck) && gitCheck.level === 'ok'
+    && /宿主机 10\.0\.0\.246/.test(gitCheck.detail) && /2\.11\.0/.test(gitCheck.detail)
+    && /\/usr\/bin\/git/.test(gitCheck.detail),
+  '容器无 Git 但宿主机 Git 实测可用时体检判为正常，并显示版本与路径',
+  gitCheck ? gitCheck.detail : '(无)');
   note(Array.isArray(healed.actions) && healed.actions.length >= 1 && st.environment.history.length >= 2,
     '处置动作与日志已写入 state.environment.history');
   note(st.environment.lastFingerprint === env.fingerprint(),

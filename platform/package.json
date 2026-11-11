@@ -1,6 +1,6 @@
 {
   "name": "devplatform-console",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "private": true,
   "description": "统一 Web 开发管理平台控制台与 API 网关",
   "main": "src/server.js",

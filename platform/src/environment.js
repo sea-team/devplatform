@@ -28,7 +28,7 @@ const https = require('https');
 const { spawnSync } = require('child_process');
 const { config, state, update } = require('./core');
 const gitRuntime = require('./gitRuntime');
-const { sshExec } = require('./integrations');
+// v0.3.9：宿主机 Git 的 SSH 实测统一收敛到 gitRuntime.probeHostGit()。
 
 /* ------------------------------- 常量与预设 ------------------------------- */
 
@@ -267,6 +267,9 @@ async function runChecks({ deep = false } = {}) {
   const st = strategies();
   const s = st.values;
   gitRuntime.refresh();
+  // v0.3.9：容器内没有 Git 时，实测 SSH 宿主机上的 Git（带缓存；deep 强制重连）。
+  // 宿主机检测到 Git 就等于「Git 可用」，不再用一句「未找到可用的 Git」让使用者误以为漏检。
+  const hostGit = await gitRuntime.probeHostGit({ force: deep });
   const git = gitRuntime.describe();
   const fb = git.fallback;
   const checks = [];
@@ -280,41 +283,38 @@ async function runChecks({ deep = false } = {}) {
     advice: info.nodeMajor >= 20 ? '无需处理' : '请升级到 Node >= 20，或使用 remote.js 容器方式部署',
   });
 
-  // 2) Git 可执行文件
+  // 2) Git 可执行文件（容器内 Git 或宿主机 Git，二者有其一即视为就绪）
+  const gitReady = git.available || Boolean(fb.ready && hostGit.available);
+  const gitDetail = git.available
+    ? `${git.version} · ${git.bin}（${git.source}）`
+    : (fb.ready && hostGit.available
+      ? `容器内无 Git · 宿主机 ${hostGit.host || hostGit.serverName} 实测 Git ${hostGit.version}（${hostGit.bin}）· 克隆由 SSH 宿主机执行`
+      : (fb.ready
+        ? `当前容器未找到 Git · 宿主机 ${fb.serverHost} 的 Git 未实测${hostGit.error ? `（${hostGit.error}）` : ''}`
+        : '当前运行环境未找到可用的 Git'));
   push({
     id: 'git', label: 'Git 可执行文件',
-    level: git.available ? 'ok' : (fb.ready ? 'warn' : 'error'),
-    detail: git.available ? `${git.version} · ${git.bin}（${git.source}）` : '当前运行环境未找到可用的 Git',
+    level: gitReady ? 'ok' : (fb.ready ? 'warn' : 'error'),
+    detail: gitDetail,
     advice: git.available ? '克隆可在当前环境直接执行'
-      : (fb.ready ? '无需安装：自动切换到 SSH 宿主机执行克隆' : '安装 Git / 指定 GIT_BIN / 登记 SSH 宿主机并配置 HOST_WORKSPACE_DIR'),
+      : (fb.ready && hostGit.available
+        ? `宿主机已有 Git ${hostGit.version}，无需安装；平台自动走 SSH 宿主机通道。若要求容器内直接执行，可设 DP_INSTALL_GIT=1 重新部署`
+        : (fb.ready ? '点「重新体检」实测宿主机 Git；或安装 Git / 指定 GIT_BIN' : '安装 Git / 指定 GIT_BIN / 登记 SSH 宿主机并配置 HOST_WORKSPACE_DIR')),
     autoAction: git.available ? '' : (fb.ready ? '自动切换克隆通道为 ssh-host' : '尝试按授权安装 Git'),
   });
 
-  // 3) SSH 宿主机兜底（deep 时真连一次，验证宿主机 git 与目录可写）
-  const hostWritable = { checked: false, ok: false, detail: '' };
-  if (deep && fb.ready && fb.serverId) {
-    const server = (state().servers || []).find((x) => x.id === fb.serverId);
-    if (server) {
-      try {
-        const r = await sshExec(server,
-          `git --version 2>&1; test -w ${JSON.stringify(fb.hostWorkspaceDir)} && echo WS_WRITABLE || echo WS_DENIED`,
-          8000);
-        const text = `${r.stdout || ''}${r.stderr || ''}`;
-        hostWritable.checked = true;
-        hostWritable.ok = /git version/i.test(text) && /WS_WRITABLE/.test(text) && r.code === 0;
-        hostWritable.detail = text.trim().replace(/\s+/g, ' ').slice(0, 180);
-      } catch (e) {
-        hostWritable.checked = true;
-        hostWritable.detail = `SSH 实测失败：${e.message.slice(0, 120)}`;
-      }
-    }
-  }
+  // 3) SSH 宿主机兜底（deep 时由 probeHostGit 真连一次，验证宿主机 Git 与目录可写）
+  const hostWritable = {
+    checked: Boolean(deep && fb.ready && hostGit.checked && !hostGit.skipped),
+    ok: Boolean(hostGit.available && hostGit.workspaceWritable),
+    detail: hostGit.error || hostGit.detail || '',
+  };
   push({
     id: 'fallback', label: 'SSH 宿主机兜底',
     level: !fb.ready ? (git.available ? 'info' : 'error')
       : (hostWritable.checked && !hostWritable.ok ? 'warn' : 'ok'),
     detail: fb.ready
-      ? `${fb.serverName}（${fb.serverHost}）→ ${fb.hostWorkspaceDir}${hostWritable.checked ? ` · 实测：${hostWritable.ok ? 'Git 可用 / 目录可写' : hostWritable.detail}` : ' · 未实测（点「重新体检」验证）'}`
+      ? `${fb.serverName}（${fb.serverHost}）→ ${fb.hostWorkspaceDir}${hostGit.available ? ` · 宿主机 Git ${hostGit.version}（${hostGit.bin}）` : ''}${hostWritable.checked ? ` · 实测：${hostWritable.ok ? 'Git 可用 / 目录可写' : hostWritable.detail}` : ' · 点「重新体检」可实测目录可写'}`
       : (fb.reason || '未就绪'),
     advice: fb.ready ? (hostWritable.checked && !hostWritable.ok ? '检查宿主机 Git 与 HOST_WORKSPACE_DIR 挂载权限' : '无需处理')
       : '在「服务器」页登记宿主机 SSH，并在 .env 配置 HOST_WORKSPACE_DIR（与 docker run -v 一致）',

@@ -545,9 +545,14 @@ async function loadGitRuntime() {
   try {
     const d = await api('/git/runtime');
     const fb = d.fallback || {};
+    const hg = d.hostGit || {};
+    const eff = d.effectiveGit || {};
+    // v0.3.9：宿主机实测到 Git 就按「正常」展示，不再笼统报「未找到可用的 Git」。
     const stateBadge = d.available
       ? badge(`Git ${d.version || '可用'}`, 'green')
-      : (d.channel === 'ssh-host' ? badge('本机无 Git · SSH 宿主机兜底', 'amber') : badge('Git 不可用', 'red'));
+      : (hg.available
+        ? badge(`宿主机 Git ${hg.version || '可用'} · SSH 兜底`, 'green')
+        : (d.channel === 'ssh-host' ? badge('本机无 Git · SSH 宿主机兜底（未实测）', 'amber') : badge('Git 不可用', 'red')));
     const channel = d.available
       ? `执行通道：本机 / 当前容器（${esc(d.source || '自动探测')}）`
       : (fb.ready
@@ -561,6 +566,9 @@ async function loadGitRuntime() {
         return `<div class="git-probe-line ${ok ? 'ok' : 'bad'}">${ok ? '✔' : '✖'} ${esc(t)}</div>`;
       }).join('')
       : '<div class="muted">没有探测记录</div>';
+    const hostProbeLine = hg.checked && !hg.skipped
+      ? `<div class="git-probe-line ${hg.available ? 'ok' : 'bad'}">${hg.available ? '✔' : '✖'} SSH 宿主机 ${esc(hg.host || hg.serverName || '')}：${esc(hg.detail || hg.error || '无输出')}</div>`
+      : '';
     const hintLines = String(d.hint || '').split('\n').map((line) => `<div>${esc(line)}</div>`).join('');
     // v0.3.7：把「检测」的完整结果展示出来，而不是只显示一句概要。
     box.innerHTML = `
@@ -570,9 +578,16 @@ async function loadGitRuntime() {
         <button class="btn btn-sm" type="button" data-git-probe>重新检测</button>
       </div>
       <div class="dk-kv" style="margin-top:10px">
-        ${kv('可执行文件', d.bin || '未找到')}
+        ${kv('可执行文件', d.bin || '未找到（当前容器）')}
         ${kv('Git 版本', d.version || '—')}
         ${kv('探测来源', d.source || (d.configuredBin ? '手工指定' : '自动探测'))}
+        ${kv('宿主机 Git', hg.available
+          ? `${hg.version} · ${hg.bin} · ${hg.host || hg.serverName}`
+          : (hg.skipped ? '无需探测（当前环境已有 Git）' : (hg.checked ? `未检测到${hg.error ? ` · ${hg.error}` : ''}` : '未实测')))}
+        ${kv('生效 Git', eff.verified
+          ? (eff.location === 'container' ? '当前容器 / 本机' : `SSH 宿主机 ${eff.host || eff.serverName} · ${eff.version || ''}`)
+          : '无可用 Git')}
+        ${kv('宿主机工作区可写', hg.workspaceWritable === true ? '是' : (hg.workspaceWritable === false ? '否' : '—'))}
         ${kv('手工指定路径', d.configuredBin || '未指定')}
         ${kv('运行平台', d.platform || '—')}
         ${kv('工作区', d.workspaceDir || '—')}
@@ -583,10 +598,10 @@ async function loadGitRuntime() {
       </div>
       <div class="notice" style="margin-top:10px">${hintLines}</div>
       <details class="dk-raw" style="margin-top:8px">
-        <summary>可执行文件探测明细（${tried.length} 条）</summary>
-        <div class="git-probe-list">${triedHtml}</div>
+        <summary>可执行文件探测明细（${tried.length + (hostProbeLine ? 1 : 0)} 条）</summary>
+        <div class="git-probe-list">${triedHtml}${hostProbeLine}</div>
       </details>
-      ${d.installHint ? `<div class="hint" style="margin-top:8px">安装建议：<code>${esc(d.installHint)}</code></div>` : ''}`;
+      ${d.installHint ? `<div class="hint" style="margin-top:8px">${hg.available ? '可选（希望容器内直接执行 Git）' : '安装建议'}：<code>${esc(d.installHint)}</code></div>` : ''}`;
     box.querySelectorAll('[data-git-probe]').forEach((b) => b.addEventListener('click', refreshGitRuntime));
     if ($('#git-runtime-bin')) $('#git-runtime-bin').value = d.configuredBin || '';
     if ($('#git-runtime-fallback')) $('#git-runtime-fallback').value = fb.enabled === false ? 'off' : 'on';

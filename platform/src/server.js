@@ -284,18 +284,24 @@ app.post('/api/repos/clone', wrap(async (req, res) => {
 
 /* ------------------------- Git 运行时（v0.3.3） ------------------------- */
 // 容器 / Windows exe 未把 git 放进 PATH 时，提供诊断、手工指定路径与重新探测。
-app.get('/api/git/runtime', (req, res) => ok(res, gitRuntime.describe()));
-
-app.post('/api/git/runtime/refresh', (req, res) => {
-  gitRuntime.refresh();
+// v0.3.9：容器内无 Git 时顺带实测宿主机 Git，让「246 上有 git」在页面上可见。
+app.get('/api/git/runtime', wrap(async (req, res) => {
+  await gitRuntime.probeHostGit();
   ok(res, gitRuntime.describe());
-});
+}));
+
+app.post('/api/git/runtime/refresh', wrap(async (req, res) => {
+  gitRuntime.refresh();
+  await gitRuntime.probeHostGit({ force: true });
+  ok(res, gitRuntime.describe());
+}));
 
 app.put('/api/git/runtime', wrap(async (req, res) => {
   const body = req.body || {};
   const has = (k) => Object.prototype.hasOwnProperty.call(body, k);
   if (has('bin')) gitRuntime.setBin(body.bin);
   if (has('sshFallback')) gitRuntime.setFallback(body.sshFallback !== false && body.sshFallback !== 'off');
+  await gitRuntime.probeHostGit({ force: true });
   ok(res, gitRuntime.describe());
 }));
 

@@ -2240,3 +2240,54 @@ v0.3.7 把外部 Gitea 的笼统 `fetch failed` 定位成 `CERT_HAS_EXPIRED`，�
 > 提醒：246 的全局 TLS 开关在验证结束时已还原为关闭；如需长期连那个证书过期的外部 Gitea，请在「Git 源」弹窗**只对该源**选择「忽略证书校验」，或在「环境配置」页按域名限定开启，避免影响其它服务。
 >
 > 版本说明：`v0.3.7` tag → `5026cac`，`v0.3.8` tag → `bc4bb59`，两次 Release 均由 CI 构建并发布 6 个资产。发布后追加的「.env 备份目录」修复（`3f597ba`）已在 `main` 与 10.0.0.246 生效；Windows 单文件版的 `.env` 与备份同在 exe 目录，不受该问题影响。需要与 `main` 完全一致的源码时直接用仓库主分支。
+
+---
+
+## 36. v0.3.9 · 宿主机 Git 识别（「246 上明明有 git」）
+
+### 36.1 现象与根因
+
+10.0.0.246 宿主机装有 `git 2.11.0 (/usr/bin/git)`，控制台「自动体检」却把「Git 可执行文件」标为提醒，详情写「当前运行环境未找到可用的 Git」。
+
+原因是**两个运行环境被混为一谈**：
+
+| 位置 | Git | 说明 |
+|---|---|---|
+| 246 宿主机 | ✅ `/usr/bin/git` 2.11.0 | 平台通过 SSH 兜底在这台机器上执行克隆 |
+| 平台容器 `node:20-alpine` | ❌ 无 git | 精简镜像默认不装；`remote.js` 默认 `DP_INSTALL_GIT=0`，避免内网软件源不可达时部署卡死 |
+
+旧版体检只看容器内 `resolve()`，虽然 `cloneViaSshHost()` 每次克隆前也会 `git --version` 探测宿主机，但这个结果**没有回传给体检和运行时卡片**，于是出现「功能其实可用、页面却报缺失」的误导。
+
+### 36.2 改动
+
+| 位置 | 改动 |
+|---|---|
+| `platform/src/gitRuntime.js` | 新增 `probeHostGit()`：借已登记的 SSH 服务器实测 `command -v git` / `git --version` / 宿主机工作区可写；成功缓存 90 s、失败 20 s，`force` 强制重连；本机已有 Git 时跳过，探测异常一律返回结构化结果，**绝不让接口 500**。`describe()` 新增 `hostGit` / `effective` / `effectiveGit` |
+| `platform/src/server.js` | `GET /api/git/runtime` 与 `POST /api/git/runtime/refresh`、`PUT /api/git/runtime` 异步带上宿主机实测结果 |
+| `platform/src/environment.js` | `runChecks()` 复用 `probeHostGit({force:deep})`；Git 检查项在「容器内 Git 可用」或「宿主机 Git 实测可用且兜底就绪」时判定为 `ok`，明细写明宿主机 IP / 版本 / 路径；deep 体检不再重复发起第二次 SSH |
+| `platform/public/app.js` | Git 运行时卡片新增「宿主机 Git」「生效 Git」「宿主机工作区可写」，徽章改为绿色「宿主机 Git x.y.z · SSH 兜底」，探测明细追加 SSH 实测行 |
+| `.env.example` / release notes / 前端自检 | 说明 `DP_INSTALL_GIT=1` 的用途并新增断言 |
+
+判定矩阵：
+
+| 容器内 Git | 宿主机 Git | SSH 兜底 | 体检结论 |
+|---|---|---|---|
+| ✅ | — | — | 正常 · 显示容器版本与路径 |
+| ❌ | ✅ 实测 | ✅ | **正常** · 显示「宿主机 10.0.0.246 实测 Git 2.11.0（/usr/bin/git）」 |
+| ❌ | 未实测 / 失败 | ✅ | 提醒 · 提示点「重新体检」实测 |
+| ❌ | ❌ | ❌ | 错误 · 安装 / `GIT_BIN` / 登记宿主机 |
+
+> 说明：宿主机有 Git 时**不需要**在容器内再装 Git，克隆本来就走 SSH 兜底。若确实要求容器内直接执行（例如调试 `git` 子命令），部署前设 `DP_INSTALL_GIT=1` 构建带 Git 的本地运行时镜像，或容器内 `apk add --no-cache git` 后重启。
+
+### 36.3 实测（本机 + 10.0.0.246，2026-11-11）
+
+| 验证项 | 结果 |
+|---|---|
+| 修复前 | `/api/environment` = `7 正常 / 1 提醒`，git 项详情「当前运行环境未找到可用的 Git」；容器 `node:20-alpine` 无 git，宿主机有 `/usr/bin/git` 2.11.0 |
+| 部署 | `remote.js deploy 10.0.0.246` 成功，启动自检输出「体检：8 正常 / 0 提醒 / 0 异常」 |
+| `/api/git/runtime` | `hostGit.available=true`、`bin=/usr/bin/git`、`version=2.11.0`、`host=10.0.0.246`、`workspaceWritable=true`；`effectiveGit.location=ssh-host`、`verified=true` |
+| 体检（GET / 深度 POST） | 两次均 `8 正常 / 0 提醒 / 0 异常`；git 项详情「容器内无 Git · 宿主机 10.0.0.246 实测 Git 2.11.0（/usr/bin/git）· 克隆由 SSH 宿主机执行」；深度体检 fallback 项「实测：Git 可用 / 目录可写」 |
+| 功能侧证据 | 工作区 `/data/platform/workspace/secure`（825 MB，remote 指向外部 Gitea）本就是容器无 Git 时由 SSH 宿主机克隆产生，`/api/repos` 已把它聚合为「工作区」仓库；深度体检另通过同一条 SSH 通道实测了 `git --version` 与目录可写 |
+| 安全边界 | 用 `file://` 本地路径试探克隆被 `cloneUrl 必须是 http(s)/ssh/git 地址` 拦截（预期行为），未产生任何残留目录 |
+| 回归 | 本机巡检 0 个 500；246 `--full` 149 项（跳过 26 个副作用路由）0 个 500、0 超时、0 降级异常；扩展体检 2 / 2 正常 |
+| 自检 | `npm run check`、前端自检 61 项、四套冒烟 40 / 31 / 29 / 60 全部通过；`smoke-environment.js` 新增「容器无 Git + 宿主机 Git 可用 → 体检判正常」断言 |

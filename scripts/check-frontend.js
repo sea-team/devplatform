@@ -82,7 +82,12 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
-note(html.includes('?v=20261111c'), '静态资源版本已升到 20261111c');
+note(html.includes('?v=20261111d'), '静态资源版本已升到 20261111d');
+
+// v0.3.9：宿主机 Git 实测结果在运行时卡片与环境体检中可见。
+note(app.includes('const hg = d.hostGit || {}') && app.includes("kv('宿主机 Git'")
+  && app.includes('hostProbeLine') && app.includes('eff.verified'),
+'Git 运行时卡片展示宿主机 Git、生效 Git、工作区可写与 SSH 探测明细');
 
 // v0.3.8：TLS 忽略参数 + .env 平台化管理 + 诊断联动配置指引。
 note(html.includes('id="gitsrc-insecure"') && html.includes('id="gitsrc-tls-note"')

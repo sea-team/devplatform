@@ -64,6 +64,80 @@ function probe(bin) {
 }
 
 let cache = null;
+/** 宿主机 Git 的实测结果（SSH 探测有成本，做短缓存，避免每次 API / 体检都重连）。 */
+let hostCache = null;
+const HOST_CACHE_OK_MS = 90 * 1000;
+const HOST_CACHE_FAIL_MS = 20 * 1000;
+
+function emptyHostProbe(reason = '尚未探测') {
+  return {
+    checked: false, skipped: false, available: false, bin: '', version: '',
+    host: '', serverName: '', workspaceWritable: null, detail: '', error: reason, checkedAt: '',
+  };
+}
+
+/**
+ * 实测「SSH 宿主机兜底」那台机器上的 Git。
+ *
+ * v0.3.9：246 这类部署的宿主机明明装了 git，但平台跑在精简 node:alpine 容器里，
+ * 旧版只报「当前运行环境未找到可用的 Git」，看起来像没识别到宿主机。
+ * 这里把宿主机 Git 当成一种真正检测过的 Git 来源：查 command -v git、
+ * git --version、以及宿主机工作区是否可写，结果同时供 /api/git/runtime 与体检使用。
+ *
+ * 本机已有 Git 时直接跳过（不产生 SSH 开销）；探测失败也返回结构化结果，绝不让接口 500。
+ */
+async function probeHostGit({ force = false, timeoutMs = 8000 } = {}) {
+  const local = resolve();
+  if (local.available) {
+    hostCache = { at: Date.now(), value: { ...emptyHostProbe('当前环境已有 Git，无需探测宿主机'), skipped: true, checked: true } };
+    return hostCache.value;
+  }
+  const ttl = hostCache && hostCache.value && hostCache.value.available ? HOST_CACHE_OK_MS : HOST_CACHE_FAIL_MS;
+  if (!force && hostCache && Date.now() - hostCache.at < ttl) return hostCache.value;
+
+  const fb = fallback();
+  const out = emptyHostProbe('');
+  out.checked = true;
+  out.checkedAt = new Date().toISOString();
+  out.serverName = fb.serverName || '';
+  out.host = fb.serverHost || '';
+  if (!fb.ready || !fb.serverId) {
+    out.error = fb.reason || 'SSH 宿主机兜底未就绪，无法探测宿主机 Git';
+  } else {
+    try {
+      // 延迟加载，避免无 Git 环境的单元测试替身被迫加载 ssh2 / 配置模块。
+      const { sshExec } = require('./integrations');
+      const server = (state().servers || []).find((s) => s.id === fb.serverId);
+      if (!server) throw new Error(`SSH 服务器 ${fb.serverId} 不存在`);
+      const dir = JSON.stringify(fb.hostWorkspaceDir || '/workspace');
+      const command = [
+        `printf 'GIT_BIN='; command -v git 2>/dev/null || printf 'MISSING\\n'`,
+        'git --version 2>/dev/null || true',
+        `test -d ${dir} && test -w ${dir} && echo WS_WRITABLE || echo WS_DENIED`,
+      ].join('; ');
+      const r = await sshExec(server, command, timeoutMs);
+      const text = `${r.stdout || ''}${r.stderr || ''}`;
+      const binMatch = text.match(/GIT_BIN=([^\r\n]+)/);
+      const verMatch = text.match(/git version\s+([\w.]+)/i);
+      out.bin = binMatch && !/MISSING/.test(binMatch[1]) ? binMatch[1].trim() : '';
+      out.version = verMatch ? verMatch[1] : '';
+      out.available = Boolean(out.bin && out.version) && r.code === 0;
+      out.workspaceWritable = /WS_WRITABLE/.test(text);
+      out.detail = text.trim().replace(/\s+/g, ' ').slice(0, 240);
+      out.error = out.available ? '' : `宿主机 ${out.host || out.serverName} 未检测到可用的 Git${out.detail ? `：${out.detail}` : ''}`;
+    } catch (e) {
+      out.error = `SSH 实测失败：${String(e.message || e).slice(0, 180)}`;
+      out.detail = out.error;
+    }
+  }
+  hostCache = { at: Date.now(), value: out };
+  return out;
+}
+
+function hostGitSummary() {
+  if (hostCache && hostCache.value) return hostCache.value;
+  return emptyHostProbe();
+}
 
 function resolve(force = false) {
   if (cache && !force) return cache;
@@ -210,6 +284,10 @@ function exec(args, { env = process.env, timeoutMs = 300000, onData = null } = {
 function describe() {
   const r = resolve();
   const fb = fallback();
+  const hostGit = hostGitSummary();
+  // v0.3.9：容器内没 Git 时，宿主机实测到 Git 就属于「已就绪」，不再当成缺失。
+  const effective = r.available ? 'container' : (fb.ready && hostGit.available ? 'ssh-host' : (fb.ready ? 'ssh-host-unverified' : 'none'));
+  const hostVersion = hostGit.available ? `Git ${hostGit.version}` : '';
   return {
     available: r.available,
     bin: r.bin,
@@ -221,12 +299,24 @@ function describe() {
     workspaceDir: config.workspaceDir,
     hostWorkspaceDir: config.hostWorkspaceDir,
     channel: r.available ? 'local' : (fb.ready ? 'ssh-host' : 'none'),
+    effective,
+    effectiveGit: {
+      location: effective,
+      version: r.available ? r.version : hostGit.version,
+      bin: r.available ? r.bin : hostGit.bin,
+      host: r.available ? '' : hostGit.host,
+      serverName: r.available ? '' : hostGit.serverName,
+      verified: r.available || hostGit.available,
+    },
+    hostGit,
     fallback: fb,
     hint: r.available
       ? `Git ${r.version} 可用（${r.source}），克隆将在本机 / 当前容器执行。`
-      : (fb.ready
-        ? `当前环境没有 Git，克隆将自动改用 SSH 宿主机 ${fb.serverName}（${fb.serverHost}）执行，工作区映射 ${fb.hostWorkspaceDir}。`
-        : missingMessage()),
+      : (hostGit.available && fb.ready
+        ? `当前容器内没有 Git，但已实测宿主机 ${hostGit.host || hostGit.serverName} 上的 ${hostVersion}（${hostGit.bin}）；克隆会自动通过 SSH 在这台宿主机执行，无需安装，功能正常。`
+        : (fb.ready
+          ? `当前环境没有 Git，克隆将自动改用 SSH 宿主机 ${fb.serverName}（${fb.serverHost}）执行，工作区映射 ${fb.hostWorkspaceDir}。宿主机 Git 暂未实测：点「重新检测」验证。`
+          : missingMessage())),
     installHint: process.platform === 'win32'
       ? '安装 Git for Windows 后重启平台，或填写 git.exe 绝对路径。'
       : '容器内：apk add --no-cache git / apt-get install -y git；宿主机：安装发行版 git 包。',
@@ -235,5 +325,6 @@ function describe() {
 
 module.exports = {
   resolve, refresh, describe, exec, probe, fallback,
+  probeHostGit, hostGitSummary,
   setBin, setFallback, missingMessage, friendlyError,
 };
