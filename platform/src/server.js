@@ -25,6 +25,7 @@ const dbgateSync = require('./dbgateSync');
 const buildBackends = require('./buildBackends');
 const proxy = require('./proxy');
 const openlist = require('./openlist');
+const envConfig = require('./envConfig');
 
 // 面板里保存过的 OpenList 连接优先于 .env（不改文件、重启后仍然生效）。
 openlist.applyConfig();
@@ -326,6 +327,18 @@ app.post('/api/environment/profiles', wrap(async (req, res) =>
 
 app.delete('/api/environment/profiles/:id', wrap(async (req, res) =>
   ok(res, environment.deleteProfile(req.params.id))));
+
+/* --------------------- .env 配置管理与指引（v0.3.8） --------------------- */
+// 读：白名单键 + 脱敏值 + 运行时生效值 + 待重启标记 + 可复制的配置片段。
+// 写：只认白名单、强制二次确认、自动备份、600 权限；TLS 开关写入后立即热生效。
+app.get('/api/env-config', wrap(async (req, res) => ok(res, envConfig.read())));
+
+app.put('/api/env-config', wrap(async (req, res) => {
+  const body = req.body || {};
+  ok(res, envConfig.write(body.values || {}, {
+    confirm: body.confirm === true || body.confirm === '1' || body.confirm === 1,
+  }));
+}));
 
 /* --------------------------- 外部 Git 源管理 --------------------------- */
 // 凭据只存 state.json（600），列表脱敏；clone 用临时 http.extraHeader，不落到 .git/config。

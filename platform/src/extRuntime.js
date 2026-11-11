@@ -11,7 +11,8 @@ const docker = require('./dockerApi');
 const remoteDocker = require('./remoteDocker');
 const dbgateSync = require('./dbgateSync');
 const proxyModule = require('./proxy');
-const { config, imageCandidates } = require('./core');
+const { config, state, imageCandidates } = require('./core');
+const envConfig = require('./envConfig');
 
 const LABEL = 'devplatform.ext';
 let _statusCache = { at: 0, value: null };
@@ -334,6 +335,14 @@ async function externalHealth(inst) {
   };
 }
 
+/** 从已登记的 SSH 服务器里猜宿主机内网 IP，用于生成可直接粘贴的 .env 片段。 */
+function guessHost() {
+  const hosts = (state().servers || [])
+    .map((s) => String(s.host || ''))
+    .filter((h) => h && !/^(127\.0\.0\.1|localhost|::1)$/i.test(h));
+  return hosts[0] || '<宿主机内网 IP>';
+}
+
 /** v0.3.7 · 单实例体检：容器状态 + 端口 + 内部检查 + 日志特征 + 修复建议。 */
 async function diagnose(inst, manifest) {
   const started = Date.now();
@@ -341,7 +350,7 @@ async function diagnose(inst, manifest) {
     id: inst.id, catalogId: inst.catalogId, name: inst.name,
     mode: inst.mode, port: inst.port, host: inst.host,
     healthy: false, checks: [], container: null, logsTail: '',
-    problem: '', hints: [], ms: 0, compat: kernelCompat(),
+    problem: '', hints: [], ms: 0, compat: kernelCompat(), envAdvice: null,
   };
   if (inst.mode === 'docker' && !isRemote(inst)) {
     try {
@@ -380,9 +389,11 @@ async function diagnose(inst, manifest) {
   } else if (!h.tcp && out.container && out.container.running) {
     out.problem = 'PORT_UNREACHABLE';
     const localHost = /^(127\.0\.0\.1|localhost|::1)$/.test(String(inst.host || ''));
+    const host = guessHost();
+    out.envAdvice = envConfig.adviceFor('PORT_UNREACHABLE', { host });
     out.hints.push(localHost
-      ? `实例对外地址仍是 ${inst.host}：平台运行在容器内时，容器里的 127.0.0.1 既不是宿主机，浏览器也无法用这个地址访问。请在 .env 设置 DP_EXT_BIND_IP=0.0.0.0（或宿主机内网 IP）、DP_EXT_HOST=宿主机内网 IP（例如 10.0.0.246），重启平台后重建该实例。`
-      : '容器在运行但端口不通：检查端口映射，以及在容器内运行时把 DP_EXT_HOST 设为宿主机 IP。');
+      ? `实例对外地址仍是 ${inst.host}：平台运行在容器内时，容器里的 127.0.0.1 既不是宿主机，浏览器也无法用这个地址访问。请到「环境配置」页把 DP_EXT_BIND_IP 设为 0.0.0.0、DP_EXT_HOST 设为宿主机内网 IP（例如 ${host}），保存后重启平台，再点下方「重建容器」。`
+      : `容器在运行但端口不通：检查端口映射，并在「环境配置」页确认 DP_EXT_HOST 指向宿主机 IP（例如 ${host}）。`);
   }
   if (!out.healthy && !out.hints.length) {
     out.hints.push('查看下方容器日志尾部，或到「Docker 管理」检查容器状态与端口映射。');

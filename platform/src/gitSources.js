@@ -24,6 +24,7 @@ const { httpJSON, sshExec } = require('./integrations');
 const proxyModule = require('./proxy');
 const environment = require('./environment');
 const gitRuntime = require('./gitRuntime');
+const envConfig = require('./envConfig');
 
 const BUILTIN_ID = 'builtin-gitea';
 const TYPES = ['github', 'gitea', 'gitlab', 'generic'];
@@ -33,6 +34,16 @@ const AUTH_TYPES = ['token', 'password'];
 const isMasked = (v) => String(v || '').includes('******');
 const keepSecret = (value, saved) => (isMasked(value) ? (saved || '') : String(value || ''));
 const hasCreds = (s) => Boolean(s && (s.token || (s.username && s.password)));
+
+/**
+ * v0.3.8 · TLS 校验开关三态：on=强制跳过 / off=强制严格 / auto=跟随全局 .env。
+ * 默认 auto，保证平台默认行为仍是严格校验证书。
+ */
+function parseInsecure(value) {
+  if (value === true || /^(on|1|true|skip|ignore)$/i.test(String(value))) return true;
+  if (value === false || /^(off|0|false|strict)$/i.test(String(value))) return false;
+  return undefined;
+}
 
 function assertCredentials(s) {
   if (!hasCreds(s)) {
@@ -51,6 +62,8 @@ function builtinSource() {
     password: '',
     authType: 'token',
     builtin: true,
+    // undefined = 跟随全局 DP_TLS_INSECURE；内置源由 .env 管理，不在控制台改。
+    insecure: undefined,
     createdAt: null,
   };
 }
@@ -75,9 +88,13 @@ function gitProxyFor(url, itemId = '') {
 
 function publicSource(s) {
   const authType = AUTH_TYPES.includes(s.authType) ? s.authType : 'token';
+  // v0.3.8 三态：true 强制跳过 / false 强制严格 / undefined 跟随全局 .env。
+  const insecure = s.insecure === true ? 'on' : (s.insecure === false ? 'off' : 'auto');
   return {
     id: s.id, label: s.label, type: s.type, baseUrl: s.baseUrl,
     username: s.username || '', authType, builtin: Boolean(s.builtin),
+    insecure,
+    tlsInsecure: envConfig.tlsDecision(s, s.baseUrl),
     hasToken: Boolean(s.token),
     hasPassword: Boolean(s.password),
     hasCreds: hasCreds(s),
@@ -118,6 +135,7 @@ function createSource(body = {}) {
     id: uid('gitsrc'), label, type, baseUrl, authType,
     token: authType === 'token' ? token : '',
     username, password: authType === 'password' ? password : '',
+    insecure: parseInsecure(body.insecure),
     builtin: false, createdAt: new Date().toISOString(),
   };
   update((s) => {
@@ -140,6 +158,7 @@ function updateSource(id, body = {}) {
   if (body.authType !== undefined && AUTH_TYPES.includes(String(body.authType))) patch.authType = String(body.authType);
   if (body.token !== undefined) patch.token = keepSecret(body.token, found.token).trim().slice(0, 512);
   if (body.password !== undefined) patch.password = keepSecret(body.password, found.password).trim().slice(0, 256);
+  if (body.insecure !== undefined) patch.insecure = parseInsecure(body.insecure);
   // 切换认证方式时清掉另一种凭据，避免明文长期留在 state.json。
   if (patch.authType === 'token') patch.password = '';
   if (patch.authType === 'password') patch.token = '';
@@ -211,6 +230,7 @@ async function listReposOf(s) {
   const payload = await httpJSON(target, {
     headers: authHeaders(s), timeout: 12000,
     proxy: gitProxyFor(target, s.id).proxy,
+    insecure: envConfig.tlsDecision(s, target),
   });
   if (!Array.isArray(payload)) throw new Error(`Git 源「${s.label}」返回了非预期数据`);
   return payload.map((r) => normalizeRepo(s, r));
@@ -281,6 +301,11 @@ async function listAllRepos() {
         label: sources[i].label,
         error: String(reason.message || reason),
         hint: String(reason.hint || ''),
+        // v0.3.8：证书类故障带出可操作的 env 键，前端直接渲染「去环境配置」按钮。
+        code: String(reason.errorCode || ''),
+        envKeys: reason.envKeys || [],
+        fixView: String(reason.fixView || ''),
+        host: String(reason.host || ''),
       });
     }
   });
@@ -307,6 +332,7 @@ async function listBranches(sourceId, fullName) {
   const payload = await httpJSON(target, {
     headers: authHeaders(s), timeout: 12000,
     proxy: gitProxyFor(target, s.id).proxy,
+    insecure: envConfig.tlsDecision(s, target),
   });
   if (!Array.isArray(payload)) throw new Error('分支接口返回了非预期数据');
   return { items: payload.map((b) => ({ name: String(b.name || ''), protected: Boolean(b.protected), sha: String((b.commit && (b.commit.sha || b.commit.id)) || '').slice(0, 12) })) };
@@ -327,6 +353,7 @@ async function createRepo(sourceId, body = {}) {
   const created = await httpJSON(target, {
     method: 'POST', headers: authHeaders(s), body: payload, timeout: 20000,
     proxy: gitProxyFor(target, s.id).proxy,
+    insecure: envConfig.tlsDecision(s, target),
   });
   return normalizeRepo(s, created);
 }
@@ -388,6 +415,10 @@ function cloneArgs(source, cloneUrl, resolved = null) {
     }
   }
   if (resolved) env = { ...env, ...proxyModule.envFor(resolved) };
+
+  // v0.3.8：跳过 TLS 校验必须同时覆盖 REST API 与 git clone，否则接口能连、克隆仍报
+  // SSL certificate problem。用 -c（clone 之前）保证不写进 .git/config。
+  if (isHttp && envConfig.tlsDecision(source, url)) args.push('-c', 'http.sslVerify=false');
 
   const cred = isHttp ? cloneCredential(source) : null;
   if (cred) {
@@ -466,7 +497,7 @@ async function cloneViaSshHost({ args, resolved, secrets, hostTarget, server }) 
 }
 
 async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId,
-  username, password, token } = {}) {
+  username, password, token, insecure } = {}) {
   const source = sourceId ? findSource(sourceId) : null;
   const url = String(cloneUrl || '').trim();
   if (!url) throw new Error('缺少 cloneUrl');
@@ -489,13 +520,18 @@ async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId,
     throw new Error('填写密码时必须同时填写用户名');
   }
   const effective = inline || source;
+  // 克隆表单本次显式指定的 TLS 决策优先；没指定就沿用 Git 源设置 / 全局 .env。
+  const inlineTls = parseInsecure(insecure);
+  const tlsSource = inlineTls === undefined
+    ? effective
+    : { ...(effective || {}), insecure: inlineTls };
 
   // 单个仓库代理可来自：克隆表单本次指定 > 代理页按仓库 id 登记的覆盖 > Host 规则 > Git 分组 > 全局。
   const resolved = proxyModule.resolve('git', {
     itemId: repoId || name || url, url, host: proxyModule.hostOf(url),
     inlineProxy: proxy || '',
   });
-  const { args, env, auth, proxyUrl, secrets } = cloneArgs(effective, url, resolved);
+  const { args, env, auth, proxyUrl, secrets } = cloneArgs(tlsSource, url, resolved);
   if (branch && /^[A-Za-z0-9._/-]{1,120}$/.test(String(branch))) args.splice(args.length - 1, 0, '-b', String(branch));
 
   const allSecrets = [...secrets, source && source.token, source && source.password].filter(Boolean);
@@ -539,6 +575,7 @@ async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId,
   return {
     name: repoName, path: relativeWorkspacePath(target), cloneUrl: url,
     sourceId: sourceId || '', authenticated: auth,
+    tlsInsecure: envConfig.tlsDecision(tlsSource, url),
     credentialSource: inline ? '本次填写' : (source ? `Git 源「${source.label}」` : '无（公开仓库 / SSH 密钥）'),
     proxy: proxyModule.maskUrl(proxyUrl), proxySource: resolved.sourceLabel,
     channel, channelLabel, gitVersion,

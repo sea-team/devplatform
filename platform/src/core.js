@@ -63,7 +63,38 @@ const config = {
   envCheckOnStartup: env('DP_ENV_CHECK_ON_STARTUP'),
   runtimeImage: env('DP_RUNTIME_IMAGE'),
   runtimeKind: env('DP_RUNTIME_KIND'),
+  // v0.3.8 · TLS 校验开关：外部 Git 源证书过期 / 自签时允许按源或按域名显式忽略。
+  // 默认严格校验，只有显式开启才跳过；DP_TLS_INSECURE_HOSTS 可把影响面限定到指定主机。
+  tlsInsecure: /^(1|true|yes|on)$/i.test(env('DP_TLS_INSECURE')),
+  tlsInsecureHosts: env('DP_TLS_INSECURE_HOSTS'),
+  // .env 文件位置：容器部署时由 remote.js 把宿主机 .env 挂到 /app/.env 并注入该变量。
+  envFile: env('DP_ENV_FILE'),
 };
+
+/**
+ * 定位 .env（v0.3.8）。三种运行形态的「根」不一样，按候选顺序找第一个真实存在的文件：
+ *   1) DP_ENV_FILE 显式指定（容器部署由 remote.js 注入，最可靠）；
+ *   2) ROOT/.env —— Windows 单文件 exe（DP_ROOT=exe 所在目录）、容器（ROOT=/app）；
+ *   3) ROOT/../.env —— 源码直跑（ROOT=platform/，.env 在仓库根）；
+ *   4) cwd/.env —— 兜底。
+ * 都不存在时返回首选路径，供「环境配置」页创建新文件。
+ */
+function envFileCandidates() {
+  const list = [];
+  if (process.env.DP_ENV_FILE) list.push(path.resolve(process.env.DP_ENV_FILE));
+  list.push(path.join(ROOT, '.env'));
+  list.push(path.resolve(ROOT, '..', '.env'));
+  list.push(path.resolve(process.cwd(), '.env'));
+  return [...new Set(list)];
+}
+
+function resolveEnvFile() {
+  const list = envFileCandidates();
+  for (const p of list) {
+    try { if (fs.statSync(p).isFile()) return p; } catch { /* 继续找下一个 */ }
+  }
+  return list[0];
+}
 
 function defaultState() {
   return {
@@ -241,6 +272,7 @@ function relativeWorkspacePath(abs) {
 module.exports = {
   config, state, save, update, uid, auth, ok, fail, wrap, appRoot: ROOT,
   safeWorkspacePath, relativeWorkspacePath, defaultState,
+  envFileCandidates, resolveEnvFile,
   HttpError, badRequest, notFound, conflict, upstream, inferStatus,
   resolveImage, imageCandidates,
 };

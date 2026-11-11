@@ -620,6 +620,35 @@ body.dk-compact th, body.dk-compact td { padding: 6px 9px; font-size: 12px; }
 body.dk-compact .btn.btn-sm { padding: 3px 8px; }
 body.dk-compact .card { padding: 14px; }
 
+/* ===== v0.3.8 · 环境配置（.env 管理与配置建议） ===== */
+.envcfg-advice { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+.envcfg-advice-card {
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+  background: var(--surface); min-width: 0;
+}
+.envcfg-advice-card .row { gap: 6px; }
+.envcfg-snippet {
+  margin: 8px 0 6px; padding: 10px 12px; border-radius: 8px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+  color: var(--text); max-height: 180px; overflow: auto;
+}
+.envcfg-focus { background: var(--amber-soft) !important; box-shadow: inset 3px 0 0 var(--amber); }
+.envcfg-group td { background: var(--surface-2); padding: 9px 12px; }
+.envcfg-group b { font-size: 13px; }
+.envcfg-row td { vertical-align: top; }
+.envcfg-row td:first-child { width: 34%; min-width: 240px; }
+.envcfg-row .desc { line-height: 1.5; margin-top: 2px; }
+.envcfg-val { font-size: 12px; word-break: break-all; }
+.envcfg-input {
+  width: 100%; min-width: 150px; box-sizing: border-box;
+  padding: 6px 9px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--surface); color: var(--text); font-size: 12px;
+}
+.envcfg-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
+#envcfg-list table { table-layout: fixed; }
+#envcfg-list td { word-break: break-word; }
+
 @media (max-width: 1100px) {
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .grid-2, .server-grid, .ext-grid { grid-template-columns: 1fr; }

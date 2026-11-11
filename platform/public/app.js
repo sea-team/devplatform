@@ -28,6 +28,7 @@ const VIEW_META = {
   'docker-compose': ['Docker · 编排', 'Compose YAML 模板登记（不在平台内执行）'],
   proxy: ['代理配置', '全局 / 分组 / Git Host 规则 / 单项覆盖，四级优先级解析与连通性测试'],
   environment: ['环境适配', '自动识别环境、体检、切换档案与自动处置，换机器无需改代码'],
+  envcfg: ['环境配置', '查看与管理 .env：白名单写入、脱敏、待重启提示与诊断联动的配置指引'],
   ai: ['AI 服务配置', 'API 服务、宿主机 / WSL 本地 AI 程序与代理'],
   ops: ['AI 运维', '让 AI 查询状态、分析日志并给出建议'],
 };
@@ -38,7 +39,7 @@ const MODULE_ICONS = {
   servers: '▣', 'server-new': '＋', extensions: '▦', gitsrc: '⑃',
   docker: '⬡', 'docker-containers': '▣', 'docker-images': '◫', 'docker-volumes': '⛁',
   'docker-networks': '⌘', 'docker-compose': '▦',
-  proxy: '⇄', environment: '⌬', ai: '✦', ops: '◎',
+  proxy: '⇄', environment: '⌬', envcfg: '⚙', ai: '✦', ops: '◎',
 };
 // 子页面归属：侧边栏主项保持高亮，标签栏仍显示各自的子页标题。
 const NAV_GROUP = {
@@ -62,6 +63,9 @@ let serverPollTimer = null;
 let serverPollBusy = false;
 let gitsrcEditId = '';
 let gitsrcCache = [];
+// v0.3.8：从 Git 源错误卡 / 扩展体检跳到「环境配置」时，带过来的高亮键与问题编号。
+let envcfgFocus = [];
+let envcfgProblem = '';
 
 function esc(value) {
   return String(value === undefined || value === null ? '' : value)
@@ -466,10 +470,15 @@ async function loadRepos() {
               <span>⚠ <b>${esc(x.label)}</b>：${esc(x.error)}</span>
               ${x.hint ? `<span class="repo-src-hint">↳ ${esc(x.hint)}</span>` : ''}
               <span class="row gap">
+                ${x.code === 'TLS_CERT_INVALID' ? `<button class="btn btn-sm btn-primary" data-repo-fix="envcfg" data-env-keys="${esc((x.envKeys || []).join(','))}" data-env-problem="${esc(x.code)}">去配置 env · 关闭证书校验</button>` : ''}
                 <button class="btn btn-sm" data-repo-fix="gitsrc">编辑源</button>
                 <button class="btn btn-sm" data-repo-fix="proxy">代理配置</button>
               </span></div>`).join('');
-        errBox.querySelectorAll('[data-repo-fix]').forEach((b) => b.addEventListener('click', () => switchView(b.dataset.repoFix)));
+        errBox.querySelectorAll('[data-repo-fix]').forEach((b) => b.addEventListener('click', () => {
+          if (b.dataset.repoFix === 'envcfg') {
+            openEnvConfig(String(b.dataset.envKeys || '').split(',').filter(Boolean), b.dataset.envProblem || '');
+          } else switchView(b.dataset.repoFix);
+        }));
       } else {
         errBox.textContent = `已聚合 ${sources.length} 个 Git 源、工作区 ${(d.workspace && d.workspace.count) || 0} 个本地仓库，共 ${(d.items || []).length} 条；外部源在「Git 源」页登记`;
       }
@@ -2386,11 +2395,18 @@ async function runExtDiagnose() {
           <div class="ext-diag-checks">${(r.checks || []).map((c) => `<span>${mark(c.ok)} ${esc(c.name)} <span class="muted">${esc(c.detail || '')}</span></span>`).join('')}</div>
           ${r.container ? `<div class="muted small">容器 ${esc(r.container.name || r.container.id || r.container.error || '-')} · ${esc(r.container.status || '')} · 退出码 ${esc(r.container.exitCode)} · 重启 ${esc(r.container.restartCount)} 次${r.container.securityOpt ? ' · 兼容模式已启用' : ''}</div>` : ''}
           ${(r.hints || []).map((h) => `<div class="ext-diag-hint">↳ ${esc(h)}</div>`).join('')}
+          ${r.envAdvice ? `<div class="row gap" style="margin-top:6px">
+            <button class="btn btn-sm btn-primary" type="button" data-ext-env="${esc(r.envAdvice.problem)}" data-ext-env-keys="${esc((r.envAdvice.keys || []).join(','))}">去配置 env · ${esc(r.envAdvice.title)}</button>
+            <code class="muted small">${esc((r.envAdvice.keys || []).join(', '))}</code>
+          </div>` : ''}
           ${r.logsTail ? `<details class="dk-raw"><summary>日志尾部</summary><pre class="log short">${esc(r.logsTail)}</pre></details>` : ''}
         </div>`).join('') : '<div class="empty">还没有已登记的实例</div>');
     box.querySelectorAll('[data-ext-diag]').forEach((b) => b.addEventListener('click', () => {
       if (b.dataset.extDiag === 'close') box.hidden = true;
       else runExtDiagnose();
+    }));
+    box.querySelectorAll('[data-ext-env]').forEach((b) => b.addEventListener('click', () => {
+      openEnvConfig(String(b.dataset.extEnvKeys || '').split(',').filter(Boolean), b.dataset.extEnv || '');
     }));
     box.querySelectorAll('[data-ext-rebuild]').forEach((b) => b.addEventListener('click', async () => {
       const id = b.dataset.extRebuild;
@@ -2419,7 +2435,9 @@ async function loadGitSources() {
     gitsrcCache = d.items || [];
     const rows = gitsrcCache.map((s) => `<tr>
       <td><b>${esc(s.label)}</b>${s.builtin ? ' ' + badge('内置', 'blue') : ''}<div class="ext-list-url">${esc(s.baseUrl)}</div></td>
-      <td>${esc(s.type)}</td>
+      <td>${esc(s.type)}<div class="ext-list-url">${s.tlsInsecure
+        ? `<span style="color:var(--amber)">⚠ 忽略 TLS 校验${s.insecure === 'auto' ? '（全局）' : '（本源）'}</span>`
+        : 'TLS 严格校验'}</div></td>
       <td>${s.hasCreds
         ? badge(s.authType === 'password' ? '账号密码' : 'Token', 'green')
           + `<div class="ext-list-url">${esc(s.authType === 'password' ? `${s.username || '-'} / ${s.passwordMasked || '******'}` : (s.tokenMasked || ''))}</div>`
@@ -2683,7 +2701,7 @@ const loaders = {
   'docker-volumes': loadDocker, 'docker-networks': loadDocker, 'docker-compose': loadDocker,
   proxy: loadProxy,
   dbgate: loadExtExtras, backups: loadExtExtras,
-  ai: loadAI, ops: loadOps, environment: loadEnvironment,
+  ai: loadAI, ops: loadOps, environment: loadEnvironment, envcfg: loadEnvConfig,
 };
 
 /* 每个独立页顶部的子导航：点按钮打开对应标签，而不是把功能堆在一页里。 */
@@ -2998,6 +3016,142 @@ $('#ext-repos-save').addEventListener('click', async () => {
   } catch (err) { toast(err.message || String(err), true); }
 });
 
+/* --------------------- 环境配置 / .env 管理（v0.3.8） --------------------- */
+/**
+ * 从 Git 源错误卡 / 扩展体检结论跳转过来时，带上要修改的 env 键与问题编号；
+ * 页面会高亮对应配置行，并把建议片段预填进「新值」列（仍未写入文件）。
+ */
+function openEnvConfig(keys = [], problem = '') {
+  envcfgFocus = Array.isArray(keys) ? keys : [];
+  envcfgProblem = problem || '';
+  switchView('envcfg');
+  setTimeout(() => loadEnvConfig(), 40);
+}
+
+let envcfgData = null;
+
+function envcfgAdviceHtml(d) {
+  return (d.advice || []).map((a, i) => `
+    <div class="envcfg-advice-card${envcfgProblem === a.problem ? ' envcfg-focus' : ''}" data-env-advice="${esc(a.problem)}">
+      <div class="row gap wrap" style="align-items:center">
+        <b>${esc(a.title)}</b>
+        ${envcfgProblem === a.problem ? badge('来自刚才的诊断', 'red') : ''}
+        <button class="btn btn-sm" type="button" data-env-copy="${i}">复制片段</button>
+        <button class="btn btn-sm btn-primary" type="button" data-env-fill="${i}">填入表单</button>
+      </div>
+      <div class="muted small" style="margin-top:4px">${esc(a.reason)}</div>
+      <pre class="envcfg-snippet">${esc(a.snippet)}</pre>
+      <div class="muted small">↳ ${esc(a.note)}</div>
+    </div>`).join('') || '<div class="empty">暂无建议</div>';
+}
+
+function envcfgFillAdvice(advice, announce = true) {
+  const lines = String(advice.snippet || '').split(/\r?\n/);
+  const filled = [];
+  for (const line of lines) {
+    const m = line.match(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*)$/);
+    if (!m) continue;
+    const input = document.querySelector(`#envcfg-list .envcfg-input[data-env-key="${m[1]}"]`);
+    if (!input) continue;
+    input.value = m[2].replace(/^["']|["']$/g, '');
+    filled.push(m[1]);
+  }
+  if (filled.length) {
+    const row = document.querySelector(`#view-envcfg .envcfg-row[data-env-key="${filled[0]}"]`);
+    if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (announce) toast(`已把建议值填入 ${filled.join(' / ')}，确认后点「保存并应用」`);
+  } else if (announce) toast('该建议没有对应可编辑的配置项', true);
+  return filled;
+}
+
+async function loadEnvConfig() {
+  const summary = $('#envcfg-summary');
+  const adviceBox = $('#envcfg-advice');
+  const listBox = $('#envcfg-list');
+  if (!listBox) return;
+  try {
+    const d = await api('/env-config');
+    envcfgData = d;
+    const pending = (d.items || []).filter((x) => x.pendingRestart).length;
+    if (summary) {
+      summary.innerHTML = `<div class="row gap wrap" style="align-items:center">
+          <b>配置文件</b><code>${esc(d.path)}</code>
+          ${d.exists ? badge('已存在', 'green') : badge('尚未创建', 'amber')}
+          ${d.writable ? badge('可写', 'green') : badge('只读', 'red')}
+          ${d.runtime.runtimeKind === 'container' ? '<span class="muted small">容器部署 · 宿主机文件以单文件挂载方式映射进来</span>' : ''}
+        </div>
+        <div style="margin-top:6px" class="muted small">
+          共 ${(d.items || []).length} 个白名单配置项${pending ? ` · <b style="color:var(--amber)">${pending} 项文件值与运行时不一致，需重启平台</b>` : ' · 文件值与运行时一致'}
+          ${d.runtime.tlsInsecure ? ` · <b style="color:var(--amber)">全局跳过 TLS 校验已开启${d.runtime.tlsInsecureHosts ? `（限定 ${esc(d.runtime.tlsInsecureHosts)}）` : '（全部主机）'}</b>` : ''}
+        </div>
+        <div class="notice warn" style="margin-top:8px">⚠ ${esc(d.warning)}</div>`;
+    }
+    if (adviceBox) {
+      adviceBox.innerHTML = envcfgAdviceHtml(d);
+      adviceBox.querySelectorAll('[data-env-copy]').forEach((b) => b.addEventListener('click', async () => {
+        const a = (d.advice || [])[Number(b.dataset.envCopy)];
+        if (!a) return;
+        try { await navigator.clipboard.writeText(a.snippet); toast('配置片段已复制，可粘贴到 .env'); }
+        catch { toast('复制失败，请手动选中片段复制', true); }
+      }));
+      adviceBox.querySelectorAll('[data-env-fill]').forEach((b) => b.addEventListener('click', () => {
+        const a = (d.advice || [])[Number(b.dataset.envFill)];
+        if (a) envcfgFillAdvice(a);
+      }));
+    }
+    const rows = [];
+    for (const g of (d.groups || [])) {
+      const gItems = (d.items || []).filter((x) => x.group === g.id);
+      if (!gItems.length) continue;
+      rows.push(`<tr class="envcfg-group"><td colspan="5"><b>${esc(g.label)}</b> <span class="muted small">${esc(g.desc)}</span></td></tr>`);
+      for (const it of gItems) {
+        const focus = envcfgFocus.includes(it.key) ? ' envcfg-focus' : '';
+        rows.push(`<tr class="envcfg-row${focus}" data-env-key="${esc(it.key)}">
+          <td><b>${esc(it.key)}</b><div class="desc muted">${esc(it.label)}</div><div class="desc muted small">${esc(it.desc)}</div></td>
+          <td><code class="envcfg-val">${esc(it.display)}</code>${it.masked ? ' <span class="muted small">脱敏</span>' : ''}</td>
+          <td><code class="envcfg-val">${esc(it.runtimeValue || '默认')}</code>${it.pendingRestart ? ` ${badge('待重启', 'amber')}` : ''}</td>
+          <td><input class="envcfg-input" data-env-key="${esc(it.key)}" placeholder="留空表示不修改" autocomplete="off" spellcheck="false" /></td>
+          <td>${it.hot ? badge('即时生效', 'green') : badge('需重启', 'gray')}${it.example ? `<div class="muted small">示例 <code>${esc(it.example)}</code></div>` : ''}</td>
+        </tr>`);
+      }
+    }
+    listBox.innerHTML = table(['配置项', '文件里的值', '运行时生效值', '新值', '生效方式'], rows);
+    // 从诊断结论跳来：自动预填建议值，让「怎么配置 env」一眼可见。
+    if (envcfgProblem) {
+      const a = (d.advice || []).find((x) => x.problem === envcfgProblem);
+      if (a) envcfgFillAdvice(a, false);
+      envcfgProblem = '';
+      envcfgFocus = [];
+    }
+  } catch (e) {
+    if (summary) summary.innerHTML = errorBlock(e.message, e.hint || '');
+    if (listBox) listBox.innerHTML = '';
+    if (adviceBox) adviceBox.innerHTML = '';
+  }
+}
+
+if ($('#envcfg-reload')) $('#envcfg-reload').addEventListener('click', () => loadEnvConfig());
+if ($('#envcfg-save')) $('#envcfg-save').addEventListener('click', async () => {
+  const values = {};
+  $$('#envcfg-list .envcfg-input').forEach((el) => {
+    if (el.value !== '') values[el.dataset.envKey] = el.value;
+  });
+  const keys = Object.keys(values);
+  if (!keys.length) { toast('还没有填写任何新值', true); return; }
+  if (!confirm(`将把 ${keys.length} 项写入 .env（自动备份、权限 600）：\n${keys.join(', ')}\n\n敏感项只有在你填写新值时才会更新。确认继续？`)) return;
+  try {
+    const r = await api('/env-config', { method: 'PUT', body: { confirm: true, values } });
+    await loadEnvConfig();
+    const box = $('#envcfg-summary');
+    if (box) box.insertAdjacentHTML('beforeend', `<div class="notice ${r.requiresRestart ? 'warn' : ''}" style="margin-top:8px">
+      ✔ ${esc(r.message)}${r.backup ? `<br />备份：<code>${esc(r.backup)}</code>` : ''}
+      ${r.hotApplied && r.hotApplied.length ? `<br />已即时生效：<code>${esc(r.hotApplied.join(', '))}</code>` : ''}
+      ${r.requiresRestart ? `<br />需重启后生效：<code>${esc((r.restartKeys || []).join(', '))}</code>。容器部署可重新执行 <code>remote.js deploy</code>；扩展地址改完还要到「扩展 / 数据库」重建对应实例。` : ''}
+    </div>`);
+    toast(r.message);
+  } catch (e) { toast(e.message || String(e), true); }
+});
+
 /* ----------------------------- 外部 Git 源 ----------------------------- */
 
 /** 外部 Git 源认证方式切换：Token / 账号密码二选一。 */
@@ -3015,6 +3169,14 @@ function syncGitSourceAuthFields() {
 }
 $('#gitsrc-auth-type').addEventListener('change', syncGitSourceAuthFields);
 
+/** v0.3.8 · 勾选「忽略证书校验」时展示安全提醒。 */
+function syncGitSourceTlsNote() {
+  const sel = $('#gitsrc-insecure');
+  const note = $('#gitsrc-tls-note');
+  if (note) note.hidden = !sel || sel.value !== 'on';
+}
+if ($('#gitsrc-insecure')) $('#gitsrc-insecure').addEventListener('change', syncGitSourceTlsNote);
+
 /** 退出编辑态，恢复成「登记新源」（弹窗内表单复位）。 */
 function resetGitSourceForm() {
   gitsrcEditId = '';
@@ -3026,6 +3188,9 @@ function resetGitSourceForm() {
   const password = $('#gitsrc-password');
   if (token) token.placeholder = 'ghp_... / Gitea Token / GitLab PAT';
   if (password) password.placeholder = 'GitHub 必须填 PAT（已停用密码登录）';
+  const tls = $('#gitsrc-insecure');
+  if (tls) tls.value = 'auto';
+  syncGitSourceTlsNote();
   syncGitSourceAuthFields();
 }
 
@@ -3059,6 +3224,9 @@ function fillGitSourceForm(s) {
   $('#gitsrc-password').placeholder = s.hasPassword ? `留空沿用原值（当前 ${s.passwordMasked || '已保存'}）` : '留空表示不设置密码';
   $('#gitsrc-form-title').textContent = `编辑 Git 源 · ${s.label}`;
   $('#gitsrc-submit').textContent = '保存修改';
+  const tls = $('#gitsrc-insecure');
+  if (tls) tls.value = s.insecure || 'auto';
+  syncGitSourceTlsNote();
   syncGitSourceAuthFields();
 }
 

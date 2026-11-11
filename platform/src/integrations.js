@@ -4,6 +4,7 @@ const fs = require('fs');
 const { spawn, spawnSync } = require('child_process');
 const { config, HttpError } = require('./core');
 const proxyModule = require('./proxy');
+const envConfig = require('./envConfig');
 
 // 可选依赖：本地零依赖也能跑控制台；安装依赖后自动启用 SSH 与 HTTP 代理转发。
 // undici 的 ProxyAgent 由 src/proxy.js 统一加载并做能力探测，此处不再重复 require。
@@ -29,7 +30,7 @@ function httpProblem(status, message, hint) {
 }
 
 async function httpJSON(url, options = {}) {
-  const { method = 'GET', headers = {}, body, timeout = REQUEST_TIMEOUT_MS } = options;
+  const { method = 'GET', headers = {}, body, timeout = REQUEST_TIMEOUT_MS, insecure } = options;
   const init = {
     method,
     headers: { ...headers },
@@ -46,7 +47,11 @@ async function httpJSON(url, options = {}) {
   const chosen = options.proxy !== undefined
     ? String(options.proxy || '')
     : proxyModule.forGlobal(url).proxy;
-  if (chosen) init.dispatcher = proxyModule.dispatcher(chosen);
+  // v0.3.8：源级显式开关 > 全局 DP_TLS_INSECURE（可用 HOSTS 白名单限定域名）。
+  // 默认严格校验；只有显式打开才换成跳过校验的 dispatcher，代理链路两跳都会覆盖。
+  const skipTls = insecure === undefined ? envConfig.effectiveInsecure(url) : Boolean(insecure);
+  // 只创建一个 dispatcher：有代理或需要跳过证书校验时才挂载。
+  if (chosen || skipTls) init.dispatcher = proxyModule.dispatcher(chosen, skipTls);
 
   let response;
   try {
@@ -71,17 +76,26 @@ async function httpJSON(url, options = {}) {
       UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'TLS 证书链不完整，无法验证',
       ERR_TLS_CERT_ALTNAME_INVALID: '证书域名与服务地址不匹配',
     };
-    const certLike = /cert|ssl|tls|self[- ]signed/i.test(detail);
+    const certLike = /cert|ssl|tls|self[- ]signed/i.test(detail)
+      || /^(CERT_|SELF_SIGNED|DEPTH_ZERO|UNABLE_TO_VERIFY|ERR_TLS)/i.test(code);
     const reason = CAUSE_TEXT[code] || (certLike ? 'TLS 证书校验失败（自签名或证书链不完整）' : '');
     let host = '';
     try { host = new URL(url).host; } catch { /* 忽略非法 URL */ }
     const msg = `无法连接上游服务${host ? ` [${host}]` : ''}：${reason || detail}${reason && code ? `（${code}）` : ''}`;
     const hint = certLike
-      ? '自建服务若用自签证书：把内网 CA 证书加入平台容器的信任链，或在受信任的内网改用 http；请配置受信任证书，不要直接跳过证书校验。也可到「代理配置」为该源单独设置代理。'
+      ? '推荐：为该服务续期 / 换用受信任证书，并把内网 CA 加入平台容器信任链。临时应急（仅限可信内网）：在「Git 源」编辑弹窗勾选「忽略 TLS 证书校验」，或到「环境配置」把 DP_TLS_INSECURE 设为 1（可用 DP_TLS_INSECURE_HOSTS 限定域名），保存后立即生效、无需重启。忽略证书校验会失去防中间人攻击能力，请勿用于公网服务。'
       : (/ENOTFOUND|EAI_AGAIN/.test(code)
         ? '检查服务地址是否写错、平台容器内 DNS 能否解析；若该域名要走代理，请到「代理配置」设置 Git 分组代理或单项代理。'
         : '检查目标服务是否启动、端口与防火墙、地址在平台容器内是否可达，以及代理 / NO_PROXY 配置');
-    throw httpProblem(502, msg, hint);
+    const err = httpProblem(502, msg, hint);
+    if (certLike) {
+      // 前端错误卡据此显示「去环境配置」按钮，并直接定位到相关键。
+      err.errorCode = 'TLS_CERT_INVALID';
+      err.envKeys = ['DP_TLS_INSECURE', 'DP_TLS_INSECURE_HOSTS'];
+      err.fixView = 'envcfg';
+      err.host = host;
+    }
+    throw err;
   }
   const text = await response.text();
   let payload;

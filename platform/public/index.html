@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261111b" />
+  <link rel="stylesheet" href="/style.css?v=20261111c" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -31,6 +31,7 @@
         <button class="nav-item" data-view="docker"><span class="ico">⬡</span>Docker 管理</button>
         <button class="nav-item" data-view="proxy"><span class="ico">⇄</span>代理配置</button>
         <button class="nav-item" data-view="environment"><span class="ico">⌬</span>环境适配</button>
+        <button class="nav-item" data-view="envcfg"><span class="ico">⚙</span>环境配置</button>
         <button class="nav-item" data-view="ai"><span class="ico">✦</span>AI 服务配置</button>
         <button class="nav-item" data-view="ops"><span class="ico">◎</span>AI 运维</button>
       </nav>
@@ -186,6 +187,11 @@
                 <label id="clone-token-field" hidden>访问令牌 Token<input name="token" id="clone-token" type="password" placeholder="ghp_... / Gitea Token / GitLab PAT" autocomplete="new-password" /></label>
               </div>
               <label>本次克隆代理（可选）<input name="proxy" placeholder="留空按代理规则继承；填 direct 强制直连" /></label>
+              <label>TLS 证书校验（本次克隆）<select name="insecure">
+                <option value="auto">跟随 Git 源 / 全局设置（默认严格校验）</option>
+                <option value="on">忽略证书校验（仅限可信内网应急）</option>
+                <option value="off">强制严格校验</option>
+              </select></label>
               <input type="hidden" name="repoId" id="clone-repo-id" value="" />
               <div class="form-actions"><button class="btn btn-primary" type="submit">克隆到工作区</button></div>
             </form>
@@ -1129,6 +1135,39 @@
             </div>
           </div>
         </section>
+
+        <!-- 环境配置（v0.3.8）：.env 可视化管理 + 诊断联动的配置指引 -->
+        <section class="page" id="view-envcfg">
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-head">
+              <h2>.env 配置文件</h2>
+              <span class="muted">只读查看 + 白名单写入，敏感值一律脱敏</span>
+            </div>
+            <div id="envcfg-summary" class="hint">正在读取 .env…</div>
+            <div class="notice" style="margin-top:10px">
+              <b>文件在哪</b>：容器部署时平台读到的是挂载进容器的 <code>/app/.env</code>，对应宿主机 <code>&lt;部署目录&gt;/.env</code>（例如 <code>/data/platform/.env</code>），权限 600；Windows 单文件版是 exe 同目录下的 <code>.env</code>。<br />
+              <b>什么时候要重启</b>：标注「需重启」的键在平台启动时读入，写回文件后要重启平台进程 / 容器才生效；容器部署重新执行一次 <code>remote.js deploy</code> 即可。<code>DP_TLS_INSECURE</code> 这类开关标记「即时」，保存后立即生效。<br />
+              <b>安全边界</b>：只支持下表白名单内的键；写入前自动备份为 <code>.env.bak.&lt;时间戳&gt;</code>；平台不执行 shell、不自动重启、不改 <code>state.json</code>。
+            </div>
+          </div>
+
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-head"><h2>配置建议</h2><span class="muted">按常见诊断结论生成，可复制或一键填入下方表单</span></div>
+            <div id="envcfg-advice" class="envcfg-advice"><div class="hint">正在生成…</div></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h2>环境变量</h2>
+              <span class="row gap">
+                <button class="btn btn-sm" type="button" id="envcfg-reload">刷新</button>
+                <button class="btn btn-sm btn-primary" type="button" id="envcfg-save">保存并应用</button>
+              </span>
+            </div>
+            <div class="hint">在「新值」列填写要修改的内容，留空表示不改。敏感项显示脱敏占位符；提交后仍保留原值。保存需要二次确认。</div>
+            <div id="envcfg-list" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+        </section>
       </div>
     </main>
   </div>
@@ -1141,7 +1180,7 @@
         <button class="btn btn-ghost btn-sm" type="button" data-gitsrc-close>✕ 关闭</button>
       </div>
       <div class="modal-body">
-        <div class="hint" id="gitsrc-hint">登记外部源后，仓库列表会一并聚合。支持 Token 与账号密码两种认证方式；凭据栏留空表示编辑时沿用原值。</div>
+        <div class="hint" id="gitsrc-hint">登记外部源后，仓库列表会一并聚合。支持 Token 与账号密码两种认证方式；凭据栏留空表示编辑时沿用原值。自建服务证书过期 / 自签名导致连不上时，可在下方选择忽略 TLS 校验，或到「环境配置」页设置全局开关。</div>
         <form id="gitsrc-form" class="form" style="margin-top:14px">
           <div class="grid-2">
             <label>名称<input name="label" placeholder="例如 公司 Gitea" required /></label>
@@ -1164,6 +1203,17 @@
           <div class="grid-2" id="gitsrc-password-fields" hidden>
             <label>密码 / 个人访问令牌<input name="password" id="gitsrc-password" type="password" placeholder="GitHub 必须填 PAT（已停用密码登录）" autocomplete="new-password" /></label>
           </div>
+          <label class="field">TLS 证书校验
+            <select name="insecure" id="gitsrc-insecure">
+              <option value="auto">跟随全局设置（默认严格校验）</option>
+              <option value="on">忽略证书校验（仅限可信任内网应急）</option>
+              <option value="off">始终严格校验（覆盖全局开关）</option>
+            </select>
+          </label>
+          <div class="notice warn" id="gitsrc-tls-note" hidden>
+            <b>安全提醒</b>：忽略证书校验会失去防中间人攻击能力，只建议用于可信任内网的自建服务临时应急；长期方案是为服务端续期 / 换用受信任证书。该设置同时作用于仓库列表 API 与 <code>git clone</code>（<code>http.sslVerify=false</code>），但不会写进仓库的 <code>.git/config</code>。<br />
+            全局开关在「环境配置」页：<code>DP_TLS_INSECURE=1</code>，可用 <code>DP_TLS_INSECURE_HOSTS</code> 限定域名。
+          </div>
           <div class="notice">
             <b>Token 方式</b>：GitHub 用 <code>Bearer</code>、GitLab 用 <code>PRIVATE-TOKEN</code>、Gitea 用 <code>token</code> 头，权限最完整。<br />
             <b>账号密码方式</b>：统一走 HTTP Basic 调用 REST API 与克隆；自建 Gitea / GitLab 可直接填账号密码，GitHub 请在密码栏填 PAT（GitHub 自 2021 起停用密码认证）。<br />
@@ -1184,6 +1234,6 @@
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261111b"></script>
+  <script src="/app.js?v=20261111c"></script>
 </body>
 </html>

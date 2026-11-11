@@ -31,10 +31,10 @@ const sections = [...html.matchAll(/class="page" id="view-([a-z0-9-]+)"/g)].map(
 const SUBPAGES = ['repo-new', 'repo-clone', 'storage-conn', 'storage-mounts', 'storage-drivers',
   'build-start', 'deploys', 'server-new', 'docker-containers', 'docker-images',
   'docker-volumes', 'docker-networks', 'docker-compose'];
-note(sections.length === 26 && sections.includes('gitsrc') && sections.includes('docker')
-  && sections.includes('proxy') && sections.includes('environment')
+note(sections.length === 27 && sections.includes('gitsrc') && sections.includes('docker')
+  && sections.includes('proxy') && sections.includes('environment') && sections.includes('envcfg')
   && SUBPAGES.every((v) => sections.includes(v)),
-'26 个独立页面（13 主模块 + 13 个子功能页）均已转为可标签化的 .page', sections.join(', '));
+'27 个独立页面（14 主模块 + 13 个子功能页）均已转为可标签化的 .page', sections.join(', '));
 note(['/git-sources', '/docker/overview', '/extensions/backups', '/extensions/dbgate', '/builds/backends']
   .every((p) => app.includes(p)) && app.includes('function loadGitSources') && app.includes('function loadDocker'),
 'Git 源 / Docker 管理 / 备份 / DbGate / 构建后端接口已全部接线');
@@ -82,7 +82,23 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
-note(html.includes('?v=20261111b'), '静态资源版本已升到 20261111b');
+note(html.includes('?v=20261111c'), '静态资源版本已升到 20261111c');
+
+// v0.3.8：TLS 忽略参数 + .env 平台化管理 + 诊断联动配置指引。
+note(html.includes('id="gitsrc-insecure"') && html.includes('id="gitsrc-tls-note"')
+  && html.includes('name="insecure"') && app.includes('syncGitSourceTlsNote')
+  && app.includes('s.insecure || \'auto\''),
+'Git 源弹窗与克隆表单均有三态 TLS 校验开关，编辑可回填');
+note(html.includes('id="view-envcfg"') && html.includes('id="envcfg-list"')
+  && html.includes('id="envcfg-advice"') && app.includes("api('/env-config'")
+  && app.includes('function loadEnvConfig') && app.includes('envcfg: loadEnvConfig'),
+'环境配置页具备白名单读取、写入与建议片段渲染链路');
+note(app.includes('function openEnvConfig') && app.includes('data-repo-fix="envcfg"')
+  && app.includes('data-ext-env') && app.includes('envcfgFillAdvice'),
+'Git 源证书错误与扩展体检结论可一键跳到 env 配置并预填建议值');
+note(html.includes('DP_TLS_INSECURE_HOSTS') && html.includes('id="envcfg-save"')
+  && css.includes('.envcfg-advice-card') && css.includes('.envcfg-focus'),
+'TLS / 扩展地址的 env 提示文案与配置页样式齐全');
 
 // v0.3.7：Git 源弹窗、运行时检测明细、工作区仓库、扩展体检、表单控件统一排版。
 note(html.includes('id="gitsrc-modal"') && html.includes('id="gitsrc-add"')

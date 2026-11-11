@@ -2154,4 +2154,70 @@ node scripts/api-sweep.js --base http://10.0.0.246:9000 --json
 | 全接口巡检 | 本机 138 项、远端 `--full` 148 项，均 **0 个 500**、0 超时、0 降级异常、0 错误体缺 status |
 | 自检 | `npm run check`、`check-frontend.js`（含 5 条本版断言）、四套冒烟（40 / 31 / 28 / 60 项）、release.yml YAML 全通过 |
 
-> v0.3.7 只提交到 `main`，未打 tag、未触发 Release；release notes 已包含本版说明。
+> v0.3.7 在 2026-11-11 补打 annotated tag `v0.3.7`（指向 `5026cac`）并推送，由 `release.yml` 构建发布 6 个资产；本版随后把 TLS 忽略参数与 .env 管理作为 v0.3.8 继续演进。
+
+---
+
+## 35. v0.3.8：TLS 校验忽略参数与 .env 平台化管理
+
+### 35.1 需求背景
+
+v0.3.7 把外部 Gitea 的笼统 `fetch failed` 定位成 `CERT_HAS_EXPIRED`，但当时的结论只有一句「请在服务端续期 / 换受信任证书，平台侧不会跳过证书校验」。内网自建服务换证书往往不在平台使用者的控制范围内，用户需要：
+
+1. 一个**显式、可关闭、影响面可控**的「忽略证书校验」参数，而不是被迫改代码或全局关掉安全校验；
+2. 遇到 `PORT_UNREACHABLE` 这类「其实是 env 配置问题」时，平台能**直接告诉该改哪个键、写成什么值、改完要不要重启**，最好能在页面上改。
+
+### 35.2 TLS 忽略参数（三态 + 全局兜底）
+
+| 层次 | 位置 | 取值 | 作用范围 |
+|---|---|---|---|
+| 源级（最高） | 「Git 源」登记 / 编辑弹窗 → TLS 证书校验 | `auto` 跟随全局 / `on` 忽略 / `off` 始终严格 | 该源的仓库列表、分支、新建仓库 API，以及从该源克隆 |
+| 克隆本次 | 「克隆到工作区」→ TLS 证书校验 | `auto` / `on` / `off` | 仅本次 `git clone` |
+| 全局 | `.env` 的 `DP_TLS_INSECURE` | `1` 开启，留空关闭 | 所有出站 HTTPS（内置 Gitea / OpenList / 在线 IDE）与未显式设置的外部源 |
+| 域名限定 | `.env` 的 `DP_TLS_INSECURE_HOSTS` | 逗号分隔域名 / IP | 配合全局开关，只对这些主机跳过校验 |
+
+- **默认严格校验**，只有显式打开才跳过；源级 `off` 可以覆盖全局 `on`，避免「开了全局就关不掉公网源」。
+- 实现上 REST API 走 `undici` 的跳过校验 dispatcher（直连 `Agent.connect`、代理链路 `requestTls` + `proxyTls` 两跳都覆盖）；`git clone` 用 `git -c http.sslVerify=false clone`，`-c` 在 `clone` 之前，**不写进 `.git/config`**。
+- 证书类错误的 `errorCode` 统一为 `TLS_CERT_INVALID`，hint 同时给出「推荐续期 / 换证书」与「临时应急」两条路径；全局安全警告在弹窗与环境配置页各有一处。
+- `DP_TLS_INSECURE*` 属于「即时生效」键：在控制台保存后同步热更新运行时 `config`，**无需重启**。
+
+> ⚠ 跳过证书校验会失去防中间人攻击能力，只建议用于可信任内网的临时应急；长期方案始终是给服务端续期 / 换受信任证书，并把内网 CA 加入平台容器信任链。
+
+### 35.3 .env 在平台上的管理
+
+新增独立页「环境配置」（`view-envcfg`）与模块 `platform/src/envConfig.js`：
+
+| 接口 | 作用 |
+|---|---|
+| `GET /api/env-config` | 返回 `.env` 路径 / 是否可写 / 白名单键（脱敏值、运行时生效值、待重启标记、说明、示例）/ 分组 / 配置建议片段 |
+| `PUT /api/env-config` | `{ confirm: true, values: { KEY: value } }` 按白名单写回，自动备份为 `.env.bak.<时间戳>`、600 权限、保留原注释与顺序 |
+
+- **白名单**：只认 `SPECS` 里登记过的键，杜绝通过页面注入任意环境变量；值禁止换行 / 控制字符，URL / 布尔类做格式校验。
+- **脱敏**：Token / 密码只返回 `abc******xyz`；前端把脱敏占位符回传时后端跳过，不会误把 `******` 写进文件。
+- **待重启提示**：文件值 ≠ 运行时生效值时标 `待重启`；容器部署提示重新执行 `remote.js deploy`，并说明扩展地址改完还要重建实例。
+- **容器支持**：`remote.js deploy` 在有 `.env` 时追加 `-v <部署目录>/.env:/app/.env:rw` 与 `-e DP_ENV_FILE=/app/.env`，页面读到的是宿主机真实配置文件；因为单文件 bind mount 不能用 tmp + rename 顶掉挂载 inode，写回采用**原地 `writeFileSync`**。
+- **不自动重启**：平台只写文件、不执行 shell、不重启容器、不改 `state.json`；保存前强制 `confirm` 二次确认。
+
+### 35.4 诊断联动：从「请改 .env」到「告诉你怎么改」
+
+`envConfig.adviceFor(problem, ctx)` 把诊断结论翻译成可直接复制的 `.env` 片段，覆盖 `TLS_CERT_INVALID` / `PORT_UNREACHABLE` / `IMAGE_DENIED` / `GIT_BIN_MISSING` / `PROXY_TARGET_UNREACHABLE`：
+
+- 仓库列表的源错误卡：证书类故障新增「去配置 env · 关闭证书校验」按钮；
+- 扩展一键体检：`PORT_UNREACHABLE` 结论带 `envAdvice`（含宿主机 IP 猜测），显示「去配置 env」按钮；
+- 两处跳转都会带上 `envKeys` 与 `problem`，环境配置页**高亮对应配置行、自动把建议值预填进「新值」列**（仍未写文件），用户确认后点「保存并应用」；
+- 建议片段也可单独「复制片段」，或手工粘到服务器上的 `.env`。
+
+### 35.5 文件清单
+
+| 文件 | 变更 |
+|---|---|
+| `platform/src/envConfig.js` | 新增：白名单元数据、读写、脱敏、热更新、建议片段、TLS 决策 |
+| `platform/src/core.js` | `config` 增加 `tlsInsecure` / `tlsInsecureHosts` / `envFile`，新增 `resolveEnvFile()` 多形态路径探测 |
+| `platform/src/proxy.js` | `dispatcher(proxyUrl, insecure)` + 缓存的 `insecureDispatcher()` |
+| `platform/src/integrations.js` | `httpJSON` 支持 `insecure`，证书错误升级为结构化 `TLS_CERT_INVALID` |
+| `platform/src/gitSources.js` | 源三态 `insecure`、`publicSource` 暴露、`git clone` 的 `http.sslVerify`、错误卡结构化字段 |
+| `platform/src/extRuntime.js` | `diagnose()` 输出 `envAdvice`，端口不通提示指向环境配置页 |
+| `platform/src/server.js` | `GET/PUT /api/env-config` |
+| `platform/public/*` | 新页、Git 源 / 克隆表单 TLS 选项、错误卡与体检卡跳转、样式 |
+| `scripts/remote.js` | 部署时挂载宿主机 `.env` 并注入 `DP_ENV_FILE` |
+| `scripts/check-frontend.js` / `api-sweep.js` | 本版断言；`PUT /api/env-config` 列入副作用跳过 |

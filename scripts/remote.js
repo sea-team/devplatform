@@ -317,6 +317,10 @@ async function startInContainer(server, target, host) {
     `-v ${target}/platform:/app`,
     `-v ${target}/data:/app/data`,
     `-v ${target}/workspace:/workspace`,
+    // v0.3.8：把宿主机 .env 以单文件方式挂进容器，控制台「环境配置」页才能读到真实配置文件。
+    // --env-file 只在容器启动时注入进程环境；页面写回文件后，标注「需重启」的键要重新 deploy 才生效。
+    // 单文件挂载点不能用 tmp + rename 覆盖（会顶掉挂载 inode），平台侧已改为原地写入。
+    ...(hasEnvFile ? [`-v ${target}/.env:/app/.env:rw`, '-e DP_ENV_FILE=/app/.env'] : []),
     // 平台通过 docker.sock 直接调 Docker Engine API 做隔离构建，不需要宿主机 docker CLI。
     '-v /var/run/docker.sock:/var/run/docker.sock',
     '-e PORT=9000 -e DATA_DIR=/app/data -e WORKSPACE_DIR=/workspace',

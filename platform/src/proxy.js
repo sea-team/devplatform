@@ -32,7 +32,8 @@ const DIRECT_WORDS = new Set(['direct', 'none', 'no', 'off', 'disable', '直连'
 const DEFAULT_NO_PROXY = 'localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16';
 
 let ProxyAgent = null;
-try { ({ ProxyAgent } = require('undici')); } catch { ProxyAgent = null; }
+let Agent = null;
+try { ({ ProxyAgent, Agent } = require('undici')); } catch { ProxyAgent = null; Agent = null; }
 const requireProxyAgent = () => {
   if (!ProxyAgent) throw new Error('HTTP 代理需要 undici 依赖：请执行 npm install 或使用 docker compose 启动完整环境');
 };
@@ -305,7 +306,8 @@ function envFor(resolved, base = process.env) {
 }
 
 /** 给 httpJSON / fetch 用的 undici dispatcher（只支持 http/https 代理）。 */
-function dispatcher(proxyUrl) {
+function dispatcher(proxyUrl, insecure = false) {
+  if (insecure) return insecureDispatcher(proxyUrl);
   if (!proxyUrl) return null;
   const protocol = (() => { try { return new URL(proxyUrl).protocol; } catch { return ''; } })();
   if (protocol === 'socks5:' || protocol === 'socks5h:' || protocol === 'socks4:') {
@@ -313,6 +315,27 @@ function dispatcher(proxyUrl) {
   }
   requireProxyAgent();
   return new ProxyAgent(proxyUrl);
+}
+
+/**
+ * v0.3.8 · 显式跳过 TLS 证书校验的 dispatcher。
+ * 只在用户为某个 Git 源勾选「忽略 TLS 校验」或设置 DP_TLS_INSECURE 时才会走到这里；
+ * 默认路径始终走严格校验。直连用 Agent.connect，代理链路用 requestTls + proxyTls，
+ * 两者都要覆盖，否则只关掉其中一跳仍会报 CERT_HAS_EXPIRED。
+ * 按代理地址缓存，避免每次请求都新建连接池。
+ */
+const insecureAgents = new Map();
+function insecureDispatcher(proxyUrl) {
+  const key = proxyUrl || '__direct__';
+  if (insecureAgents.has(key)) return insecureAgents.get(key);
+  requireProxyAgent();
+  if (!Agent) throw new Error('忽略 TLS 校验需要 undici 依赖：请执行 npm install');
+  const tls = { rejectUnauthorized: false };
+  const agent = proxyUrl
+    ? new ProxyAgent({ uri: proxyUrl, requestTls: tls, proxyTls: tls })
+    : new Agent({ connect: tls });
+  insecureAgents.set(key, agent);
+  return agent;
 }
 
 /* ------------------------- 隧道（SSH / Docker TCP） ------------------------- */
@@ -656,7 +679,7 @@ module.exports = {
   SCOPES, SCOPE_LABELS, DEFAULT_NO_PROXY,
   readConfig, publicConfig, setGlobal, setGroup,
   addRule, updateRule, removeRule, setOverride, removeOverride, listEntities,
-  resolve, forHttp, forGlobal, envFor, dispatcher, shouldBypass, hostOf,
+  resolve, forHttp, forGlobal, envFor, dispatcher, insecureDispatcher, shouldBypass, hostOf,
   normalize, validateUrl, maskUrl, openTunnel, tunnelAgent, testProxy,
   hasHttpProxy: () => Boolean(ProxyAgent),
   // 供 integrations 复用：避免两套 NO_PROXY 逻辑
