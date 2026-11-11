@@ -454,6 +454,26 @@ function tunnelAgent(proxyUrl, targetHost, targetPort) {
   return agent;
 }
 
+/**
+ * 连通性探测失败统一为「目标不可达」：附可操作提示，并保证归入 502 上游故障
+ * 而不是落到默认的 500（v0.3.6 巡检曾因「直连超时」被判 500）。
+ */
+function probeUnreachable(message, target, viaProxy) {
+  const err = new Error(`${message}：${target}`);
+  err.errorCode = 'PROXY_TARGET_UNREACHABLE';
+  err.hint = viaProxy
+    ? '经代理仍无法连通目标。请检查代理地址与凭据，或在「代理配置」中改用直连（direct）后重试。'
+    : '直连无法到达该目标。请到「代理配置」为对应分组设置可用代理，或把测试地址改成内网可达的地址（如已登记的 Gitea）。';
+  return err;
+}
+
+/** 协议 / 参数类错误保留原有语义，只包装网络层失败。 */
+function asProbeError(error, target, viaProxy) {
+  const msg = String((error && error.message) || error || '');
+  if (/不支持建立隧道的代理协议|未指定代理地址|代理地址无效|测试地址不是合法 URL/.test(msg)) throw error;
+  throw probeUnreachable(msg || '连接失败', target, viaProxy);
+}
+
 /** 连通性测试：优先用真实 HTTP 请求（能验证转发），无 undici 时退化为 TCP 隧道。 */
 async function testProxy(proxyUrl, targetUrl) {
   const started = Date.now();
@@ -465,14 +485,16 @@ async function testProxy(proxyUrl, targetUrl) {
   if (!proxyUrl) {
     await new Promise((resolve, reject) => {
       const socket = net.connect({ host: u.hostname, port }, () => { socket.destroy(); resolve(); });
-      socket.setTimeout(6000, () => { socket.destroy(); reject(new Error('直连超时')); });
-      socket.on('error', reject);
+      socket.setTimeout(6000, () => { socket.destroy(); reject(probeUnreachable('直连超时', target, false)); });
+      socket.on('error', (e) => reject(probeUnreachable(`直连失败（${e.code || e.message}）`, target, false)));
     });
     return { ok: true, ms: Date.now() - started, mode: 'direct', target };
   }
   const p = connectOptions(proxyUrl);
   if (p.protocol.startsWith('socks') || !ProxyAgent) {
-    const socket = await openTunnel(proxyUrl, u.hostname, port, 8000);
+    let socket;
+    try { socket = await openTunnel(proxyUrl, u.hostname, port, 8000); }
+    catch (e) { asProbeError(e, target, true); }
     socket.destroy();
     return { ok: true, ms: Date.now() - started, mode: 'tunnel', target, proxy: maskUrl(proxyUrl) };
   }
@@ -482,6 +504,8 @@ async function testProxy(proxyUrl, targetUrl) {
     const response = await fetch(target, { dispatcher: agent, signal: AbortSignal.timeout(8000) });
     await response.arrayBuffer().catch(() => {});
     return { ok: true, ms: Date.now() - started, mode: 'http', status: response.status, target, proxy: maskUrl(proxyUrl) };
+  } catch (e) {
+    asProbeError(e, target, true);
   } finally {
     try { await agent.close(); } catch { /* noop */ }
   }

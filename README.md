@@ -2101,6 +2101,7 @@ node scripts/api-sweep.js --base http://10.0.0.246:9000 --json
 - 编排模板仍只登记文本、不在平台内执行；卷 / 网络的高级参数生成命令由用户自行到服务器执行，平台创建接口仍只接受名称。
 - Docker 面板偏好、刷新间隔只影响当前浏览器；安全策略（非平台容器只读 + 二次确认 + 审计）不变。
 - 前端资源版本 `?v=20261111a`；`check-frontend.js` 同步更新版本断言并新增对模拟 DOM 的防御。
+- **回归补修**：远端全接口巡检复测发现 `POST /api/proxy/test` 直连 `github.com` 超时被判成 500。现把网络层不可达（直连/隧道超时、DNS 失败、连接被拒）统一归为 `502 / PROXY_TARGET_UNREACHABLE` 并附「配置代理或换内网测试地址」的修复提示；`inferStatus` 与 `smoke-api-status.js` 补了防回归断言，真·代码异常仍保持 500。两套冒烟里的版本号断言改为读取 `package.json`，不再随发版硬编码。
 
 ### 33.4 实测（`10.0.0.246` 与本机，2026-11-11）
 
@@ -2111,7 +2112,7 @@ node scripts/api-sweep.js --base http://10.0.0.246:9000 --json
 | Git 源编辑 | `PUT /api/git-sources/:id` 回写成功，密码脱敏值保持 `******03` 未被清空 |
 | DbGate 镜像 | `POST /api/docker/images/pull` → `docker.m.daocloud.io/dbgate/dbgate:latest`，`usedFallback=false`，不再出现 `library/dbgate/dbgate` 的 denied |
 | Docker 元数据 | `/api/docker/overview` 返回 `imagePrefix`；69 个卷带创建时间 / 标签、16 个网络带子网 / 网关 / 已接入容器数 |
-| 全接口巡检 | 本机 138 项、远端 `--full` 147 项，均 **0 个 500**、0 超时、0 降级异常、0 错误体缺 status |
-| 自检 | `npm run check`、`check-frontend.js`、四套冒烟（60 / 31 / 28 / 33 项）、release.yml YAML 解析全部通过 |
+| 全接口巡检 | 本机 138 项、远端 `--full` 147 项，补修 `proxy/test` 后复测均 **0 个 500**、0 超时、0 降级异常、0 错误体缺 status |
+| 自检 | `npm run check`、`check-frontend.js`、四套冒烟（40 / 31 / 28 / 60 项）、release.yml YAML 解析全部通过 |
 
 > v0.3.6 只提交到 `main`，未打 tag、未触发 Release；需要发版时补一个 `v0.3.6` tag 即可（release notes 已包含本版说明）。

@@ -199,7 +199,10 @@ async function testApi() {
     const health = await api('/health');
     note(typeof health.git.available === 'boolean' && ['local', 'ssh-host', 'none'].includes(health.git.channel),
       '/api/health 暴露 git.available 与 git.channel', `${health.git.available} / ${health.git.channel}`);
-    note(health.version === '0.3.5', '源码模式版本号已升到 0.3.5', health.version);
+    // 版本号统一以 package.json 为准，避免每次发版都要改测试里的硬编码。
+    const pkgVersion = require(path.join(PLATFORM, 'package.json')).version;
+    note(health.version === pkgVersion,
+      `源码模式版本号与 package.json 一致（${pkgVersion}）`, health.version);
 
     const d = await api('/git/runtime');
     note(Boolean(d.hint) && Boolean(d.fallback) && Array.isArray(d.tried)

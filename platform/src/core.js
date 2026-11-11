@@ -206,6 +206,8 @@ function inferStatus(error) {
   if (/不存在|未找到|未知环境档案|未知档案|No such (container|image|volume|network|object)/i.test(msg)) return 404;
   if (/缺少|请填写|未配置|不能为空|不可为空|需要二次确认|请二次确认|避免误伤|不是平台创建的|请选择或填写|不可删除|由 \.env 配置|至少需要保留|不支持的代理协议|不支持的操作|名称不合法|文件名不合法|路径中不允许|路径越界|路径必须以|取值不合法|上传内容为空|无法识别项目类型|未知扩展清单|镜像标识不合法|服务地址必须|必须是 http\(s\):\/\/|参数不合法/.test(msg)) return 400;
   if (/OpenList \/api\/|OpenList 登录|OpenList .*返回 code=|Docker API |无法连接 Docker|connect ENOENT|本地 AI 程序|HTTP 4\d\d:|HTTP 5\d\d:|fetch failed|ECONNREFUSED|ETIMEDOUT|ECONNRESET|登录失败|record not found|返回了非预期数据|不是合法 JSON/i.test(msg)) return 502;
+  // 网络层不可达（代理/隧道探测、DNS、连接超时）同属上游故障，不是程序异常。
+  if (/直连超时|直连失败|代理隧道|代理连通失败|隧道超时|连接超时|连接失败|请求超时|目标不可达|网络不可达|timeout|timed out|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|ESOCKETTIMEDOUT|ECONNABORTED|socket hang up|connect (?:ETIMEDOUT|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH)/i.test(msg)) return 502;
   return 500;
 }
 

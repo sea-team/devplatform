@@ -46,6 +46,12 @@ function testCore() {
     ['OpenList /api/fs/list 返回 code=500：record not found', 502],
     ['无法连接 Docker：connect ENOENT', 502], ['上游服务 HTTP 503: down', 502],
     ['fetch failed', 502],
+    // v0.3.6：代理/隧道探测的网络层失败不是程序异常，必须是 502。
+    ['直连超时：https://github.com', 502],
+    ['直连失败（ECONNREFUSED）：https://example.com', 502],
+    ['代理隧道建立失败（connect ETIMEDOUT）', 502],
+    ['The operation was aborted due to timeout', 502],
+    ['connect ENOTFOUND github.com', 502],
     ['Unexpected token in JSON', 500], // 真·代码异常必须仍是 500
   ];
   for (const [msg, want] of cases) {
@@ -127,7 +133,10 @@ async function testServer() {
   try {
     const health = await call('GET', '/health');
     note(health.status === 200 && health.json.ok, '服务正常启动，/api/health 可用');
-    note(health.json.data.version === '0.3.5', '源码模式版本号已升到 0.3.5', health.json.data.version);
+    // 版本号统一以 package.json 为准，避免每次发版都要改测试里的硬编码。
+    const pkgVersion = require(path.join(PLATFORM, 'package.json')).version;
+    note(health.json.data.version === pkgVersion,
+      `源码模式版本号与 package.json 一致（${pkgVersion}）`, health.json.data.version);
 
     const degraded = [
       ['/openlist/storages', 'items'], ['/openlist/drivers', 'items'],
@@ -164,8 +173,24 @@ async function testServer() {
   }
 }
 
+/** v0.3.6：连通性探测失败也要带结构化提示，且不能回退成 500。 */
+async function testProxyProbe() {
+  const core = require(path.join(PLATFORM, 'src', 'core.js'));
+  const proxy = require(path.join(PLATFORM, 'src', 'proxy.js'));
+  try {
+    // 127.0.0.1:1 必定拒绝连接，不依赖外网，也不需要等待超时。
+    await proxy.testProxy('', 'http://127.0.0.1:1');
+    note(false, '探测不可达目标应抛出错误');
+  } catch (e) {
+    note(core.inferStatus(e) === 502, '探测失败归类 502 而非 500', String(core.inferStatus(e)));
+    note(e.errorCode === 'PROXY_TARGET_UNREACHABLE' && Boolean(e.hint),
+      '探测失败带 errorCode 与修复提示', e.errorCode || '');
+  }
+}
+
 (async () => {
   testCore();
+  await testProxyProbe();
   await testServer();
   console.log(`\n${errors.length ? `✖ ${errors.length} 项检查未通过` : `✔ ${passed} 项检查全部通过`}`);
   if (errors.length) { errors.forEach((e) => console.log(`   - ${e}`)); process.exitCode = 1; }
