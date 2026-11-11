@@ -161,9 +161,40 @@ class HttpError extends Error {
 }
 const badRequest = (message) => new HttpError(400, message);
 const notFound = (message) => new HttpError(404, message);
+const conflict = (message, extra = {}) => new HttpError(409, message, {
+  errorCode: 'CONFLICT', ...extra,
+});
 const upstream = (message, extra = {}) => new HttpError(502, message, {
   errorCode: 'UPSTREAM_UNAVAILABLE', upstream: true, ...extra,
 });
+
+/**
+ * 镜像加速器前缀拼接（v0.3.6）。
+ * DOCKER_IMAGE_PREFIX 允许写成 registry 根或带 namespace 的形式，常见误配是
+ * `docker.m.daocloud.io/library/`：这个 library/ 只适用于 Docker Hub 官方镜像，
+ * 拼到 `dbgate/dbgate` 这类命名空间镜像上会变成 `library/dbgate/dbgate`，
+ * 镜像源直接返回 denied。这里按镜像名自动决定是否带 library。
+ *   resolveImage('mysql',        'docker.m.daocloud.io/library/') → docker.m.daocloud.io/library/mysql
+ *   resolveImage('dbgate/dbgate','docker.m.daocloud.io/library/') → docker.m.daocloud.io/dbgate/dbgate
+ *   resolveImage('ghcr.io/a/b',  'docker.m.daocloud.io/')          → ghcr.io/a/b（第三方仓库不加速）
+ */
+function resolveImage(image, prefix) {
+  const raw = String(image || '').trim().replace(/^\/+/, '');
+  const p = String(prefix || '').trim().replace(/\/+$/, '');
+  if (!p) return raw;
+  const first = raw.split('/')[0];
+  // 第一段含 . 或 : 说明镜像自带 registry 域名，加速器代理不到它。
+  if (first.includes('.') || first.includes(':') || first === 'localhost') return raw;
+  const base = p.replace(/\/library$/, '');
+  return `${base}${raw.includes('/') ? '' : '/library'}/${raw}`;
+}
+
+/** 拉取候选：加速镜像优先，失败后再回退到原始 Docker Hub 镜像。 */
+function imageCandidates(image, prefix) {
+  const raw = String(image || '').trim();
+  const fast = resolveImage(raw, prefix);
+  return fast === raw ? [raw] : [fast, raw];
+}
 
 /**
  * 兜底推断：只认明确的短语，其余一律保持 500，避免把真实的代码异常
@@ -171,6 +202,7 @@ const upstream = (message, extra = {}) => new HttpError(502, message, {
  */
 function inferStatus(error) {
   const msg = String((error && error.message) || error || '');
+  if (/目录已存在|同名容器已存在|实例名称已存在|同名 Git 源已存在/i.test(msg)) return 409;
   if (/不存在|未找到|未知环境档案|未知档案|No such (container|image|volume|network|object)/i.test(msg)) return 404;
   if (/缺少|请填写|未配置|不能为空|不可为空|需要二次确认|请二次确认|避免误伤|不是平台创建的|请选择或填写|不可删除|由 \.env 配置|至少需要保留|不支持的代理协议|不支持的操作|名称不合法|文件名不合法|路径中不允许|路径越界|路径必须以|取值不合法|上传内容为空|无法识别项目类型|未知扩展清单|镜像标识不合法|服务地址必须|必须是 http\(s\):\/\/|参数不合法/.test(msg)) return 400;
   if (/OpenList \/api\/|OpenList 登录|OpenList .*返回 code=|Docker API |无法连接 Docker|connect ENOENT|本地 AI 程序|HTTP 4\d\d:|HTTP 5\d\d:|fetch failed|ECONNREFUSED|ETIMEDOUT|ECONNRESET|登录失败|record not found|返回了非预期数据|不是合法 JSON/i.test(msg)) return 502;
@@ -207,5 +239,6 @@ function relativeWorkspacePath(abs) {
 module.exports = {
   config, state, save, update, uid, auth, ok, fail, wrap, appRoot: ROOT,
   safeWorkspacePath, relativeWorkspacePath, defaultState,
-  HttpError, badRequest, notFound, upstream, inferStatus,
+  HttpError, badRequest, notFound, conflict, upstream, inferStatus,
+  resolveImage, imageCandidates,
 };

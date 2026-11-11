@@ -10,7 +10,7 @@ const docker = require('./dockerApi');
 const remoteDocker = require('./remoteDocker');
 const dbgateSync = require('./dbgateSync');
 const proxyModule = require('./proxy');
-const { config } = require('./core');
+const { config, imageCandidates } = require('./core');
 
 const LABEL = 'devplatform.ext';
 let _statusCache = { at: 0, value: null };
@@ -108,7 +108,9 @@ async function resolveId(inst) {
 async function install(inst, manifest, rendered) {
   const containerName = `dp-ext-${inst.name}`;
   const volumeName = `dp-ext-${inst.name}-data`;
-  const image = `${inst.image}:${inst.tag}`;
+  // v0.3.6：镜像可能被加速源拒绝，回退成功后要同步更新实际使用的镜像引用。
+  let imageRef = inst.image;
+  let image = `${imageRef}:${inst.tag}`;
   const dynamic = manifest.dynamicEnv === 'dbgate-connections' ? dbgateSync.connectionsEnv().env : [];
   // 单个容器代理 > Docker 代理 > 全局代理：把结果注入容器环境，
   // 远程安装时同一份 env 走 600 权限的 --env-file，不出现在命令行里。
@@ -147,9 +149,25 @@ async function install(inst, manifest, rendered) {
   const existing = await findContainer(inst);
   if (existing) throw new Error(`同名容器已存在：${containerName}，请先卸载该实例或在 Docker 中手工清理`);
 
-  if (!(await docker.imageExists(inst.image, inst.tag))) {
+  if (!(await docker.imageExists(imageRef, inst.tag))) {
     // 镜像未在本地时才拉取；内网离线可先 docker load 导入，再在平台里安装。
-    await docker.pullImage(inst.image, inst.tag);
+    // 加速源拒绝命名空间镜像（denied / manifest unknown）时自动回退官方镜像。
+    const candidates = imageCandidates(manifest.image, config.dockerImagePrefix);
+    let pulled = false;
+    let lastError = null;
+    for (const ref of candidates) {
+      try {
+        await docker.pullImage(ref, inst.tag);
+        imageRef = ref;
+        image = `${ref}:${inst.tag}`;
+        pulled = true;
+        break;
+      } catch (e) {
+        lastError = e;
+        if (!/denied|manifest unknown|not found|unauthorized|no such image|拉取镜像失败|Docker API/i.test(String(e.message))) break;
+      }
+    }
+    if (!pulled) throw (lastError || new Error('镜像拉取失败'));
   }
 
   const spec = {
@@ -180,7 +198,7 @@ async function install(inst, manifest, rendered) {
   }
   const healthy = await waitTcp(inst.host, inst.port, 60000);
   return {
-    containerId: id, containerName, volumeName, healthy,
+    containerId: id, containerName, volumeName, healthy, image: imageRef,
     detail: healthy ? '容器运行中，端口可连通' : '容器已启动，但 60 秒内端口未就绪（可看日志）',
   };
 }

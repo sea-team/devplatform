@@ -82,7 +82,28 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
-note(html.includes('?v=20261110g'), '静态资源版本已升到 20261110g');
+note(html.includes('?v=20261111a'), '静态资源版本已升到 20261111a');
+
+// v0.3.6：Git 源编辑、路径条、服务器轮询、409 冲突提示与 Docker 分区接线。
+note(html.includes('id="gitsrc-cancel"') && html.includes('id="gitsrc-form-title"')
+  && app.includes('data-gitsrc-op="edit"') && app.includes("method: 'PUT'"),
+'外部 Git 源具备编辑态与 PUT 更新链路');
+note(html.includes('id="storage-breadcrumb"') && html.includes('id="server-poll-interval"')
+  && html.includes('id="clone-conflict"'),
+'宝塔式路径条、服务器自动刷新控件与克隆冲突提示区齐全');
+note(html.includes('id="docker-owned-only"') && html.includes('id="docker-copy-diag"')
+  && html.includes('data-dk-tpl="lnmp"') && html.includes('id="docker-image-prefix"'),
+'Docker 六分区的筛选 / 设置 / 模板库 / 镜像源控件齐全');
+note(app.includes('function pathBarHtml') && app.includes('function bindPathBar')
+  && app.includes('data-ol-dir') && app.includes('dblclick') && app.includes('fs-pathbar'),
+'本地文件浏览与远程文件管理共用路径条、目录双击进入');
+note(app.includes('restartServerPolling') && app.includes('serverPollTick')
+  && app.includes('hideInput(true)'),
+'服务器状态定时刷新与路径条回车确认已接线');
+note(app.includes("status === 409 ? '操作冲突'") && app.includes('clone-conflict'),
+'409 操作冲突有专门分类与常驻提示，不再显示成 500');
+note(app.includes('resolveImage') === false && app.includes('imagePrefix'),
+'镜像加速前缀在设置页与镜像页可见');
 
 // v0.3.4：环境适配中心（自动识别 / 体检 / 自动处置 / 档案切换）。
 note(sections.includes('environment') && html.includes('data-view="environment"')

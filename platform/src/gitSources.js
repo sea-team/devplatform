@@ -19,7 +19,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { config, state, update, uid, safeWorkspacePath, relativeWorkspacePath } = require('./core');
+const { config, state, update, uid, safeWorkspacePath, relativeWorkspacePath, HttpError } = require('./core');
 const { httpJSON, sshExec } = require('./integrations');
 const proxyModule = require('./proxy');
 const environment = require('./environment');
@@ -347,6 +347,29 @@ function shQuote(value) {
 }
 
 /**
+ * v0.3.6：工作区同名目录冲突属于「用户可自行处理」的业务冲突，不是服务端异常。
+ * 以前统一抛普通 Error → wrap() 兜底 500，前端显示成「服务端异常」让人以为程序坏了。
+ * 现在返回 409 + 明确指引：若已是完整 .git 仓库，直接打开即可；若是上次失败的
+ * 残留目录，改名或清理后重试。SSH 宿主机通道与本地通道共用同一份提示。
+ */
+function cloneTargetExists(target, localName = '', known = null) {
+  const name = localName || path.posix.basename(String(target).replace(/\/+$/, ''));
+  let complete = known;
+  if (complete === null) {
+    // 宿主机路径在容器内不可见，无法判断是否为完整仓库。
+    try { complete = fs.existsSync(path.join(target, '.git')); } catch { complete = null; }
+  }
+  const done = '工作区里已存在同名完整仓库（含 .git），说明之前已克隆成功，可直接到「仓库列表 / 在线 IDE」打开；如需重新克隆，请换一个仓库名或先删除该目录。';
+  const partial = '工作区里已有同名目录但不是完整 Git 仓库（可能是上次克隆中断留下的残留），请换一个仓库名，或到「存储 / 文件」清理该目录后重试。';
+  const unknown = '工作区里已存在同名目录。若之前已克隆成功，请直接到「仓库列表 / 在线 IDE」打开；否则换一个仓库名或清理该目录后重试。';
+  return new HttpError(409, `目录已存在：${name}`, {
+    errorCode: 'WORKSPACE_TARGET_EXISTS',
+    complete,
+    hint: complete === true ? done : complete === false ? partial : unknown,
+  });
+}
+
+/**
  * 容器内没有 Git 时的降级通道：借已登记的 SSH 宿主机执行同一条 git clone。
  * 工作区是 bind mount（HOST_WORKSPACE_DIR），宿主机写入后容器内立即可见。
  * 凭据沿用 -c http.extraHeader（不写 .git/config），错误输出统一脱敏。
@@ -371,7 +394,7 @@ async function cloneViaSshHost({ args, resolved, secrets, hostTarget, server }) 
   const result = await sshExec(server, command, 300000);
   const text = scrub(`${result.stdout || ''}${result.stderr || ''}`.trim(), secrets);
   if (result.code !== 0) {
-    if (/TARGET_EXISTS/.test(text)) throw new Error(`目录已存在：${hostTarget}`);
+    if (/TARGET_EXISTS/.test(text)) throw cloneTargetExists(hostTarget);
     throw new Error(`宿主机 git clone 失败（exit=${result.code}）：${text.slice(-800) || '无输出'}`);
   }
   return { gitVersion: probe.stdout.trim(), output: text.slice(-200) };
@@ -385,7 +408,7 @@ async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId,
   const repoName = String(name || path.basename(url, '.git')).replace(/[^A-Za-z0-9_.-]/g, '-');
   if (!repoName || repoName === '.' || repoName === '..') throw new Error('仓库名不合法');
   const target = safeWorkspacePath(repoName);
-  if (fs.existsSync(target)) throw new Error(`目录已存在：${repoName}`);
+  if (fs.existsSync(target)) throw cloneTargetExists(target, repoName);
 
   // 本次表单直填的凭据优先于已登记源，且不写入 state.json。
   const inlineUser = String(username || '').trim().slice(0, 80);

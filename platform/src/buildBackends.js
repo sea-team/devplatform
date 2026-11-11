@@ -15,7 +15,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
-const { config, state } = require('./core');
+const { config, state, resolveImage } = require('./core');
 const { sshExec, sftpPut } = require('./integrations');
 const remoteOps = require('./remoteOps');
 const remoteDocker = require('./remoteDocker');
@@ -132,7 +132,7 @@ async function runBuild({ backend, image, script, abs, artifact, buildId, onData
     const rel = path.relative(path.resolve(config.workspaceDir), abs).split(path.sep).join('/');
     const hostPath = config.hostWorkspaceDir ? path.posix.join(config.hostWorkspaceDir, rel) : abs;
     return runContainer({
-      image: `${config.dockerImagePrefix || ''}${image}`, hostPath, script,
+      image: resolveImage(image, config.dockerImagePrefix), hostPath, script,
       name: `dp-build-${buildId}`, onData, timeoutMs,
     });
   }
@@ -162,7 +162,7 @@ async function runRemoteBuild({ image, script, abs, artifact, buildId, onData, t
   const workDir = `${base}/work`;
   const localTar = path.join(os.tmpdir(), `dp-build-${buildId}.tar.gz`);
   const localOut = path.join(os.tmpdir(), `dp-build-${buildId}-artifact.tar.gz`);
-  const fullImage = `${config.dockerImagePrefix || ''}${image}`;
+  const fullImage = resolveImage(image, config.dockerImagePrefix);
 
   onData(`[ssh] 目标服务器 ${server.name} (${server.host})\n`);
   await runProcess('tar', ['-czf', localTar, '-C', abs, '.'], { cwd: abs, onData, timeoutMs: 300000 });

@@ -14,6 +14,7 @@ const proxyModule = require('./proxy');
 const crypto = require('crypto');
 const {
   config, state, update, uid, safeWorkspacePath, relativeWorkspacePath,
+  resolveImage, imageCandidates, upstream,
 } = require('./core');
 const catalog = require('./catalog');
 const runtime = require('./extRuntime');
@@ -262,7 +263,8 @@ async function createInstance(body = {}) {
 
   const inst = {
     id: uid('ext'), catalogId: manifest.id, name, mode,
-    image: `${config.dockerImagePrefix || ''}${manifest.image}`, tag,
+    // v0.3.6：按镜像命名空间自动拼接加速器前缀，避免 library/dbgate/dbgate 被源站拒绝。
+    image: resolveImage(manifest.image, config.dockerImagePrefix), tag,
     port, internalPort: manifest.internalPort, host, user, dbName,
     secrets: { PASSWORD: password },
     envKey: manifest.envKey, status: 'installing',
@@ -295,6 +297,11 @@ async function createInstance(body = {}) {
   } catch (e) {
     // 安装失败不留半成品记录，避免用户反复点安装时撞名 / 撞端口。
     update((s) => { s.extensions = (s.extensions || []).filter((x) => x.id !== inst.id); });
+    if (mode === 'docker' && /denied|manifest unknown|拉取镜像失败|Docker API|no such image/i.test(String(e.message))) {
+      throw upstream(e.message, {
+        hint: `镜像源拒绝或找不到镜像。当前加速前缀：${config.dockerImagePrefix || '（未设置，直连 Docker Hub）'}。平台已自动尝试回退到原始镜像；若仍失败，可在 .env 里把 DOCKER_IMAGE_PREFIX 改成可用的加速源或直接留空。`,
+      });
+    }
     throw e;
   }
   // 非 DbGate 实例变化后同步连接列表（已安装 DbGate 时自动重建其容器）。

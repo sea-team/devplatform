@@ -2072,5 +2072,46 @@ node scripts/api-sweep.js --base http://10.0.0.246:9000 --json
 | 文件 CRUD | `mkdir → list → rename → list → remove` 全部 200；最终工作区只剩原有 `smoke-test`，测试目录已清理 |
 | 前端资源 | `?v=20261110g`，页面含 `#storage-degraded` 降级提示区 |
 
-> **本机 `127.0.0.1:9000` 仍是 0.2.0 的旧 `platform/dist/devplatform.exe`**（SEA 单文件把 bundle 注入在 exe 内，外部 `bundle.cjs` 更新不影响它）。对它跑同一巡检仍有 17 个 500 / 113 个错误体缺结构化 status。若日常访问的是本机地址，需要 `npm run build` 重新生成 exe 并重启该进程；远端实例已不受影响。
-> v0.3.5 未打 tag、未触发 Release。
+> 以上是 v0.3.5 当时的实测记录。v0.3.5 已于 2026-11-11 补打 tag 并发布 Release；本机 `127.0.0.1:9000` 也已重编译升级（SEA 单文件内部 bundle 必须 `npm run build` 才会更新），见 §33。
+
+---
+
+## 33. v0.3.6：交互打磨、镜像源治理与 Docker 分区重构
+
+### 33.1 `10.0.0.246` 现场排查结论
+
+| 现象 | 实际原因 |
+|---|---|
+| 克隆报 `{"ok":false,"error":"目录已存在：secure","status":500}` | 宿主 `/data/platform/workspace/secure` 在 03:45 已克隆成功（含 `.git`、`app/`、`web/` 等完整内容），用户再次点了克隆。真正的问题是**错误分类**：这是业务冲突，却被 `wrap()` 兜底成 500，提示也没告诉用户「已经成功了，直接去打开」 |
+| 安装 DbGate 报 `Docker API ... → 500: {"message":"denied"}` | 远端 `.env` 为 `DOCKER_IMAGE_PREFIX=docker.m.daocloud.io/library/`，与清单镜像 `dbgate/dbgate` 直接拼接成 `.../library/dbgate/dbgate`。`library/` 只适用于 Docker Hub 官方单段镜像，命名空间镜像必须由平台自动去掉 |
+| Git 源「不支持编辑」 | 后端 `PUT /api/git-sources/:id` 与 `updateSource()` 一直存在，缺的只是前端的编辑入口与编辑态 |
+
+### 33.2 修复
+
+- **克隆冲突**：`gitSources.js` 抛 `HttpError(409)`，带 `WORKSPACE_TARGET_EXISTS` code 与 `hint`；本地通道会检查 `.git` 判断「完整仓库 / 失败残留」，SSH 宿主机通道给中性提示。前端克隆页增加常驻冲突提示区与「打开仓库列表 / 在线 IDE」按钮，成功提示也明确指向入口。`core.js` 新增 `conflict()` 与 `inferStatus` 的 409 兜底，`api()` 增加「操作冲突」分类。
+- **Git 源编辑**：列表加「编辑」按钮，回填名称 / 类型 / 地址 / 认证方式 / 用户名；凭据栏留空表示沿用原值（前端直接不提交该字段，避免把脱敏值或空串写回 `state.json`），标题与按钮切换为「保存修改」，可随时「取消编辑」。内置源仍由 `.env` 管理，不提供编辑入口。
+- **镜像源治理**（`core.js` 新增 `resolveImage()` / `imageCandidates()`）：按镜像名自动决定是否补 `library/`，自带 registry 域名的镜像（ghcr.io 等）不加速；扩展安装、镜像拉取、构建后端三处统一接入。拉取遇 `denied / manifest unknown` 自动回退原始 Docker Hub 镜像，并把实际使用的镜像回写实例；失败时给出带当前前缀的可操作 hint。`/api/docker/overview` 新增 `imagePrefix` 字段，设置页与镜像页直接显示当前加速源。
+- **宝塔式路径条**（`pathBarHtml()` / `bindPathBar()`，本地文件浏览与远程 SFTP 共用）：面包屑每段可点击跳转，点条内空白处或「输入」切换为可编辑输入框（默认全选、回车确认、Esc 取消、失焦确认），返回按钮直达上一级。本地文件列表目录行改为**双击进入**，移除每行「进入」按钮。
+- **服务器状态定时刷新**：默认 15 秒，可选 10/15/30/60 秒或关闭（存 `localStorage`）；只在服务器页激活、标签页可见、上一轮已结束时请求，切回前台立即补一次，失败不弹 toast；列表刷新后自动补拉状态，避免满屏「—」。
+- **Docker 分区重做**：容器列表改为固定列宽 + 单行截断，端口映射只显示前两条并附总数、完整列表放 `title`，创建时间独立成列，解决超长端口把其它列挤成竖排；新增「仅平台自建」筛选与统计 chips。设置页由裸 JSON 改为分组键值卡 + 原始诊断折叠 + 复制，另有自动刷新间隔与表格密度偏好。镜像 / 仓库页加快捷镜像、当前加速前缀、拉取结果与「复制引用」；存储卷与网络页加高级参数生成命令、筛选、创建时间 / 子网 / 已接入容器数 / 内置网络标识与复制挂载点；容器编排页加 4 套内置模板、YAML 基础校验、载入 / 复制 / 下载。
+
+### 33.3 兼容与边界
+
+- 旧的 `DOCKER_IMAGE_PREFIX=.../library/` 配置**无需修改**，平台会自动规范化；留空则直连 Docker Hub。
+- 编排模板仍只登记文本、不在平台内执行；卷 / 网络的高级参数生成命令由用户自行到服务器执行，平台创建接口仍只接受名称。
+- Docker 面板偏好、刷新间隔只影响当前浏览器；安全策略（非平台容器只读 + 二次确认 + 审计）不变。
+- 前端资源版本 `?v=20261111a`；`check-frontend.js` 同步更新版本断言并新增对模拟 DOM 的防御。
+
+### 33.4 实测（`10.0.0.246` 与本机，2026-11-11）
+
+| 验证项 | 结果 |
+|---|---|
+| 部署 / 版本 | `remote.js deploy 10.0.0.246` 成功；远端与本机 `/api/health` 均为 `0.3.6`；本机 SEA exe 已重编译并重启 |
+| 克隆冲突 | 手动复现同名 `secure` → `409 / WORKSPACE_TARGET_EXISTS`，hint 明确指出「已存在同名完整仓库，可直接打开」 |
+| Git 源编辑 | `PUT /api/git-sources/:id` 回写成功，密码脱敏值保持 `******03` 未被清空 |
+| DbGate 镜像 | `POST /api/docker/images/pull` → `docker.m.daocloud.io/dbgate/dbgate:latest`，`usedFallback=false`，不再出现 `library/dbgate/dbgate` 的 denied |
+| Docker 元数据 | `/api/docker/overview` 返回 `imagePrefix`；69 个卷带创建时间 / 标签、16 个网络带子网 / 网关 / 已接入容器数 |
+| 全接口巡检 | 本机 138 项、远端 `--full` 147 项，均 **0 个 500**、0 超时、0 降级异常、0 错误体缺 status |
+| 自检 | `npm run check`、`check-frontend.js`、四套冒烟（60 / 31 / 28 / 33 项）、release.yml YAML 解析全部通过 |
+
+> v0.3.6 只提交到 `main`，未打 tag、未触发 Release；需要发版时补一个 `v0.3.6` tag 即可（release notes 已包含本版说明）。

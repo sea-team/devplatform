@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261110g" />
+  <link rel="stylesheet" href="/style.css?v=20261111a" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -189,6 +189,7 @@
               <input type="hidden" name="repoId" id="clone-repo-id" value="" />
               <div class="form-actions"><button class="btn btn-primary" type="submit">克隆到工作区</button></div>
             </form>
+            <div class="notice warn" id="clone-conflict" hidden></div>
             <div class="notice">
               <b>凭据安全</b>：本次填写的账号密码 / Token 只在 <code>git clone</code> 进程参数里出现，通过临时 <code>http.extraHeader</code> 传递，<b>不会写入 .git/config、不会落到工作区、也不会保存进 state.json</b>；失败日志会自动脱敏。SSH 地址（<code>git@</code> / <code>ssh://</code>）走本机 SSH 密钥，账号密码无效。<br />
               <b>代理优先级</b>：本次指定 &gt; 单个仓库代理 &gt; Git Host 匹配规则 &gt; Git 分组代理 &gt; 全局代理；<code>direct</code> 表示强制直连。更多说明见「代理配置」页。<br />
@@ -207,7 +208,7 @@
             <button class="subnav-btn active" data-open-view="gitsrc">外部 Git 源</button>
           </div>
           <div class="card">
-            <div class="card-head"><h2>登记外部 Git 源</h2><span class="muted">GitHub / 自建 Gitea / GitLab</span></div>
+            <div class="card-head"><h2 id="gitsrc-form-title">登记外部 Git 源</h2><span class="muted">GitHub / 自建 Gitea / GitLab</span></div>
             <div class="hint" id="gitsrc-hint">平台自带 Gitea 已内置；登记外部源后，仓库列表会一并聚合，可直接克隆到工作区并用在线 IDE 开发。支持 Token 与账号密码两种认证方式。</div>
             <form id="gitsrc-form" class="form" style="margin-top:14px">
               <div class="grid-2">
@@ -226,17 +227,18 @@
               </div>
               <div class="grid-2">
                 <label>用户名（账号密码方式必填，Token 方式可选）<input name="username" id="gitsrc-username" placeholder="GitHub 账号 / Gitea 用户名" autocomplete="off" /></label>
-                <label id="gitsrc-token-field">访问令牌 Token<input name="token" type="password" placeholder="ghp_... / Gitea Token / GitLab PAT" autocomplete="new-password" /></label>
+                <label id="gitsrc-token-field">访问令牌 Token<input name="token" id="gitsrc-token" type="password" placeholder="ghp_... / Gitea Token / GitLab PAT" autocomplete="new-password" /></label>
               </div>
               <div class="grid-2" id="gitsrc-password-fields" hidden>
-                <label>密码 / 个人访问令牌<input name="password" type="password" placeholder="GitHub 必须填 PAT（已停用密码登录）" autocomplete="new-password" /></label>
+                <label>密码 / 个人访问令牌<input name="password" id="gitsrc-password" type="password" placeholder="GitHub 必须填 PAT（已停用密码登录）" autocomplete="new-password" /></label>
               </div>
               <div class="notice">
                 <b>Token 方式</b>：GitHub 用 <code>Bearer</code>、GitLab 用 <code>PRIVATE-TOKEN</code>、Gitea 用 <code>token</code> 头，权限最完整。<br />
                 <b>账号密码方式</b>：统一走 HTTP Basic 调用 REST API 与克隆；自建 Gitea / GitLab 可直接填账号密码，GitHub 请在密码栏填 PAT（GitHub 自 2021 起停用密码认证）。<br />
-                凭据只写入本机 <code>data/state.json</code>（600 权限），列表接口一律脱敏；登记后点「测试连通」验证。
+                凭据只写入本机 <code>data/state.json</code>（600 权限），列表接口一律脱敏；登记后点「测试连通」验证。<br />
+                <b>编辑已登记的源</b>：点列表里的「编辑」回填表单，名称 / 类型 / 地址 / 认证方式都能改；凭据栏留空表示沿用原值（列表里显示的是脱敏值，不会写回）。
               </div>
-              <div class="form-actions"><button class="btn btn-primary" type="submit">登记 Git 源</button></div>
+              <div class="form-actions"><button class="btn btn-primary" type="submit" id="gitsrc-submit">登记 Git 源</button><button class="btn btn-ghost" type="button" id="gitsrc-cancel" hidden>取消编辑</button></div>
             </form>
           </div>
           <div class="card">
@@ -271,13 +273,24 @@
           <div class="stat-grid" id="docker-stat-grid"></div>
           <div class="grid-2">
             <div class="card">
-              <div class="card-head"><h2>设置 / 端点</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
-              <div class="hint">当前目标、Docker 版本、安全策略与离线镜像目录；切换目标后所有子页会同步刷新。</div>
-              <pre class="log" id="docker-settings" style="margin-top:12px">—</pre>
+              <div class="card-head"><h2>端点 / 镜像源</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
+              <div class="hint">按宝塔「设置」页的方式分组展示关键信息；切换目标后所有子页同步刷新。</div>
+              <div class="dk-kv" id="docker-settings" style="margin-top:12px">—</div>
+              <details class="dk-raw" style="margin-top:12px"><summary>查看原始诊断信息</summary><pre class="log" id="docker-raw">—</pre></details>
+              <div class="form-actions"><button class="btn btn-sm" type="button" id="docker-copy-diag">复制诊断信息</button></div>
             </div>
             <div class="card">
-              <div class="card-head"><h2>安全策略</h2><span class="muted">只读 + 二次确认</span></div>
-              <div class="arch">
+              <div class="card-head"><h2>面板偏好 / 安全策略</h2><span class="muted">偏好只存本机浏览器</span></div>
+              <div class="grid-2" style="margin-top:12px">
+                <label>数据自动刷新<select id="docker-poll-interval">
+                  <option value="0">关闭</option><option value="15000">15 秒</option>
+                  <option value="30000">30 秒</option><option value="60000">60 秒</option>
+                </select></label>
+                <label>表格密度<select id="docker-density">
+                  <option value="normal">标准</option><option value="compact">紧凑</option>
+                </select></label>
+              </div>
+              <div class="arch" style="margin-top:12px">
                 <div class="arch-row"><b>平台容器</b><span>带 devplatform.ext 标签，可直接启停 / 删除</span></div>
                 <div class="arch-row"><b>其它容器</b><span>默认只读，写操作需两次确认并逐条审计</span></div>
                 <div class="arch-row"><b>镜像 / 卷 / 网络</b><span>删除一律要求确认；不提供任意命令执行入口</span></div>
@@ -305,16 +318,18 @@
           </div>
           <div class="card">
             <div class="card-head"><h2>容器</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
-            <div class="hint">带 devplatform.ext 标签的是平台自建容器，可直接管理；其它容器默认只读，启停 / 删除需二次确认。</div>
+            <div class="hint">带 devplatform.ext 标签的是平台自建容器，可直接管理；其它容器默认只读，启停 / 删除需二次确认。端口映射超长时只显示前两条，鼠标悬停可看完整列表。</div>
             <div class="row gap wrap" style="margin-top:12px">
-              <input id="docker-container-filter" placeholder="按名称 / 镜像 / 状态筛选" style="max-width:280px" />
-              <select id="docker-container-state" style="max-width:160px">
+              <input id="docker-container-filter" placeholder="按名称 / 镜像 / 状态筛选" style="max-width:260px" />
+              <select id="docker-container-state" style="max-width:150px">
                 <option value="all">全部状态</option>
                 <option value="running">仅运行中</option>
                 <option value="stopped">仅已停止</option>
               </select>
+              <label class="check"><input type="checkbox" id="docker-owned-only" /> 仅平台自建</label>
               <span class="muted small" id="docker-container-count">—</span>
             </div>
+            <div class="dk-chips" id="docker-container-summary" style="margin-top:8px"></div>
             <div id="docker-containers" class="table-wrap" style="margin-top:12px"></div>
           </div>
           <div class="card" id="docker-log-card" hidden>
@@ -337,14 +352,24 @@
           <div class="grid-2">
             <div class="card">
               <div class="card-head"><h2>从仓库拉取镜像</h2><span class="muted">registry → 镜像名:标签</span></div>
+              <div class="dk-chips" style="margin:10px 0">
+                <span class="muted small">常用镜像</span>
+                <button class="chip" type="button" data-dk-quick-image="nginx">nginx</button>
+                <button class="chip" type="button" data-dk-quick-image="mysql">mysql</button>
+                <button class="chip" type="button" data-dk-quick-image="redis">redis</button>
+                <button class="chip" type="button" data-dk-quick-image="postgres">postgres</button>
+                <button class="chip" type="button" data-dk-quick-image="dbgate/dbgate">DbGate</button>
+              </div>
               <form id="docker-pull-form" class="form">
                 <div class="grid-2">
                   <label>镜像名<input name="image" placeholder="mysql / nginx / ghcr.io/org/app" required /></label>
                   <label>标签<input name="tag" placeholder="latest" value="latest" /></label>
                 </div>
-                <div class="hint">拉不动时可在「代理配置」页设置 Docker 分组代理；也可在 <code>.env</code> 配 <code>DOCKER_IMAGE_PREFIX</code> 走加速器。</div>
+                <div class="dk-kv" id="docker-image-prefix" style="margin-top:10px"></div>
+                <div class="hint" style="margin-top:8px">官方镜像会自动补 <code>library/</code>，命名空间镜像（如 <code>dbgate/dbgate</code>）不会；加速源拒绝时平台自动回退 Docker Hub 原始镜像。也可在「代理配置」页设置 Docker 分组代理。</div>
                 <div class="form-actions"><button class="btn btn-primary btn-sm" type="submit">拉取镜像</button></div>
               </form>
+              <div class="notice" id="docker-pull-result" hidden></div>
             </div>
             <div class="card">
               <div class="card-head"><h2>离线导入镜像</h2><span class="muted">适合无外网环境</span></div>
@@ -358,7 +383,11 @@
           </div>
           <div class="card">
             <div class="card-head"><h2>本地镜像</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
-            <div class="hint">「导出」把镜像打包成 tar 下载；删除镜像需二次确认，正在被容器使用的镜像无法删除。</div>
+            <div class="hint">「导出」把镜像打包成 tar 下载；「复制引用」可直接粘到编排 YAML 或 docker run。删除需二次确认。</div>
+            <div class="row gap wrap" style="margin-top:10px">
+              <input id="docker-image-filter" placeholder="按标签 / 仓库 / ID 筛选" style="max-width:280px" />
+              <span class="muted small" id="docker-image-count">—</span>
+            </div>
             <div id="docker-images" class="table-wrap" style="margin-top:12px"></div>
           </div>
         </section>
@@ -374,17 +403,41 @@
             <button class="subnav-btn" data-open-view="docker-networks">网络</button>
             <button class="subnav-btn" data-open-view="docker-compose">容器编排</button>
           </div>
-          <div class="card">
-            <div class="card-head"><h2>创建存储卷</h2><span class="muted">持久化数据，与容器生命周期解耦</span></div>
-            <form id="docker-volume-form" class="form row">
-              <input name="name" placeholder="新卷名称，例如 dp-mysql-data" required />
-              <button class="btn btn-primary" type="submit">创建卷</button>
-            </form>
-            <div class="notice">命名卷由 Docker 管理，删除后数据不可恢复；平台自建扩展的卷名一般以 <code>dp-ext-</code> 开头。</div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2>创建存储卷</h2><span class="muted">持久化数据，与容器生命周期解耦</span></div>
+              <form id="docker-volume-form" class="form">
+                <label>卷名称<input name="name" placeholder="例如 dp-mysql-data" required /></label>
+                <div class="grid-2" style="margin-top:10px">
+                  <label>驱动（高级）<select name="driver" id="docker-volume-driver">
+                    <option value="local">local（默认）</option><option value="nfs">nfs</option><option value="tmpfs">tmpfs</option>
+                  </select></label>
+                  <label>标签（高级）<input name="label" id="docker-volume-label" placeholder="env=prod" /></label>
+                </div>
+                <div class="hint" style="margin-top:8px">平台创建使用默认驱动；高级参数会生成可直接复制到服务器执行的命令，不会静默丢弃。</div>
+                <div class="form-actions">
+                  <button class="btn btn-primary btn-sm" type="submit">创建卷</button>
+                  <button class="btn btn-sm" type="button" id="docker-volume-copy-cmd">复制高级命令</button>
+                </div>
+                <pre class="log short" id="docker-volume-cmd" style="margin-top:10px">docker volume create &lt;卷名&gt;</pre>
+              </form>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>使用说明</h2></div>
+              <div class="arch">
+                <div class="arch-row"><b>命名卷</b><span>由 Docker 管理，删除后数据不可恢复</span></div>
+                <div class="arch-row"><b>平台自建</b><span>卷名一般以 dp-ext- 开头，对应扩展实例的数据目录</span></div>
+                <div class="arch-row"><b>挂载点</b><span>列表里可一键复制宿主机真实路径，用于备份与离线迁移</span></div>
+                <div class="arch-row"><b>删除保护</b><span>所有删除都要二次确认，正在被容器使用的卷不会被删</span></div>
+              </div>
+            </div>
           </div>
           <div class="card">
             <div class="card-head"><h2>存储卷列表</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
-            <div class="hint">「挂载点」是宿主机上的真实路径，可用于备份与离线迁移。</div>
+            <div class="row gap wrap" style="margin-top:10px">
+              <input id="docker-volume-filter" placeholder="按卷名 / 驱动筛选" style="max-width:280px" />
+              <span class="muted small" id="docker-volume-count">—</span>
+            </div>
             <div id="docker-volumes" class="table-wrap" style="margin-top:12px"></div>
           </div>
         </section>
@@ -400,16 +453,42 @@
             <button class="subnav-btn active" data-open-view="docker-networks">网络</button>
             <button class="subnav-btn" data-open-view="docker-compose">容器编排</button>
           </div>
-          <div class="card">
-            <div class="card-head"><h2>创建网络</h2><span class="muted">同一网络内的容器可用服务名互访</span></div>
-            <form id="docker-network-form" class="form row">
-              <input name="name" placeholder="新网络名称，例如 dp-net" required />
-              <button class="btn btn-primary" type="submit">创建网络</button>
-            </form>
-            <div class="notice">默认的 <code>bridge</code> / <code>host</code> / <code>none</code> 属于 Docker 内置网络，不能删除。</div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2>创建网络</h2><span class="muted">同一网络内容器可用服务名互访</span></div>
+              <form id="docker-network-form" class="form">
+                <label>网络名称<input name="name" placeholder="例如 dp-net" required /></label>
+                <div class="grid-2" style="margin-top:10px">
+                  <label>驱动（高级）<select name="driver" id="docker-network-driver">
+                    <option value="bridge">bridge（默认）</option><option value="overlay">overlay</option><option value="macvlan">macvlan</option>
+                  </select></label>
+                  <label>子网（高级）<input name="subnet" id="docker-network-subnet" placeholder="172.20.0.0/16" /></label>
+                </div>
+                <label style="margin-top:10px"><span class="check"><input type="checkbox" name="internal" id="docker-network-internal" /> 仅限内部通信（internal）</span></label>
+                <div class="hint" style="margin-top:8px">平台创建使用默认参数；子网 / 驱动 / internal 会生成可复制的命令，到目标服务器执行即可。</div>
+                <div class="form-actions">
+                  <button class="btn btn-primary btn-sm" type="submit">创建网络</button>
+                  <button class="btn btn-sm" type="button" id="docker-network-copy-cmd">复制高级命令</button>
+                </div>
+                <pre class="log short" id="docker-network-cmd" style="margin-top:10px">docker network create &lt;网络名&gt;</pre>
+              </form>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>使用说明</h2></div>
+              <div class="arch">
+                <div class="arch-row"><b>内置网络</b><span>bridge / host / none 由 Docker 预置，不能删除，列表会单独标注</span></div>
+                <div class="arch-row"><b>子网 / 网关</b><span>自定义网段可避免与宿主机或 VPN 网段冲突</span></div>
+                <div class="arch-row"><b>已接入容器</b><span>列表显示当前接入容器数，删除前请确认没有在跑的服务</span></div>
+                <div class="arch-row"><b>删除保护</b><span>删除一律二次确认，动作写入操作审计</span></div>
+              </div>
+            </div>
           </div>
           <div class="card">
             <div class="card-head"><h2>网络列表</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
+            <div class="row gap wrap" style="margin-top:10px">
+              <input id="docker-network-filter" placeholder="按名称 / 驱动 / 子网筛选" style="max-width:280px" />
+              <span class="muted small" id="docker-network-count">—</span>
+            </div>
             <div id="docker-networks" class="table-wrap" style="margin-top:12px"></div>
           </div>
         </section>
@@ -426,19 +505,33 @@
             <button class="subnav-btn active" data-open-view="docker-compose">容器编排</button>
           </div>
           <div class="card">
-            <div class="card-head"><h2>新增 Compose 编排模板</h2><span class="muted">只登记文本，不在平台内执行</span></div>
+            <div class="card-head"><h2>Compose 编排模板</h2><span class="muted">登记 / 校验 / 导出，不在平台内执行</span></div>
+            <div class="dk-chips" style="margin:10px 0">
+              <span class="muted small">快速套用</span>
+              <button class="chip" type="button" data-dk-tpl="lnmp">LNMP</button>
+              <button class="chip" type="button" data-dk-tpl="wordpress">WordPress</button>
+              <button class="chip" type="button" data-dk-tpl="redis">Redis</button>
+              <button class="chip" type="button" data-dk-tpl="postgres">PostgreSQL</button>
+              <button class="chip" type="button" data-dk-tpl="blank">清空</button>
+            </div>
             <form id="docker-template-form" class="form">
               <div class="grid-2">
                 <label>模板名称<input name="name" placeholder="lnmp" required /></label>
                 <label>说明<input name="description" placeholder="用途描述" /></label>
               </div>
-              <label>YAML 内容<textarea name="content" rows="9" placeholder="services:&#10;  web:&#10;    image: nginx:latest" required></textarea></label>
-              <div class="notice">为避免在平台上开放任意编排执行入口，模板仅作登记与查阅；实际部署请复制 YAML 到目标服务器执行，或在「扩展 / 数据库」页使用清单化安装。</div>
-              <div class="form-actions"><button class="btn btn-primary" type="submit">保存模板</button></div>
+              <label style="margin-top:10px">YAML 内容<textarea name="content" id="docker-template-content" rows="10" placeholder="services:&#10;  web:&#10;    image: nginx:latest" required></textarea></label>
+              <div class="notice" id="docker-yaml-check" style="margin-top:8px">填写 YAML 后会自动做基础检查（services 段、缩进、端口格式）。</div>
+              <div class="hint">模板只作登记与查阅；实际部署请复制 / 下载 YAML 到目标服务器执行，或在「扩展 / 数据库」页使用清单化安装。</div>
+              <div class="form-actions">
+                <button class="btn btn-primary btn-sm" type="submit">保存模板</button>
+                <button class="btn btn-sm" type="button" id="docker-tpl-copy">复制 YAML</button>
+                <button class="btn btn-sm" type="button" id="docker-tpl-download">下载 .yml</button>
+              </div>
             </form>
           </div>
           <div class="card">
             <div class="card-head"><h2>已保存的编排模板</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
+            <div class="hint">「载入」把模板回填到上方表单继续编辑；「复制 / 下载」用于到服务器执行。</div>
             <div id="docker-templates" class="table-wrap" style="margin-top:12px"></div>
           </div>
         </section>
@@ -476,12 +569,12 @@
             <div class="hint" id="storage-current-conn">当前连接加载中…</div>
             <div class="notice" id="storage-degraded" hidden>—</div>
             <form id="storage-path-form" class="row" style="margin-top:12px">
-              <input id="storage-path" value="/" placeholder="/" />
-              <button class="btn" type="submit">浏览</button>
-              <button class="btn btn-ghost" type="button" id="storage-up">上一级</button>
-              <button class="btn btn-ghost" type="button" id="storage-refresh">刷新目录</button>
+              <input id="storage-path" type="hidden" value="/" />
+              <div id="storage-breadcrumb" class="pathbar-slot"></div>
+              <button class="btn btn-ghost" type="button" id="storage-up" hidden>上一级</button>
+              <button class="btn btn-ghost btn-sm" type="button" id="storage-refresh">刷新</button>
             </form>
-            <div class="hint" id="storage-breadcrumb">/</div>
+            <div class="hint" style="margin-top:6px">点面包屑任意一段跳转；点路径条空白处或右侧「输入」可直接键入完整路径（回车确认、Esc 取消）；目录行双击进入，无需再点「进入」。</div>
             <div class="row gap wrap file-toolbar">
               <label class="check"><input type="checkbox" id="storage-select-all" /> 全选</label>
               <button class="btn btn-sm" data-ol-action="rename">重命名</button>
@@ -707,8 +800,21 @@
             <button class="subnav-btn" data-open-view="server-new">添加服务器</button>
           </div>
           <div class="card">
-            <div class="card-head"><h2>已登记服务器</h2><button class="btn btn-ghost btn-sm" data-reload="servers">刷新</button></div>
-            <div class="hint">每台服务器卡片可测试连通、打开 Web 终端、管理远程文件，并单独配置代理。</div>
+            <div class="card-head"><h2>已登记服务器</h2>
+              <div class="row gap" style="align-items:center">
+                <label class="muted" style="font-size:12px;white-space:nowrap">状态自动刷新
+                  <select id="server-poll-interval" style="width:auto;min-width:82px;padding:4px 8px;font-size:12px">
+                    <option value="10000">10 秒</option>
+                    <option value="15000">15 秒</option>
+                    <option value="30000">30 秒</option>
+                    <option value="60000">60 秒</option>
+                    <option value="0">关闭</option>
+                  </select>
+                </label>
+                <span class="muted" id="server-poll-at" style="font-size:12px"></span>
+                <button class="btn btn-ghost btn-sm" data-reload="servers">刷新列表</button>
+              </div></div>
+            <div class="hint">负载 / 内存 / 磁盘会按上方间隔自动轮询，切到后台标签时暂停；也可点卡片上的「检查状态」立即读取。终端、远程文件管理与代理配置仍按各自入口操作。</div>
           </div>
           <div id="server-list" class="server-grid"></div>
         </section>
@@ -1046,6 +1152,6 @@
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261110g"></script>
+  <script src="/app.js?v=20261111a"></script>
 </body>
 </html>

@@ -58,6 +58,10 @@ let selectedBuildId = null;
 let detectedPrograms = null;
 let detectedOnce = false;
 let serverCache = [];
+let serverPollTimer = null;
+let serverPollBusy = false;
+let gitsrcEditId = '';
+let gitsrcCache = [];
 
 function esc(value) {
   return String(value === undefined || value === null ? '' : value)
@@ -108,8 +112,9 @@ async function api(path, options = {}) {
     const status = Number(json.status || response.status);
     const prefix = status === 502 ? '上游服务不可用'
       : status === 404 ? '资源不存在'
-        : status === 400 ? '请求参数有误'
-          : status >= 500 ? '服务端异常' : '请求失败';
+        : status === 409 ? '操作冲突'
+          : status === 400 ? '请求参数有误'
+            : status >= 500 ? '服务端异常' : '请求失败';
     const hint = json.hint ? `（${String(json.hint).slice(0, 140)}）` : '';
     const err = new Error(`${prefix}：${json.error || `HTTP ${status}`}${hint}`);
     err.status = status;
@@ -742,16 +747,75 @@ function closeOpenlistConnectionForm() {
   $('#ol-conn-title').textContent = '新增连接';
 }
 
-function renderBreadcrumb(p) {
-  const parts = String(p || '/').split('/').filter(Boolean);
+/**
+ * v0.3.6 · 宝塔式路径条（本地文件浏览与远程 SFTP 文件管理共用）。
+ * 面包屑每段可点击跳转；点条内空白处或「输入」切换成可编辑输入框，
+ * 回车确认 / Esc 取消 / 失焦自动确认，输入框默认全选当前路径。
+ */
+function pathBarHtml(current) {
+  const p = '/' + String(current || '/').split('/').filter(Boolean).join('/');
+  const parts = p.split('/').filter(Boolean);
   let acc = '';
-  const links = ['<button class="btn btn-ghost btn-sm" data-ol-go="/">根目录</button>'];
+  const bits = ['<button type="button" class="pathbar-crumb" data-path="/">根目录</button>'];
   parts.forEach((part) => {
     acc += `/${part}`;
-    links.push(`<button class="btn btn-ghost btn-sm" data-ol-go="${esc(acc)}">${esc(part)}</button>`);
+    bits.push(`<span class="pathbar-sep">›</span><button type="button" class="pathbar-crumb" data-path="${esc(acc)}">${esc(part)}</button>`);
   });
-  $('#storage-breadcrumb').innerHTML = `<div class="row gap wrap">${links.join('')}</div>`;
-  $$('[data-ol-go]').forEach((b) => b.addEventListener('click', () => { currentStoragePath = b.dataset.olGo; loadStorage(); }));
+  bits.push('<span class="pathbar-sep">›</span>');
+  return `<div class="pathbar" data-role="pathbar">
+    <button type="button" class="pathbar-up" data-path-up title="上一级">←</button>
+    <div class="pathbar-crumbs" data-role="pathbar-crumbs" title="点击空白处可直接输入路径">${bits.join('')}</div>
+    <input class="pathbar-input" data-role="pathbar-input" value="${esc(p)}" spellcheck="false" hidden />
+    <button type="button" class="pathbar-edit" data-path-edit title="输入完整路径">输入</button>
+  </div>`;
+}
+
+function bindPathBar(root, { onGo, onUp }) {
+  const bar = root.querySelector('[data-role="pathbar"]');
+  if (!bar || bar.dataset.pathBound === '1') return;
+  bar.dataset.pathBound = '1';
+  const crumbs = bar.querySelector('[data-role="pathbar-crumbs"]');
+  const input = bar.querySelector('[data-role="pathbar-input"]');
+  input.dataset.current = input.value;
+  const showInput = () => {
+    input.value = input.dataset.current || input.value;
+    crumbs.hidden = true;
+    input.hidden = false;
+    input.focus();
+    input.select();
+  };
+  const hideInput = (commit) => {
+    if (input.hidden) return;
+    const value = String(input.value || '/').trim() || '/';
+    crumbs.hidden = false;
+    input.hidden = true;
+    if (commit && value !== input.dataset.current) onGo(value);
+    else input.value = input.dataset.current || value;
+  };
+  crumbs.addEventListener('click', (e) => {
+    const crumb = e.target.closest('[data-path]');
+    if (crumb) onGo(crumb.dataset.path);
+    else showInput();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); hideInput(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); hideInput(false); }
+  });
+  input.addEventListener('blur', () => hideInput(true));
+  const edit = bar.querySelector('[data-path-edit]');
+  if (edit) edit.addEventListener('click', (e) => { e.preventDefault(); showInput(); });
+  const up = bar.querySelector('[data-path-up]');
+  if (up) up.addEventListener('click', (e) => { e.preventDefault(); onUp(); });
+}
+
+function renderBreadcrumb(p) {
+  const box = $('#storage-breadcrumb');
+  if (!box) return;
+  box.innerHTML = pathBarHtml(p || '/');
+  bindPathBar(box, {
+    onGo: (v) => { currentStoragePath = v; loadStorage(); },
+    onUp: () => { currentStoragePath = pathParent(currentStoragePath); loadStorage(); },
+  });
 }
 
 function renderFileList(d) {
@@ -760,15 +824,15 @@ function renderFileList(d) {
   $('#storage-provider').textContent = `${d.provider || 'OpenList'} · ${d.total || 0} 项${d.write ? '' : ' · 只读'}`;
   $('#file-list').innerHTML = table(['', '名称', '大小', '类型', '修改时间', '操作'], storageState.files.map((f) => {
     const full = olJoin(currentStoragePath, f.name);
-    return `<tr>
+    return `<tr class="file-row${f.isDir ? ' is-dir' : ''}" data-ol-dir="${f.isDir ? esc(full) : ''}" ${f.isDir ? 'title="双击进入该目录"' : ''}>
       <td><input type="checkbox" data-ol-file="${esc(f.name)}" /></td>
-      <td>${f.isDir ? '📁' : '📄'} <b>${esc(f.name)}</b></td>
+      <td><span class="file-name">${f.isDir ? '📁' : '📄'} <b>${esc(f.name)}</b></span></td>
       <td>${f.isDir ? '-' : fmtSize(f.size)}</td>
       <td>${f.isDir ? '目录' : '文件'}</td>
       <td class="muted">${esc(fmtTime(f.modified))}</td>
       <td class="actions"><div class="ext-actions">
         ${f.isDir
-          ? `<button class="btn btn-sm" data-ol-enter="${esc(full)}">进入</button>`
+          ? ''
           : `<button class="btn btn-sm" data-ol-get="${esc(full)}">下载</button>
              <button class="btn btn-sm" data-ol-link="${esc(full)}">直链</button>`}
         <button class="btn btn-sm" data-ol-one-rename="${esc(full)}">重命名</button>
@@ -783,7 +847,12 @@ function renderFileList(d) {
     const all = $$('[data-ol-file]');
     $('#storage-select-all').checked = all.length > 0 && all.every((x) => x.checked);
   }));
-  $$('[data-ol-enter]').forEach((b) => b.addEventListener('click', () => { currentStoragePath = b.dataset.olEnter; loadStorage(); }));
+  // v0.3.6：目录双击进入（宝塔式），不再需要每行一个「进入」按钮。
+  $$('[data-ol-dir]').forEach((row) => row.addEventListener('dblclick', (e) => {
+    if (e.target.closest('button, input, a')) return;
+    const target = row.dataset.olDir;
+    if (target) { currentStoragePath = target; loadStorage(); }
+  }));
   $$('[data-ol-get]').forEach((b) => b.addEventListener('click', () => { window.open(olDownloadUrl(b.dataset.olGet), '_blank', 'noopener'); }));
   $$('[data-ol-link]').forEach((b) => b.addEventListener('click', () => olAction('link', [b.dataset.olLink])));
   $$('[data-ol-one-rename]').forEach((b) => b.addEventListener('click', () => olAction('rename', [b.dataset.olOneRename])));
@@ -1214,12 +1283,14 @@ async function loadServers() {
       try { await api(`/servers/${b.dataset.remove}`, { method: 'DELETE' }); toast('已删除'); loadServers(); }
       catch (e) { toast(e.message, true); }
     }));
+    // 列表重建后立刻补一次状态，避免用户看到一屏「—」。
+    serverPollTick();
   } catch (e) { $('#server-list').innerHTML = `<div class="card">${errorBlock(e.message)}</div>`; }
 }
 
-async function checkStatus(id) {
+async function checkStatus(id, silent = false) {
   const box = $(`#metrics-${CSS.escape(id)}`);
-  if (box) box.innerHTML = '<div class="muted">读取中…</div>';
+  if (box && !silent) box.innerHTML = '<div class="muted">读取中…</div>';
   try {
     const s = await api(`/servers/${id}/status`);
     if (!box) return;
@@ -1229,7 +1300,39 @@ async function checkStatus(id) {
       <div class="metric"><div class="k">磁盘</div><div class="v">${esc(s.disk.usagePct)}</div><div class="desc muted">${esc(s.cpuCores)} 核 · ${esc(s.containers.length)} 容器</div></div>`;
   } catch (e) {
     if (box) box.innerHTML = `<div class="muted" style="grid-column:1/-1;color:var(--red)">${esc(e.message)}</div>`;
-    toast(e.message, true);
+    if (!silent) toast(e.message, true);
+  }
+}
+
+/* v0.3.6：状态定时刷新。只在服务器页激活、标签页可见、上一轮已结束时才请求，
+   失败不弹 toast（避免每 15 秒刷屏），间隔可在本页选择并记住。 */
+const SERVER_POLL_KEY = 'dp_server_poll_ms';
+function serverPollMs() {
+  const raw = Number(localStorage.getItem(SERVER_POLL_KEY));
+  return Number.isFinite(raw) && raw >= 0 ? raw : 15000;
+}
+async function serverPollTick() {
+  if (document.hidden || serverPollBusy) return;
+  if (!['servers', 'server-new'].includes(currentView)) return;
+  const cards = serverCache.slice();
+  if (!cards.length) return;
+  serverPollBusy = true;
+  try { await Promise.allSettled(cards.map((s) => checkStatus(s.id, true))); }
+  finally { serverPollBusy = false; }
+  const at = $('#server-poll-at');
+  if (at) at.textContent = `最近 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
+}
+function restartServerPolling() {
+  if (serverPollTimer) { clearInterval(serverPollTimer); serverPollTimer = null; }
+  const ms = serverPollMs();
+  const sel = $('#server-poll-interval');
+  if (sel) sel.value = String(ms);
+  if (ms > 0) {
+    serverPollTimer = setInterval(serverPollTick, ms);
+    serverPollTick();
+  } else {
+    const at = $('#server-poll-at');
+    if (at) at.textContent = '自动刷新已关闭';
   }
 }
 
@@ -1246,11 +1349,10 @@ function openFilesTab(server) {
         <span class="muted">${esc(server.username || 'root')}@${esc(server.host)} · SFTP 直连</span>
       </div>
       <div class="ws-body">
+        <div class="pathbar-slot" data-role="fs-pathbar" style="margin-bottom:10px"></div>
         <div class="file-toolbar">
           <button class="btn btn-sm" data-fs="up">↑ 上一级</button>
           <button class="btn btn-sm" data-fs="refresh">刷新</button>
-          <input class="fs-path" data-role="fs-path" value="${esc(start)}" placeholder="/data/platform" />
-          <button class="btn btn-sm" data-fs="go">跳转</button>
           <span class="flex-spacer"></span>
           <button class="btn btn-sm" data-fs="newfile">新建文件</button>
           <button class="btn btn-sm" data-fs="mkdir">新建目录</button>
@@ -1302,13 +1404,7 @@ function bindFilesPane(tab) {
     } catch (err) { toast(err.message, true); }
     e.target.value = '';
   });
-  q(pane, 'fs-path').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      tab.ctx.path = e.target.value.trim() || '/';
-      loadRemoteFiles(tab);
-    }
-  });
+  // 路径跳转由上方 pathbar 统一处理：面包屑点击 / 空白点击输入 / 回车确认。
 }
 
 async function loadRemoteFiles(tab) {
@@ -1321,8 +1417,14 @@ async function loadRemoteFiles(tab) {
     if (!tabs.has(tab.id)) return;
     tab.ctx.path = data.path;
     tab.ctx.parent = data.parent;
-    const input = q(pane, 'fs-path');
-    if (input) input.value = data.path;
+    const bar = q(pane, 'fs-pathbar');
+    if (bar) {
+      bar.innerHTML = pathBarHtml(data.path);
+      bindPathBar(bar, {
+        onGo: (v) => { tab.ctx.path = v; loadRemoteFiles(tab); },
+        onUp: () => { tab.ctx.path = tab.ctx.parent || '/'; loadRemoteFiles(tab); },
+      });
+    }
     const rows = (data.items || []).map((item) => `
       <tr data-fs-path="${esc(item.path)}" data-fs-name="${esc(item.name)}" data-fs-dir="${item.isDir ? 1 : 0}">
         <td style="width:38px"><input type="checkbox" data-role="fs-check" value="${esc(item.name)}" /></td>
@@ -1352,11 +1454,7 @@ async function fsToolbar(tab, action) {
   try {
     if (action === 'up') { tab.ctx.path = tab.ctx.parent || '/'; await loadRemoteFiles(tab); return; }
     if (action === 'refresh') { await loadRemoteFiles(tab); return; }
-    if (action === 'go') {
-      const value = q(pane, 'fs-path').value.trim();
-      if (value) { tab.ctx.path = value; await loadRemoteFiles(tab); }
-      return;
-    }
+    if (action === 'go') { await loadRemoteFiles(tab); return; }
     if (action === 'newfile') {
       const name = prompt('新建文件名称（后缀决定语法高亮，例如 app.py / config.yaml）', 'new.txt');
       if (!name) return;
@@ -2181,7 +2279,8 @@ async function loadExtensions() {
 async function loadGitSources() {
   try {
     const d = await api('/git-sources');
-    const rows = (d.items || []).map((s) => `<tr>
+    gitsrcCache = d.items || [];
+    const rows = gitsrcCache.map((s) => `<tr>
       <td><b>${esc(s.label)}</b>${s.builtin ? ' ' + badge('内置', 'blue') : ''}<div class="ext-list-url">${esc(s.baseUrl)}</div></td>
       <td>${esc(s.type)}</td>
       <td>${s.hasCreds
@@ -2191,7 +2290,8 @@ async function loadGitSources() {
       <td><div class="ext-actions">
         <button class="btn btn-sm" data-gitsrc-op="test" data-gitsrc-id="${esc(s.id)}">测试连通</button>
         <button class="btn btn-sm" data-gitsrc-op="repos" data-gitsrc-id="${esc(s.id)}">仓库列表</button>
-        ${s.builtin ? '' : `<button class="btn btn-sm btn-danger" data-gitsrc-op="remove" data-gitsrc-id="${esc(s.id)}" data-gitsrc-name="${esc(s.label)}">删除</button>`}
+        ${s.builtin ? '' : `<button class="btn btn-sm btn-primary" data-gitsrc-op="edit" data-gitsrc-id="${esc(s.id)}">编辑</button>
+          <button class="btn btn-sm btn-danger" data-gitsrc-op="remove" data-gitsrc-id="${esc(s.id)}" data-gitsrc-name="${esc(s.label)}">删除</button>`}
       </div></td>
     </tr>`);
     $('#gitsrc-list').innerHTML = table(['名称 / 地址', '类型', '凭据', '操作'], rows);
@@ -2215,9 +2315,7 @@ async function loadDocker() {
       ['containers', 'images', 'volumes', 'networks'].forEach((k) => {
         $(`#docker-${k}`).innerHTML = errorBlock('Docker 不可用', d.hint || '请切换远程目标或检查本机 Docker 服务');
       });
-      $('#docker-settings').textContent = JSON.stringify({
-        target: d.target, available: false, error: d.error || '', hint: d.hint || '',
-      }, null, 2);
+      renderDockerSettings();
       renderDockerTemplates();
       return;
     }
@@ -2249,16 +2347,26 @@ function renderDockerContainers() {
   const all = Array.isArray(d.containers) ? d.containers : [];
   const keyword = String(($('#docker-container-filter') && $('#docker-container-filter').value) || '').trim().toLowerCase();
   const stateFilter = ($('#docker-container-state') && $('#docker-container-state').value) || 'all';
+  const ownedOnly = Boolean($('#docker-owned-only') && $('#docker-owned-only').checked);
   const isRunning = (c) => /running|up/i.test(String(c.state || ''));
   const list = all.filter((c) => {
     if (stateFilter === 'running' && !isRunning(c)) return false;
     if (stateFilter === 'stopped' && isRunning(c)) return false;
+    if (ownedOnly && !c.owned) return false;
     if (!keyword) return true;
     return [c.name, c.image, c.status, c.state, (c.ports || []).join(' ')]
       .join(' ').toLowerCase().includes(keyword);
   });
   const count = $('#docker-container-count');
   if (count) count.textContent = `显示 ${list.length} / ${all.length} 个容器`;
+  const summary = $('#docker-container-summary');
+  if (summary) {
+    const running = all.filter(isRunning).length;
+    const owned = all.filter((c) => c.owned).length;
+    summary.innerHTML = `<span class="chip">共 ${all.length} 个</span>
+      <span class="chip">运行中 ${running}</span><span class="chip">已停止 ${all.length - running}</span>
+      <span class="chip">平台自建 ${owned}</span>`;
+  }
   if (!list.length) {
     $('#docker-containers').innerHTML = `<div class="empty">${all.length ? '没有符合筛选条件的容器' : '暂无容器'}</div>`;
     return;
@@ -2277,61 +2385,112 @@ function renderDockerContainers() {
         `<button class="btn btn-sm" data-dk-op="restart" ${meta}>重启</button>`]
       : [`<button class="btn btn-sm" data-dk-op="start" ${meta}>启动</button>`];
     power.push(`<button class="btn btn-sm btn-danger" data-dk-op="remove" ${meta}>删除</button>`);
+    // v0.3.6：端口映射动辄几十条，整串塞进单元格会把行撑高、把其它列挤成竖排。
+    // 现在只显示前两条 + 总数，完整内容放 title；创建时间独立成列。
+    const ports = Array.isArray(c.ports) ? c.ports : [];
+    const portsBrief = ports.length
+      ? `${ports.slice(0, 2).join(', ')}${ports.length > 2 ? ` … 共 ${ports.length} 项` : ''}`
+      : '-';
     return `<tr>
-      <td><b>${esc(c.name || id.slice(0, 12) || '(未命名)')}</b><div class="ext-list-url">${esc(c.image || '-')}</div><div class="ext-list-url">${esc(id.slice(0, 12))}</div></td>
-      <td>${c.owned ? badge('平台自建', 'blue') : badge('宿主机其它', 'gray')}</td>
-      <td>${badge(isRunning(c) ? '运行中' : '已停止', isRunning(c) ? 'green' : 'gray')}<div class="ext-list-url">${esc(c.status || '-')}</div></td>
-      <td><div class="ext-list-url">${esc((c.ports || []).join(', ') || '-')}</div><div class="ext-list-url">创建于 ${esc(fmtTime(c.created))}</div></td>
+      <td><b class="dk-ellipsis" title="${esc(c.name || id)}">${esc(c.name || id.slice(0, 12) || '(未命名)')}</b><div class="ext-list-url dk-ellipsis" title="${esc(c.image || '')}">${esc(c.image || '-')}</div><div class="ext-list-url dk-ellipsis">${esc(id.slice(0, 12))}</div></td>
+      <td>${c.owned ? badge('平台自建', 'blue') : badge('其它', 'gray')}</td>
+      <td>${badge(isRunning(c) ? '运行中' : '已停止', isRunning(c) ? 'green' : 'gray')}<div class="ext-list-url dk-ellipsis" title="${esc(c.status || '')}">${esc(c.status || '-')}</div></td>
+      <td><div class="dk-ports" title="${esc(ports.join('\n') || '-')}">${esc(portsBrief)}</div></td>
+      <td class="muted dk-ellipsis">${esc(fmtTime(c.created))}</td>
       <td class="actions"><div class="dk-ops"><div class="ext-actions">${power.join('')}</div><div class="ext-actions">${view.join('')}</div></div></td>
     </tr>`;
   });
-  $('#docker-containers').innerHTML = table(['容器 / 镜像', '归属', '状态', '端口 / 创建', '操作'], rows);
+  $('#docker-containers').innerHTML = table(['容器 / 镜像', '归属', '状态', '端口映射', '创建时间', '操作'], rows);
 }
+
+const dkFilter = (sel) => { const el = $(sel); return String((el && el.value) || '').trim().toLowerCase(); };
+const dkEmpty = (text) => `<div class="empty">${esc(text)}</div>`;
+const dkCopyButton = (value, label = '复制') => `<button class="btn btn-sm" data-dk-copy="${esc(value)}">${esc(label)}</button>`;
 
 function renderDockerImages() {
   const d = dockerState.data || {};
-  const rows = (Array.isArray(d.images) ? d.images : []).map((i) => {
+  const kw = dkFilter('#docker-image-filter');
+  const all = Array.isArray(d.images) ? d.images : [];
+  const list = all.filter((i) => !kw || [i.id, i.repository, (i.tags || []).join(' ')].join(' ').toLowerCase().includes(kw));
+  const count = $('#docker-image-count');
+  if (count) count.textContent = `显示 ${list.length} / ${all.length} 个镜像`;
+  const rows = list.map((i) => {
     const id = String(i.id || '');
     const tags = (Array.isArray(i.tags) ? i.tags : []).filter(Boolean);
     const ref = tags[0] || i.repository || id;
     return `<tr>
-    <td><b>${esc(tags.join(', ') || i.repository || id.slice(0, 19) || '(未命名)')}</b><div class="ext-list-url">${esc(id.slice(0, 24))}</div></td>
-    <td>${typeof i.size === 'number' ? fmtSize(i.size) : esc(i.size || '-')}</td>
-    <td class="muted">${esc(fmtTime(i.created))}</td>
-    <td><div class="ext-actions">
-      <button class="btn btn-sm" data-dk-op="export" data-dk-ref="${esc(ref)}">导出</button>
-      <button class="btn btn-sm btn-danger" data-dk-op="rmi" data-dk-ref="${esc(ref)}">删除</button>
-    </div></td>
-  </tr>`;
+      <td><b class="dk-ellipsis" title="${esc(ref)}">${esc(tags.join(', ') || i.repository || id.slice(0, 19) || '(未命名)')}</b><div class="ext-list-url dk-ellipsis">${esc(id.slice(0, 24))}</div></td>
+      <td>${typeof i.size === 'number' ? fmtSize(i.size) : esc(i.size || '-')}</td>
+      <td class="muted">${esc(fmtTime(i.created))}</td>
+      <td><div class="ext-actions">
+        ${dkCopyButton(ref, '复制引用')}
+        <button class="btn btn-sm" data-dk-op="export" data-dk-ref="${esc(ref)}">导出</button>
+        <button class="btn btn-sm btn-danger" data-dk-op="rmi" data-dk-ref="${esc(ref)}">删除</button>
+      </div></td>
+    </tr>`;
   });
-  $('#docker-images').innerHTML = table(['镜像 / 标签', '大小', '创建时间', '操作'], rows);
+  $('#docker-images').innerHTML = rows.length
+    ? table(['镜像 / 标签', '大小', '创建时间', '操作'], rows)
+    : dkEmpty(all.length ? '没有符合筛选条件的镜像' : '暂无本地镜像，可在上方从仓库拉取');
 }
 
 function renderDockerVolumes() {
-  const rows = ((dockerState.data || {}).volumes || []).map((v) => `<tr>
-    <td><b>${esc(v.name)}</b>${v.owned ? ' ' + badge('平台', 'blue') : ''}</td>
-    <td>${esc(v.driver || '-')}</td><td><div class="ext-list-url">${esc(v.mountpoint || '-')}</div></td>
-    <td><button class="btn btn-sm btn-danger" data-dk-op="rmvol" data-dk-ref="${esc(v.name)}">删除</button></td>
+  const all = ((dockerState.data || {}).volumes) || [];
+  const kw = dkFilter('#docker-volume-filter');
+  const list = all.filter((v) => !kw || [v.name, v.driver, v.mountpoint].join(' ').toLowerCase().includes(kw));
+  const count = $('#docker-volume-count');
+  if (count) count.textContent = `显示 ${list.length} / ${all.length} 个存储卷`;
+  const rows = list.map((v) => `<tr>
+    <td><b>${esc(v.name)}</b>${v.owned ? ' ' + badge('平台自建', 'blue') : ''}</td>
+    <td>${esc(v.driver || '-')}</td>
+    <td><div class="ext-list-url dk-ellipsis" title="${esc(v.mountpoint || '')}">${esc(v.mountpoint || '-')}</div></td>
+    <td class="muted">${esc(fmtTime(v.created))}</td>
+    <td><div class="ext-actions">
+      ${dkCopyButton(v.mountpoint || '', '复制挂载点')}
+      <button class="btn btn-sm btn-danger" data-dk-op="rmvol" data-dk-ref="${esc(v.name)}">删除</button>
+    </div></td>
   </tr>`);
-  $('#docker-volumes').innerHTML = table(['存储卷', '驱动', '挂载点', '操作'], rows);
+  $('#docker-volumes').innerHTML = rows.length
+    ? table(['存储卷', '驱动', '挂载点', '创建时间', '操作'], rows)
+    : dkEmpty(all.length ? '没有符合筛选条件的存储卷' : '暂无命名卷，可在上方创建');
 }
 
 function renderDockerNetworks() {
-  const rows = ((dockerState.data || {}).networks || []).map((n) => `<tr>
-    <td><b>${esc(n.name)}</b></td><td>${esc(n.driver)}</td><td>${esc(n.scope || '-')}</td>
-    <td><button class="btn btn-sm btn-danger" data-dk-op="rmnet" data-dk-ref="${esc(n.id || n.name)}">删除</button></td>
+  const all = ((dockerState.data || {}).networks) || [];
+  const kw = dkFilter('#docker-network-filter');
+  const list = all.filter((n) => !kw || [n.name, n.driver, n.subnet, n.gateway].join(' ').toLowerCase().includes(kw));
+  const count = $('#docker-network-count');
+  if (count) count.textContent = `显示 ${list.length} / ${all.length} 个网络`;
+  const rows = list.map((n) => `<tr>
+    <td><b>${esc(n.name)}</b>${n.builtin ? ' ' + badge('内置', 'gray') : ''}${n.internal ? ' ' + badge('仅内部', 'amber') : ''}</td>
+    <td>${esc(n.driver || '-')} <span class="muted small">${esc(n.scope || '')}</span></td>
+    <td><div class="ext-list-url dk-ellipsis">${esc(n.subnet || '-')}</div>${n.gateway ? `<div class="ext-list-url">网关 ${esc(n.gateway)}</div>` : ''}</td>
+    <td>${esc(n.containers || 0)} 个</td>
+    <td>${n.builtin ? '<span class="muted small">不可删除</span>'
+      : `<button class="btn btn-sm btn-danger" data-dk-op="rmnet" data-dk-ref="${esc(n.id || n.name)}">删除</button>`}</td>
   </tr>`);
-  $('#docker-networks').innerHTML = table(['网络', '驱动', '作用域', '操作'], rows);
+  $('#docker-networks').innerHTML = rows.length
+    ? table(['网络', '驱动 / 作用域', '子网 / 网关', '已接入容器', '操作'], rows)
+    : dkEmpty(all.length ? '没有符合筛选条件的网络' : '暂无自定义网络');
 }
 
 async function renderDockerTemplates() {
   try {
     const [tpl, audit] = await Promise.all([api('/docker/templates'), api('/docker/audit')]);
-    $('#docker-templates').innerHTML = table(['模板', '行数', '说明', '更新时间', '操作'], (tpl.items || []).map((t) => `<tr>
-      <td><b>${esc(t.name)}</b></td><td>${t.lines}</td><td>${esc(t.description || '-')}</td>
+    dockerState.templates = tpl.items || [];
+    const rows = dockerState.templates.map((t) => `<tr>
+      <td><b>${esc(t.name)}</b></td><td>${t.lines} 行</td><td>${esc(t.description || '-')}</td>
       <td class="muted">${esc(fmtTime(t.updatedAt))}</td>
-      <td><button class="btn btn-sm btn-danger" data-dk-op="rmtpl" data-dk-ref="${esc(t.id)}">删除</button></td>
-    </tr>`));
+      <td><div class="ext-actions">
+        <button class="btn btn-sm" data-dk-tpl-load="${esc(t.id)}">载入</button>
+        <button class="btn btn-sm" data-dk-tpl-copy="${esc(t.id)}">复制</button>
+        <button class="btn btn-sm" data-dk-tpl-download="${esc(t.id)}">下载</button>
+        <button class="btn btn-sm btn-danger" data-dk-op="rmtpl" data-dk-ref="${esc(t.id)}">删除</button>
+      </div></td>
+    </tr>`);
+    $('#docker-templates').innerHTML = rows.length
+      ? table(['模板', '规模', '说明', '更新时间', '操作'], rows)
+      : dkEmpty('还没有编排模板，可点上方「快速套用」生成一份');
     $('#docker-audit').innerHTML = table(['时间', '操作', '目标', '对象', '确认'], (audit.items || []).map((a) => `<tr>
       <td class="muted">${esc(fmtTime(a.at))}</td><td>${esc(a.action)}</td><td>${esc(a.target)}</td>
       <td>${esc(a.object)}</td><td>${a.confirmed ? '是' : '否'}</td>
@@ -2341,11 +2500,24 @@ async function renderDockerTemplates() {
 
 function renderDockerSettings() {
   const d = dockerState.data || {};
-  $('#docker-settings').textContent = JSON.stringify({
-    target: d.target, status: d.status, counts: d.counts,
-    policy: d.policy,
-    importDir: 'data/images/（本机大镜像放这里，用「服务器上已有路径」导入）',
-    remoteTmp: '远程镜像 tar 直接填服务器上的绝对路径',
+  const s = d.status || {};
+  const rows = [
+    ['当前目标', d.target || dockerState.target],
+    ['连接状态', d.available === false ? '不可用' : '已连接'],
+    ['Docker 版本', s.version || '-'],
+    ['端点 / 模式', s.endpoint || s.mode || '-'],
+    ['镜像加速前缀', d.imagePrefix || '未设置（直连 Docker Hub）'],
+    ['离线导入目录', 'data/images/（大镜像放这里，用「服务器上已有路径」导入）'],
+    ['安全策略', d.policy || '非平台容器只读；写操作二次确认'],
+  ];
+  $('#docker-settings').innerHTML = `<div class="dk-kv-list">${rows.map(([k, v]) => `
+    <div class="dk-kv-row"><span class="dk-kv-key">${esc(k)}</span><span class="dk-kv-val">${esc(v)}</span></div>`).join('')}</div>`;
+  const prefixBox = $('#docker-image-prefix');
+  if (prefixBox) prefixBox.innerHTML = rows.slice(4, 5).map(([k, v]) => `
+    <div class="dk-kv-row"><span class="dk-kv-key">${esc(k)}</span><span class="dk-kv-val">${esc(v)}</span></div>`).join('');
+  $('#docker-raw').textContent = JSON.stringify({
+    target: d.target, status: s, counts: d.counts, policy: d.policy,
+    imagePrefix: d.imagePrefix || '', importDir: 'data/images/', remoteTmp: '服务器绝对路径',
   }, null, 2);
 }
 
@@ -2699,26 +2871,71 @@ function syncGitSourceAuthFields() {
   if (tokenField) tokenField.hidden = mode !== 'token';
   if (passFields) passFields.hidden = mode !== 'password';
   const form = $('#gitsrc-form');
-  if (form && form.elements.token) form.elements.token.required = mode === 'token';
-  if (form && form.elements.password) form.elements.password.required = mode === 'password';
+  // v0.3.6：编辑态下凭据可以留空（沿用原值），不能要求必填。
+  const editing = Boolean(gitsrcEditId);
+  if (form && form.elements.token) form.elements.token.required = mode === 'token' && !editing;
+  if (form && form.elements.password) form.elements.password.required = mode === 'password' && !editing;
 }
 $('#gitsrc-auth-type').addEventListener('change', syncGitSourceAuthFields);
+
+/** 退出编辑态，恢复成「登记新源」。 */
+function resetGitSourceForm() {
+  gitsrcEditId = '';
+  const form = $('#gitsrc-form');
+  if (form) form.reset();
+  $('#gitsrc-form-title').textContent = '登记外部 Git 源';
+  $('#gitsrc-submit').textContent = '登记 Git 源';
+  $('#gitsrc-cancel').hidden = true;
+  const token = $('#gitsrc-token');
+  const password = $('#gitsrc-password');
+  if (token) token.placeholder = 'ghp_... / Gitea Token / GitLab PAT';
+  if (password) password.placeholder = 'GitHub 必须填 PAT（已停用密码登录）';
+  syncGitSourceAuthFields();
+}
+
+function fillGitSourceForm(s) {
+  gitsrcEditId = s.id;
+  const form = $('#gitsrc-form');
+  form.elements.label.value = s.label || '';
+  form.elements.type.value = s.type || 'gitea';
+  form.elements.baseUrl.value = s.baseUrl || '';
+  form.elements.authType.value = s.authType || 'token';
+  form.elements.username.value = s.username || '';
+  form.elements.token.value = '';
+  form.elements.password.value = '';
+  $('#gitsrc-token').placeholder = s.hasToken ? `留空沿用原值（当前 ${s.tokenMasked || '已保存'}）` : '留空表示不设置 Token';
+  $('#gitsrc-password').placeholder = s.hasPassword ? `留空沿用原值（当前 ${s.passwordMasked || '已保存'}）` : '留空表示不设置密码';
+  $('#gitsrc-form-title').textContent = `编辑 Git 源 · ${s.label}`;
+  $('#gitsrc-submit').textContent = '保存修改';
+  $('#gitsrc-cancel').hidden = false;
+  syncGitSourceAuthFields();
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  toast('已回填表单；凭据留空表示沿用原值');
+}
+$('#gitsrc-cancel').addEventListener('click', resetGitSourceForm);
 
 $('#gitsrc-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const body = formData(e.target);
+  const editing = Boolean(gitsrcEditId);
   if (body.authType === 'password') {
     body.token = '';
-    if (!body.username || !body.password) { toast('账号密码方式必须填写用户名和密码 / PAT', true); return; }
+    if (!body.username) { toast('账号密码方式必须填写用户名', true); return; }
+    if (!body.password && !editing) { toast('账号密码方式必须填写密码 / PAT', true); return; }
   } else {
     body.password = '';
-    if (!body.token) { toast('请填写访问令牌 Token，或切换为账号密码方式', true); return; }
+    if (!body.token && !editing) { toast('请填写访问令牌 Token，或切换为账号密码方式', true); return; }
+  }
+  if (editing) {
+    // 空凭据字段不传给后端，避免把已保存的 Token / 密码清空。
+    if (!body.token) delete body.token;
+    if (!body.password) delete body.password;
   }
   try {
-    await api('/git-sources', { method: 'POST', body });
-    toast('Git 源已登记，仓库列表会自动聚合');
-    e.target.reset();
-    syncGitSourceAuthFields();
+    if (editing) await api(`/git-sources/${encodeURIComponent(gitsrcEditId)}`, { method: 'PUT', body });
+    else await api('/git-sources', { method: 'POST', body });
+    toast(editing ? 'Git 源已更新，仓库列表会自动重新聚合' : 'Git 源已登记，仓库列表会自动聚合');
+    resetGitSourceForm();
     await loadGitSources();
     await loadRepos();
   } catch (err) { toast(err.message || String(err), true); }
@@ -2730,7 +2947,10 @@ $('#gitsrc-list').addEventListener('click', async (e) => {
   const id = button.dataset.gitsrcId;
   const op = button.dataset.gitsrcOp;
   try {
-    if (op === 'test') {
+    if (op === 'edit') {
+      const source = gitsrcCache.find((s) => s.id === id);
+      if (source) fillGitSourceForm(source);
+    } else if (op === 'test') {
       toast('正在测试连通性…');
       const d = await api(`/git-sources/${id}/test`, { method: 'POST', body: {} });
       toast(`连接正常 · 可见 ${d.count} 个仓库`);
@@ -2853,13 +3073,21 @@ document.addEventListener('click', async (e) => {
 $('#docker-pull-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const body = formData(e.target);
+  const box = $('#docker-pull-result');
   try {
     toast('正在拉取镜像，请稍候…');
-    await api('/docker/images/pull', { method: 'POST', body: { ...body, target: dockerState.target } });
+    const d = await api('/docker/images/pull', { method: 'POST', body: { ...body, target: dockerState.target } });
+    if (box) {
+      box.hidden = false;
+      box.innerHTML = `✔ 已拉取 <b>${esc(d.pulled || `${body.image}:${body.tag || 'latest'}`)}</b>${d.usedFallback ? '<br />加速源不可用，平台已自动回退到 Docker Hub 原始镜像。' : ''}`;
+    }
     toast(`镜像 ${body.image}:${body.tag || 'latest'} 已拉取`);
     e.target.reset();
     await loadDocker();
-  } catch (err) { toast(err.message || String(err), true); }
+  } catch (err) {
+    if (box) { box.hidden = false; box.innerHTML = `<b>拉取失败</b>：${esc(err.message || String(err))}`; }
+    toast(err.message || String(err), true);
+  }
 });
 
 $('#docker-load-form').addEventListener('submit', async (e) => {
@@ -2959,14 +3187,32 @@ $('#clone-form').addEventListener('submit', async (e) => {
   if (mode === 'none') body.sourceId = '';
   if (mode === 'password' && (!body.username || !body.password)) { toast('请填写用户名和密码 / PAT', true); return; }
   if (mode === 'token' && !body.token) { toast('请填写访问令牌 Token', true); return; }
+  const conflictBox = $('#clone-conflict');
+  if (conflictBox) conflictBox.hidden = true;
   try {
     const d = await api('/repos/clone', { method: 'POST', body });
-    toast(`已克隆到 ${d.path}${d.authenticated ? '（已携带凭据）' : ''}${d.channelLabel ? ` · ${d.channelLabel}` : ''}`);
+    toast(`已克隆到 ${d.path}${d.authenticated ? '（已携带凭据）' : ''}${d.channelLabel ? ` · ${d.channelLabel}` : ''}；可在「仓库列表 / 在线 IDE」打开`);
     // 本次填写的凭据不留在表单里，也不写入 state.json。
     if (e.target.elements.password) e.target.elements.password.value = '';
     if (e.target.elements.token) e.target.elements.token.value = '';
     loadRepos();
-  } catch (err) { toast(err.message, true); }
+  } catch (err) {
+    // v0.3.6：409 是「工作区已有同名目录」的业务冲突，给出可操作指引，
+    // 不再显示成含糊的「服务端异常 500」。
+    if (err.status === 409 && conflictBox) {
+      conflictBox.innerHTML = `<b>克隆未执行</b>：${esc(err.rawError || err.message)}<br />
+        <span class="muted">${esc(err.hint || '请换一个本地目录名，或清理工作区里的同名目录后重试。')}</span><br />
+        <span class="row gap" style="margin-top:8px">
+          <button class="btn btn-sm" type="button" data-clone-goto="repos">打开仓库列表</button>
+          <button class="btn btn-sm" type="button" data-clone-goto="ide">打开在线 IDE</button>
+        </span>`;
+      conflictBox.hidden = false;
+      conflictBox.querySelectorAll('[data-clone-goto]').forEach((b) => {
+        b.addEventListener('click', () => switchView(b.dataset.cloneGoto));
+      });
+      toast('工作区已有同名目录，请按下方提示处理', true);
+    } else toast(err.message, true);
+  }
 });
 
 $('#git-runtime-form').addEventListener('submit', async (e) => {
@@ -3069,6 +3315,15 @@ document.addEventListener('click', async (e) => {
 });
 
 $('#ide-open').addEventListener('click', openIde);
+
+// 服务器状态自动刷新：间隔可切换并记住；从后台标签切回来时立即补一次。
+$('#server-poll-interval').addEventListener('change', (e) => {
+  const ms = Number(e.target.value) || 0;
+  localStorage.setItem(SERVER_POLL_KEY, String(ms));
+  restartServerPolling();
+  toast(ms > 0 ? `状态自动刷新：每 ${ms / 1000} 秒` : '状态自动刷新已关闭');
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden) serverPollTick(); });
 
 $('#storage-path-form').addEventListener('submit', (e) => {
   e.preventDefault();
@@ -3310,6 +3565,235 @@ $('#ops-form').addEventListener('submit', async (e) => {
   } catch (err) { $('#ops-answer').textContent = `失败：${err.message}`; toast(err.message, true); }
 });
 
+/* ------------------- v0.3.6 · Docker 分区交互增强 ------------------- */
+const DK_TPL = {
+  lnmp: {
+    name: 'lnmp', description: 'Nginx + PHP-FPM + MySQL 最小开发栈',
+    content: `services:\n  web:\n    image: nginx:latest\n    ports:\n      - "8080:80"\n    depends_on: [php, db]\n    volumes:\n      - ./www:/usr/share/nginx/html\n  php:\n    image: php:8.3-fpm\n    volumes:\n      - ./www:/var/www/html\n  db:\n    image: mysql:8.4\n    environment:\n      MYSQL_ROOT_PASSWORD: change-me\n    volumes:\n      - db-data:/var/lib/mysql\nvolumes:\n  db-data: {}\n`,
+  },
+  wordpress: {
+    name: 'wordpress', description: 'WordPress + MariaDB',
+    content: `services:\n  web:\n    image: wordpress:latest\n    ports:\n      - "8080:80"\n    environment:\n      WORDPRESS_DB_HOST: db\n      WORDPRESS_DB_USER: wp\n      WORDPRESS_DB_PASSWORD: change-me\n      WORDPRESS_DB_NAME: wp\n    depends_on: [db]\n  db:\n    image: mariadb:11\n    environment:\n      MARIADB_ROOT_PASSWORD: change-me\n      MARIADB_DATABASE: wp\n      MARIADB_USER: wp\n      MARIADB_PASSWORD: change-me\n    volumes:\n      - db-data:/var/lib/mysql\nvolumes:\n  db-data: {}\n`,
+  },
+  redis: {
+    name: 'redis', description: 'Redis 单实例 + 持久化卷',
+    content: `services:\n  redis:\n    image: redis:7-alpine\n    command: ["redis-server", "--appendonly", "yes"]\n    ports:\n      - "6379:6379"\n    volumes:\n      - redis-data:/data\nvolumes:\n  redis-data: {}\n`,
+  },
+  postgres: {
+    name: 'postgres', description: 'PostgreSQL 单实例',
+    content: `services:\n  db:\n    image: postgres:16-alpine\n    environment:\n      POSTGRES_USER: app\n      POSTGRES_PASSWORD: change-me\n      POSTGRES_DB: app\n    ports:\n      - "5432:5432"\n    volumes:\n      - pg-data:/var/lib/postgresql/data\nvolumes:\n  pg-data: {}\n`,
+  },
+};
+
+function copyText(text, okMsg = '已复制到剪贴板') {
+  const value = String(text || '');
+  if (!value) { toast('没有可复制的内容', true); return; }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(value).then(() => toast(okMsg)).catch(() => legacyCopy(value, okMsg));
+    return;
+  }
+  legacyCopy(value, okMsg);
+}
+function legacyCopy(value, okMsg) {
+  const ta = document.createElement('textarea');
+  ta.value = value;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); toast(okMsg); }
+  catch { toast('复制失败，请手工选择文本', true); }
+  ta.remove();
+}
+function downloadText(filename, text) {
+  const blob = new Blob([String(text || '')], { type: 'text/yaml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+const dkTplById = (id) => (dockerState.templates || []).find((t) => t.id === id);
+
+function dkFormValue(form, name, fallback = '') {
+  const el = form && form.elements ? form.elements[name] : null;
+  return el && typeof el.value === 'string' ? el.value : fallback;
+}
+function dockerVolumeCmd() {
+  const f = $('#docker-volume-form');
+  if (!f) return 'docker volume create <卷名>';
+  const name = String(dkFormValue(f, 'name')).trim() || '<卷名>';
+  const driver = String(dkFormValue(f, 'driver', 'local'));
+  const label = String(dkFormValue(f, 'label')).trim();
+  const parts = ['docker volume create'];
+  if (driver !== 'local') parts.push(`--driver ${driver}`);
+  if (label) parts.push(`--label "${label.replace(/"/g, '\\"')}"`);
+  parts.push(name);
+  return parts.join(' ');
+}
+function dockerNetworkCmd() {
+  const f = $('#docker-network-form');
+  if (!f) return 'docker network create <网络名>';
+  const name = String(dkFormValue(f, 'name')).trim() || '<网络名>';
+  const driver = String(dkFormValue(f, 'driver', 'bridge'));
+  const subnet = String(dkFormValue(f, 'subnet')).trim();
+  const internalEl = f.elements ? f.elements.internal : null;
+  const internal = Boolean(internalEl && internalEl.checked);
+  const parts = ['docker network create'];
+  if (driver !== 'bridge') parts.push(`--driver ${driver}`);
+  if (subnet) parts.push(`--subnet ${subnet}`);
+  if (internal) parts.push('--internal');
+  parts.push(name);
+  return parts.join(' ');
+}
+function updateDockerCommands() {
+  const vc = $('#docker-volume-cmd'); if (vc) vc.textContent = dockerVolumeCmd();
+  const nc = $('#docker-network-cmd'); if (nc) nc.textContent = dockerNetworkCmd();
+}
+function checkYaml(text) {
+  const raw = String(text || '');
+  const issues = [];
+  if (!raw.trim()) return { ok: false, issues: ['内容为空'] };
+  if (!/^services\s*:/m.test(raw)) issues.push('缺少顶层 services: 段');
+  if (/\t/.test(raw)) issues.push('检测到 Tab，YAML 缩进只能用空格');
+  if (!/\bimage\s*:/.test(raw) && !/\bbuild\s*:/.test(raw)) issues.push('没有发现 image: 或 build:，服务可能无法启动');
+  if (/^\s*ports\s*:/m.test(raw) && !/["']?\d+:\d+/.test(raw)) issues.push('ports 建议写成 "宿主机端口:容器端口"');
+  return { ok: issues.length === 0, issues };
+}
+function renderYamlCheck() {
+  const box = $('#docker-yaml-check');
+  const area = $('#docker-template-content');
+  if (!box || !area) return;
+  const r = checkYaml(String(area.value || ''));
+  box.innerHTML = r.ok
+    ? '✔ 基础检查通过：已包含 services 段与镜像定义，缩进使用空格。'
+    : `⚠ 需要留意：${r.issues.map(esc).join('；')}`;
+}
+
+/* 列表筛选 / 快捷填充 / 复制下载 / 模板库：统一用文档级委托，动态行无需重绑。 */
+[['#docker-image-filter', renderDockerImages], ['#docker-volume-filter', renderDockerVolumes],
+  ['#docker-network-filter', renderDockerNetworks]].forEach(([sel, fn]) => {
+  const el = $(sel);
+  if (el) el.addEventListener('input', fn);
+});
+const ownedOnlyBox = $('#docker-owned-only');
+if (ownedOnlyBox) ownedOnlyBox.addEventListener('change', renderDockerContainers);
+[['#docker-volume-form', updateDockerCommands], ['#docker-network-form', updateDockerCommands]].forEach(([sel, fn]) => {
+  const el = $(sel);
+  if (el) { el.addEventListener('input', fn); el.addEventListener('change', fn); }
+});
+const yamlArea = $('#docker-template-content');
+if (yamlArea) yamlArea.addEventListener('input', renderYamlCheck);
+
+document.addEventListener('click', (e) => {
+  const quick = e.target.closest && e.target.closest('[data-dk-quick-image]');
+  if (quick) {
+    const f = $('#docker-pull-form');
+    if (f) { f.elements.image.value = quick.dataset.dkQuickImage; f.elements.tag.value = 'latest'; }
+    toast(`已填入 ${quick.dataset.dkQuickImage}:latest`);
+    return;
+  }
+  const copy = e.target.closest && e.target.closest('[data-dk-copy]');
+  if (copy) { copyText(copy.dataset.dkCopy); return; }
+  const preset = e.target.closest && e.target.closest('[data-dk-tpl]');
+  if (preset) {
+    const f = $('#docker-template-form');
+    const t = DK_TPL[preset.dataset.dkTpl];
+    if (!f) return;
+    if (!t) {
+      f.reset();
+      const area = $('#docker-template-content');
+      if (area) area.value = '';
+    } else {
+      f.elements.name.value = t.name;
+      f.elements.description.value = t.description;
+      $('#docker-template-content').value = t.content;
+    }
+    renderYamlCheck();
+    if (t) toast(`已套用「${t.name}」模板，可继续修改后保存`);
+    return;
+  }
+  const load = e.target.closest && e.target.closest('[data-dk-tpl-load]');
+  if (load) {
+    const t = dkTplById(load.dataset.dkTplLoad);
+    const f = $('#docker-template-form');
+    if (t && f) {
+      f.elements.name.value = t.name;
+      f.elements.description.value = t.description || '';
+      $('#docker-template-content').value = t.content || '';
+      renderYamlCheck();
+      f.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      toast(`已载入「${t.name}」，修改后点保存即可更新`);
+    }
+    return;
+  }
+  const tplCopy = e.target.closest && e.target.closest('[data-dk-tpl-copy]');
+  if (tplCopy) {
+    const t = dkTplById(tplCopy.dataset.dkTplCopy);
+    if (t) copyText(t.content, `已复制「${t.name}」的 YAML`);
+    return;
+  }
+  const tplDl = e.target.closest && e.target.closest('[data-dk-tpl-download]');
+  if (tplDl) {
+    const t = dkTplById(tplDl.dataset.dkTplDownload);
+    if (t) downloadText(`${t.name}.yml`, t.content || '');
+  }
+});
+
+const copyDiag = $('#docker-copy-diag');
+if (copyDiag) copyDiag.addEventListener('click', () => copyText($('#docker-raw').textContent, '诊断信息已复制'));
+const copyVolCmd = $('#docker-volume-copy-cmd');
+if (copyVolCmd) copyVolCmd.addEventListener('click', () => copyText(dockerVolumeCmd(), '命令已复制，可到服务器执行'));
+const copyNetCmd = $('#docker-network-copy-cmd');
+if (copyNetCmd) copyNetCmd.addEventListener('click', () => copyText(dockerNetworkCmd(), '命令已复制，可到服务器执行'));
+const tplCopyNow = $('#docker-tpl-copy');
+if (tplCopyNow) tplCopyNow.addEventListener('click', () => copyText($('#docker-template-content').value, 'YAML 已复制'));
+const tplDownloadNow = $('#docker-tpl-download');
+if (tplDownloadNow) tplDownloadNow.addEventListener('click', () => {
+  const f = $('#docker-template-form');
+  downloadText(`${String(f.elements.name.value || 'docker-compose').trim()}.yml`, $('#docker-template-content').value);
+});
+
+/* 面板偏好：自动刷新只在 Docker 分区激活且页面可见时工作，默认关闭。 */
+const DK_POLL_KEY = 'dp_docker_poll_ms';
+const DK_DENSITY_KEY = 'dp_docker_density';
+let dockerPollTimer = null;
+let dockerPollBusy = false;
+function applyDockerPrefs() {
+  const ms = Number(localStorage.getItem(DK_POLL_KEY) || 0);
+  const density = localStorage.getItem(DK_DENSITY_KEY) || 'normal';
+  const sel = $('#docker-poll-interval'); if (sel) sel.value = String(ms);
+  const dsel = $('#docker-density'); if (dsel) dsel.value = density;
+  if (document.body && document.body.classList && document.body.classList.toggle) {
+    document.body.classList.toggle('dk-compact', density === 'compact');
+  }
+  if (dockerPollTimer) { clearInterval(dockerPollTimer); dockerPollTimer = null; }
+  if (ms > 0) {
+    dockerPollTimer = setInterval(() => {
+      if (document.hidden || dockerPollBusy || !String(currentView).startsWith('docker')) return;
+      dockerPollBusy = true;
+      loadDocker().catch(() => {}).finally(() => { dockerPollBusy = false; });
+    }, ms);
+  }
+}
+const dockerPollSel = $('#docker-poll-interval');
+if (dockerPollSel) dockerPollSel.addEventListener('change', (e) => {
+  localStorage.setItem(DK_POLL_KEY, String(Number(e.target.value) || 0));
+  applyDockerPrefs();
+  toast(Number(e.target.value) ? `Docker 数据每 ${Number(e.target.value) / 1000} 秒自动刷新` : 'Docker 自动刷新已关闭');
+});
+const dockerDensitySel = $('#docker-density');
+if (dockerDensitySel) dockerDensitySel.addEventListener('change', (e) => {
+  localStorage.setItem(DK_DENSITY_KEY, e.target.value);
+  applyDockerPrefs();
+  toast(e.target.value === 'compact' ? '已切换为紧凑表格' : '已切换为标准表格');
+});
+updateDockerCommands();
+renderYamlCheck();
+
 /* --------------------------------- 启动 ---------------------------------- */
 
 (async function boot() {
@@ -3322,4 +3806,6 @@ $('#ops-form').addEventListener('submit', async (e) => {
   }
   restoreTabs();
   loadSystemInfo();
+  restartServerPolling();
+  applyDockerPrefs();
 })();

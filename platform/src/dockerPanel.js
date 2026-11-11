@@ -11,7 +11,7 @@
  *
  * target：'local'（本机 dockerApi）或 'server:<id>'（remoteDocker 经 SSH）。
  */
-const { config, state, update, uid } = require('./core');
+const { config, state, update, uid, imageCandidates, upstream } = require('./core');
 const docker = require('./dockerApi');
 const remoteDocker = require('./remoteDocker');
 const runtime = require('./extRuntime');
@@ -106,6 +106,7 @@ async function overview(target = 'local') {
         hint: '本机没有 Docker：可在「目标」里选择已登记的 Linux 服务器远程管理，或使用 START.bat 只跑控制台',
         containers: [], images: [], volumes: [], networks: [], counts: { containers: 0, running: 0, images: 0, volumes: 0, networks: 0 },
         servers: (state().servers || []).map((s) => ({ id: s.id, name: s.name, host: s.host })),
+        imagePrefix: config.dockerImagePrefix || '',
       };
     }
   }
@@ -119,8 +120,20 @@ async function overview(target = 'local') {
       repository: i.Repository || '', tag: i.Tag || '', size: i.Size || Number(i.Size || 0),
       created: i.Created || i.CreatedAt || '',
     })),
-    volumes: volumes.map((v) => ({ name: v.Name || '', driver: v.Driver || '', mountpoint: v.Mountpoint || '', owned: String(v.Name || '').startsWith('dp-ext-') })),
-    networks: networks.map((n) => ({ id: n.Id || '', name: n.Name || '', driver: n.Driver || '', scope: n.Scope || '' })),
+    // v0.3.6：把 Docker 原始元数据带出来，列表才能像宝塔一样显示创建时间、子网与使用中的容器数。
+    volumes: volumes.map((v) => ({
+      name: v.Name || '', driver: v.Driver || '', mountpoint: v.Mountpoint || '',
+      created: v.CreatedAt || '', labels: v.Labels || {},
+      owned: String(v.Name || '').startsWith('dp-ext-'),
+    })),
+    networks: networks.map((n) => ({
+      id: n.Id || '', name: n.Name || '', driver: n.Driver || '', scope: n.Scope || '',
+      subnet: (n.IPAM && Array.isArray(n.IPAM.Config) && n.IPAM.Config[0] && n.IPAM.Config[0].Subnet) || '',
+      gateway: (n.IPAM && Array.isArray(n.IPAM.Config) && n.IPAM.Config[0] && n.IPAM.Config[0].Gateway) || '',
+      containers: Object.keys(n.Containers || {}).length,
+      internal: Boolean(n.Internal),
+      builtin: ['bridge', 'host', 'none'].includes(n.Name),
+    })),
     counts: {
       containers: cs.length,
       running: cs.filter((c) => /running|up/i.test(c.state)).length,
@@ -129,6 +142,7 @@ async function overview(target = 'local') {
     },
     servers: (state().servers || []).map((s) => ({ id: s.id, name: s.name, host: s.host })),
     policy: '非平台容器只读；启停/删除需二次确认',
+    imagePrefix: config.dockerImagePrefix || '',
   };
 }
 
@@ -206,14 +220,24 @@ async function pullImage(target, image, tag = 'latest') {
   if (!/^[a-z0-9][a-z0-9._/-]{0,127}$/i.test(String(image)) || !/^[A-Za-z0-9._-]{1,40}$/.test(String(tag))) {
     throw new Error('镜像名或 tag 不合法');
   }
-  const ref = `${config.dockerImagePrefix || ''}${image}`;
+  // v0.3.6：加速源拼错命名空间时会返回 denied，自动回退到原始 Docker Hub 镜像。
+  const candidates = imageCandidates(image, config.dockerImagePrefix);
   const t = splitTarget(target);
-  if (t.remote) {
-    await remoteDocker.pull(t.serverId, `${ref}:${tag}`);
-    return { pulled: `${ref}:${tag}` };
+  const failures = [];
+  for (const ref of candidates) {
+    try {
+      if (t.remote) await remoteDocker.pull(t.serverId, `${ref}:${tag}`);
+      else await docker.pullImage(ref, tag);
+      return { pulled: `${ref}:${tag}`, tried: candidates, usedFallback: ref !== candidates[0] };
+    } catch (e) {
+      failures.push(`${ref}: ${String(e.message).slice(0, 200)}`);
+      // 只有「源站不认这个镜像」才值得换源重试；网络超时之类直接抛出。
+      if (!/denied|manifest unknown|not found|unauthorized|no such image|拉取镜像失败|Docker API/i.test(String(e.message))) break;
+    }
   }
-  await docker.pullImage(ref, tag);
-  return { pulled: `${ref}:${tag}` };
+  throw upstream(`拉取镜像失败：${failures.join(' | ')}`, {
+    hint: `已依次尝试 ${candidates.join(' → ')}。请检查 DOCKER_IMAGE_PREFIX（当前：${config.dockerImagePrefix || '未设置，直连 Docker Hub'}）、网络与代理，或直接填写完整镜像地址。`,
+  });
 }
 
 async function removeImage(target, ref, confirm = false) {
