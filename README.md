@@ -2350,3 +2350,72 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 | 安全校验（本机单测） | `rm` / `; echo pwned` / `--git-dir=/etc` / `-c` 全部 400；合法 `status` 走 local 通道 |
 | 回归 | 本机巡检 0 个 500；246 `--full` **151 项**（跳过 28 个副作用路由）0 个 500、0 超时（2 个 502 为外部服务不可达）；扩展体检 2 / 2 正常；启动体检 8 正常 / 0 提醒 / 0 异常 |
 | 自检 | `npm run check`、前端自检 63 项、四套冒烟 40 / 31 / 29 / 60 全部通过 |
+
+---
+
+## 38. v0.3.11 · 文件浏览体验、编辑器与页面整理
+
+### 38.1 两处布局问题
+
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| Git 仓库文件管理里，路径条与工具栏之间被撑出一大块空白 | `.pathbar-slot { flex:1 1 auto }` 是为「存储 / 文件」页的横向 `.row` 设计的，但远程文件标签的父容器 `.ws-body` 是纵向 flex，于是它在**垂直方向**吃掉了所有剩余高度 | `.ws-body > .pathbar-slot { flex:0 0 auto; width:100% }`，横向容器里的路径条仍保持自适应 |
+| Docker 容器列表「操作」列的 7 个按钮竖排、整列被挤窄 | 通用 `.actions { display:flex }` 把 `<td class="actions">` 变成了 flex 项，不再是表格单元格；叠加 `.dk-ops { flex-direction:column }` 后宽度塌成内容宽 | `td.actions { display:table-cell }` 恢复表格布局，`.dk-ops` 改为横向 wrap 的两组紧凑按钮 |
+
+### 38.2 文件浏览：排序 + 目录 / 文件区分
+
+「存储 / 文件」与「Git 仓库 / 服务器」打开的远程 SFTP 文件标签共用一套前端逻辑：
+
+- 表头「名称 / 大小 / 类型 / 修改时间」可点击排序，再点一次切升 / 降序（每个文件标签独立记住排序）；
+- **文件夹永远排在文件前面**，并插入「📁 文件夹 · N 项」「📄 文件 · N 项」分组行；
+- 目录使用黄色文件夹 SVG，文件按后缀生成彩色类型角标（远程文件沿用后端 `fileTypes` 的语言识别结果）；
+- 目录行保持双击进入（宝塔式），不新增「进入」按钮。
+
+### 38.3 文件编辑与 Compose 富编辑器
+
+| 模块 | 改动 |
+|---|---|
+| 后端 | 新增 `GET /api/openlist/files/content`（≤2 MB、编码 / 换行 / BOM / 语法识别，二进制与图片禁止编辑）与 `PUT`（按所选编码还原后覆盖上传）；复用 `fileTypes` 与远程 SFTP 编辑器同一套逻辑 |
+| 存储 / 文件 | 文件行新增「编辑」按钮，弹窗式 CodeMirror：语法高亮、编码、换行符、BOM、查找、重载、保存（Ctrl+S），保存后自动刷新列表 |
+| 容器编排 | YAML 输入改为 CodeMirror（行号 / YAML 高亮 / 折叠 / 自动缩进 / 查找），编辑器高度可选 360 / 480 / 640 px 且可拖拽，新增「整理格式」（Tab 转空格、去行尾空白、合并连续空行、统一 LF，不改写 YAML 语义），保留原有基础检查 |
+
+`PUT /api/openlist/files/content` 属于真实写操作，已加入 API 巡检副作用跳过清单。
+
+### 38.4 服务器编辑、DbGate 登录账号、IDE 拆页
+
+| 需求 | 实现 |
+|---|---|
+| 服务器要支持编辑修改 | 卡片新增「编辑」，复用「添加 / 编辑服务器」表单回填；凭据字段显示 `******` 表示沿用原值（后端 `keepSecret` 已支持），保存后回到列表并提供「取消编辑」 |
+| DbGate 安装只有密码、登录却要账号 | 清单 `LOGIN` 由硬编码 `admin` 改为 `${USER}`，安装表单新增「登录账号」（默认 admin，写入容器 `LOGIN`）；旧实例没有 `user` 时由 `manifest.defaults.USER` 兜底，重建不会产生空账号；实例列表显示账号，并提供「登录凭据」弹窗（`GET /api/extensions/instances/:id/credentials`，明文只在主动点击时返回） |
+| 在线 IDE 上下堆在一起 | 拆成「IDE 工作台」（选目录 / 打开 / 内嵌预览）与「IDE 配置 / 凭据」（服务地址、工作区映射、密码管理）两个独立页面，各有侧栏入口与子导航 |
+| 项目目录要能浏览选择 | 新增 `GET /api/ide/dirs?path=`：只列工作区内的下一级目录，路径经 `safeWorkspacePath` 校验；弹窗支持面包屑、上一级、进入子目录、「选择此目录」与「选择当前目录」，也可继续手填 |
+
+### 38.5 实测（本机 + 10.0.0.246，2026-11-11）
+
+| 验证项 | 结果 |
+|---|---|
+| 版本与静态资源 | 本机 / 246 `/api/health` 均为 `0.3.11`；246 `index.html` 静态版本 `?v=20261111f`（需 Ctrl+F5 刷新缓存） |
+| 目录选择器 | `GET /api/ide/dirs?path=/` → `secure`、`smoke-test` 两个目录；`?path=/secure` → 7 个子目录；`?path=/../` 返回 400「路径越界」 |
+| IDE 凭据 | 246 `/api/ide` → `CODE_SERVER_PASSWORD` 已配置；「IDE 配置」页可显示 / 复制 |
+| DbGate 账号 | 安装表单 6 个字段含 `USER:登录账号`（默认 admin）；246 现有实例 `loginUser=admin`，`/credentials` 返回 `login=admin` + 24 位密码；非 Web 管理端实例调用该接口返回 400（不再是 500） |
+| OpenList 文件编辑 | 读取 `/workspace/secure/cmd.php` → `PHP / utf-8 / LF / 148 B`；临时文件「上传 → GET → PUT（CRLF + BOM）→ GET」内容一致，原始字节以 `EF BB BF` 开头且换行为 `0D 0A`，随后删除，无残留 |
+| 扩展体检 | 246 `2 / 2` 健康；DbGate `10.0.0.246:3003` 仍在线 |
+| 接口巡检 | 本机 `--full --skip-probe` 152 项、246 `--full` **154 项**（29 个副作用路由跳过）：均 **0 个 500、0 超时**；246 唯一 502 是 OpenList 虚拟根目录未挂存储（预期） |
+| 端到端 | `scripts/verify.js` 全通过：静态资源、SFTP 读写 / 二进制 / 下载 / 删除保护、编辑器 9 种语言与 GBK / CRLF 回写、SSH 终端、**容器化构建 + 测试 `status=success exit=0`** |
+| 自检 | `npm run check`、前端自检 **70 项**、四套冒烟 40 / 31 / 29 / 60 全部通过 |
+
+> 说明：本机 Windows 的 OpenList 未挂载实际存储，因此写入回环测试在 246 完成；本机只验证接口分类与降级行为。
+
+### 38.6 顺带修复：带 tag 的官方镜像被跳过加速前缀
+
+端到端回归 `scripts/verify.js` 在 246 发现「容器化构建 + 测试」失败：`Docker API POST /containers/create → 404 No such image: node:22-bookworm`。根因是 `core.resolveImage()` 用 `raw.split('/')[0].includes(':')` 判断「镜像自带 registry 域名」，把 `node:22-bookworm` 的 **tag 冒号**误当成 registry 端口，于是整个镜像被原样保留、加速前缀未生效，而 246 上只有 `docker.m.daocloud.io/library/node:22-bookworm`。
+
+现在只在「第一个 `/` 之前确实存在域名段」时才跳过拼接：
+
+| 输入 | 前缀 | 结果 |
+|---|---|---|
+| `node:22-bookworm` | `docker.m.daocloud.io/library/` | `docker.m.daocloud.io/library/node:22-bookworm` |
+| `dbgate/dbgate` | `docker.m.daocloud.io/library/` | `docker.m.daocloud.io/dbgate/dbgate` |
+| `ghcr.io/a/b` | `docker.m.daocloud.io/` | `ghcr.io/a/b`（第三方仓库不加速） |
+
+修复后 246 的 `smoke` 构建恢复成功（`dist/smoke.txt`），前端自检新增该项断言。

@@ -14,6 +14,7 @@ const PUBLIC = path.resolve(__dirname, '..', 'platform', 'public');
 const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
 const css = fs.readFileSync(path.join(PUBLIC, 'style.css'), 'utf8');
 const app = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+const catalog = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'catalog.js'), 'utf8');
 const errors = [];
 const note = (ok, label, extra = '') => {
   console.log(`${ok ? '✔' : '✖'} ${label}${extra ? ` · ${extra}` : ''}`);
@@ -31,10 +32,11 @@ const sections = [...html.matchAll(/class="page" id="view-([a-z0-9-]+)"/g)].map(
 const SUBPAGES = ['repo-new', 'repo-clone', 'storage-conn', 'storage-mounts', 'storage-drivers',
   'build-start', 'deploys', 'server-new', 'docker-containers', 'docker-images',
   'docker-volumes', 'docker-networks', 'docker-compose'];
-note(sections.length === 27 && sections.includes('gitsrc') && sections.includes('docker')
+// v0.3.11：新增「IDE 配置」主模块页（有自己的侧栏入口），总数 27 → 28。
+note(sections.length === 28 && sections.includes('gitsrc') && sections.includes('docker')
   && sections.includes('proxy') && sections.includes('environment') && sections.includes('envcfg')
-  && SUBPAGES.every((v) => sections.includes(v)),
-'27 个独立页面（14 主模块 + 13 个子功能页）均已转为可标签化的 .page', sections.join(', '));
+  && sections.includes('ide-config') && SUBPAGES.every((v) => sections.includes(v)),
+'28 个独立页面（15 主模块 + 13 个子功能页）均已转为可标签化的 .page', sections.join(', '));
 note(['/git-sources', '/docker/overview', '/extensions/backups', '/extensions/dbgate', '/builds/backends']
   .every((p) => app.includes(p)) && app.includes('function loadGitSources') && app.includes('function loadDocker'),
 'Git 源 / Docker 管理 / 备份 / DbGate / 构建后端接口已全部接线');
@@ -82,7 +84,7 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
-note(html.includes('?v=20261111e'), '静态资源版本已升到 20261111e');
+note(html.includes('?v=20261111f'), '静态资源版本已升到 20261111f');
 
 // v0.3.10：IDE 登录凭据、总览运行主机卡片、仓库文件 / 终端 / Git 操作。
 note(html.includes('id="ide-cred"') && html.includes('id="ide-cred-reveal"')
@@ -94,6 +96,34 @@ note(app.includes("api('/repos/git'") && app.includes("api('/host-info")
   && app.includes('openFilesTab(ctx.server') && app.includes('openTerminalTab(ctx.server')
   && app.includes('initialCommand'),
 '工作区仓库可直接打开文件管理 / 终端，并经白名单接口执行 Git 命令');
+
+// v0.3.11：布局修复、排序分组、文件编辑、Compose 富编辑器、服务器编辑、DbGate 账号、IDE 拆页。
+note(css.includes('.ws-body > .pathbar-slot') && css.includes('td.actions { display: table-cell; }')
+  && css.includes('#view-docker-containers .dk-ops'),
+'远程文件管理路径条间距与容器操作列布局已修复');
+note(app.includes('function sortFileItems') && app.includes('data-ol-sort') && app.includes('data-fs-sort')
+  && app.includes('class="file-group"') && css.includes('th.sortable'),
+'两处文件列表均支持名称 / 大小 / 类型 / 修改时间排序与目录分组图标');
+note(html.includes('id="ol-editor-modal"') && html.includes('id="docker-tpl-height"')
+  && app.includes('/openlist/files/content') && app.includes('function ensureComposeEditor')
+  && app.includes('function formatComposeYaml'),
+'OpenList 文件编辑弹窗与 Compose YAML 富编辑器 / 高度 / 格式整理已接线');
+note(html.includes('id="server-edit-id"') && app.includes('data-edit-server')
+  && app.includes('function fillServerEditForm') && app.includes('function resetServerEditForm'),
+'服务器卡片支持编辑并复用添加表单（凭据脱敏沿用）');
+note(catalog.includes("LOGIN: '${USER}'") && app.includes('data-ext-op="credentials"')
+  && html.includes('id="ext-cred-modal"') && app.includes('/credentials'),
+'DbGate 登录账号可在安装时填写，实例可查看凭据');
+note(html.includes('id="view-ide-config"') && html.includes('id="ide-browse"')
+  && html.includes('id="ide-dir-modal"') && app.includes('/ide/dirs')
+  && app.includes('function openIdeDirPicker') && app.includes("'ide-config': loadIde"),
+'在线 IDE 拆成工作台与配置两页，项目目录可浏览选择');
+// 附带修复：官方镜像的 tag 冒号不能被当成 registry 端口，否则构建容器永远找不到镜像。
+const { resolveImage } = require('../platform/src/core');
+note(resolveImage('node:22-bookworm', 'docker.m.daocloud.io/library/') === 'docker.m.daocloud.io/library/node:22-bookworm'
+  && resolveImage('ghcr.io/a/b', 'docker.m.daocloud.io/') === 'ghcr.io/a/b'
+  && resolveImage('dbgate/dbgate', 'docker.m.daocloud.io/library/') === 'docker.m.daocloud.io/dbgate/dbgate',
+'镜像前缀拼接：tag 冒号不误判为 registry 端口，第三方仓库仍原样保留');
 
 // v0.3.9：宿主机 Git 实测结果在运行时卡片与环境体检中可见。
 note(app.includes('const hg = d.hostGit || {}') && app.includes("kv('宿主机 Git'")

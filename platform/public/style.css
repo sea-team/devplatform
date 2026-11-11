@@ -664,6 +664,66 @@ body.dk-compact .card { padding: 14px; }
   .host-info-grid { grid-template-columns: 1fr; }
   .pill-mini { display: none; }
 }
+/* ---------------------------- v0.3.11 ---------------------------- */
+/* 1) 远程文件管理路径条：.ws-body 是纵向 flex，pathbar-slot 不能再 flex-grow，
+   否则会把「路径条 → 工具栏」之间撑出一大块空白。存储页的横向 .row 容器仍保持自适应。 */
+.ws-body > .pathbar-slot { flex: 0 0 auto; width: 100%; }
+
+/* 2) 容器列表操作列：td.actions 被通用 .actions 改成 flex 后不再是表格单元格，
+   宽度塌成内容宽，7 个按钮被挤成一列竖排；这里恢复表格单元格并让按钮成组横向排列。 */
+td.actions { display: table-cell; }
+#view-docker-containers .dk-ops {
+  display: flex; flex-direction: row; flex-wrap: wrap; align-items: center;
+  gap: 4px; min-width: 0;
+}
+#view-docker-containers .dk-ops .ext-actions { gap: 4px; flex-wrap: wrap; }
+#view-docker-containers .dk-ops .btn { padding: 3px 8px; font-size: 11px; }
+
+/* 3) 文件浏览：可排序表头、目录 / 文件分组、图标区分 */
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--primary); background: var(--primary-soft); }
+.sort-arrow { display: inline-block; margin-left: 5px; font-size: 10px; color: var(--muted); }
+th.sorted { color: var(--primary); }
+th.sorted .sort-arrow { color: var(--primary); }
+tr.file-group td {
+  padding: 6px 13px; background: var(--surface-2); color: var(--muted);
+  font-size: 11px; font-weight: 650; letter-spacing: .3px;
+}
+tr.file-row.is-dir { background: #fffcf2; }
+tr.file-row.is-dir:hover { background: var(--primary-soft); }
+tr.file-row.is-file .file-name b { font-weight: 550; }
+.ft-folder { background: #fff2cf; color: #b45309; }
+.ft-folder svg { display: block; }
+.ft-ext { background: #eef2f7; color: #475569; }
+
+/* 4) Compose 富编辑器 / OpenList 文件编辑器 */
+.cm-compose { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.cm-compose-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border);
+}
+.cm-compose-bar b { font-size: 12px; }
+.cm-compose-bar .cm-height { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.cm-compose-bar select { border: 1px solid var(--border); border-radius: 7px; padding: 4px 7px; background: #fff; color: var(--text); font-size: 12px; }
+.cm-compose .CodeMirror { height: 480px; min-height: 220px; max-height: 900px; font-size: 12.5px; resize: vertical; overflow: auto; }
+.cm-compose .CodeMirror-scroll { min-height: 220px; }
+.ol-ed-body { position: relative; height: min(58vh, 560px); min-height: 260px; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+.ol-ed-body .CodeMirror { height: 100%; font-size: 12.5px; }
+.ol-ed-body textarea { width: 100%; height: 100%; border: 0; outline: none; padding: 12px; resize: none; font: 13px/1.6 Consolas, Menlo, monospace; }
+.ol-ed-body .ed-preview { padding: 20px; height: 100%; overflow: auto; display: flex; align-items: center; justify-content: center; }
+
+/* 5) 目录选择弹窗 */
+.dir-picker { margin-top: 10px; max-height: min(46vh, 380px); overflow: auto; border: 1px solid var(--border); border-radius: 9px; }
+.dir-pick-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.dir-pick-row:last-child { border-bottom: 0; }
+.dir-pick-row:hover { background: var(--primary-soft); }
+.dir-pick-name { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; cursor: pointer; color: var(--text); font-size: 13px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dir-pick-name b { font-weight: 550; }
+.ide-config-row { display: flex; gap: 12px; padding: 10px 13px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.ide-config-row:last-child { border-bottom: 0; }
+.ide-config-row b { flex: 0 0 110px; color: var(--muted); font-weight: 600; }
+.ide-config-row span { min-width: 0; word-break: break-all; }
+
 @media (max-width: 720px) {
   .sidebar { width: 64px; flex-basis: 64px; }
   .brand { justify-content: center; padding: 18px 8px; }

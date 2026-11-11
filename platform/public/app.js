@@ -8,7 +8,8 @@ const VIEW_META = {
   repos: ['仓库列表', '聚合平台自带与 GitHub / 自建 Gitea 等外部源，克隆后直接开发'],
   'repo-new': ['新建仓库', '在指定 Git 源上创建并自动初始化仓库'],
   'repo-clone': ['克隆到工作区', '支持已登记源凭据、本次账号密码 / Token，以及分层代理'],
-  ide: ['在线 IDE', '基于 code-server 的浏览器版 VSCode，工作区与构建流水线共享'],
+  ide: ['在线 IDE', '打开 code-server 项目：工作区目录可浏览选择，内嵌预览'],
+  'ide-config': ['IDE 配置 / 凭据', 'code-server 服务地址、工作区映射与登录密码管理'],
   storage: ['文件浏览', '当前 OpenList 连接下的文件、上传、下载与批量操作'],
   'storage-conn': ['OpenList 连接', '登记 / 切换本机与多个外部 OpenList，查看状态与后台'],
   'storage-mounts': ['挂载存储', '当前连接下的挂载点增删改、启停与重载'],
@@ -34,7 +35,7 @@ const VIEW_META = {
 };
 const MODULE_ICONS = {
   overview: '◈', repos: '⑂', 'repo-new': '＋', 'repo-clone': '⇩',
-  ide: '⌘', storage: '▤', 'storage-conn': '⇄', 'storage-mounts': '⛁', 'storage-drivers': '⎗',
+  ide: '⌘', 'ide-config': '⎈', storage: '▤', 'storage-conn': '⇄', 'storage-mounts': '⛁', 'storage-drivers': '⎗',
   builds: '⚙', 'build-start': '▶', deploys: '⇧',
   servers: '▣', 'server-new': '＋', extensions: '▦', gitsrc: '⑃',
   docker: '⬡', 'docker-containers': '▣', 'docker-images': '◫', 'docker-volumes': '⛁',
@@ -52,7 +53,11 @@ const NAV_GROUP = {
 
 let currentView = 'overview';
 let currentStoragePath = '/';
-const storageState = { files: [], selected: new Set(), storages: [], drivers: [], connection: null, editId: '' };
+const storageState = {
+  files: [], selected: new Set(), storages: [], drivers: [], connection: null, editId: '',
+  // v0.3.11：文件浏览排序（目录恒优先，组内按所选字段升降序）。
+  sort: { key: 'name', dir: 'asc' },
+};
 const proxyState = { config: null, entities: null };
 let logTimer = null;
 let selectedBuildId = null;
@@ -86,6 +91,70 @@ function fmtSize(bytes) {
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
+}
+
+/* ---------------- v0.3.11 · 文件浏览排序与目录 / 文件区分 ---------------- */
+const FOLDER_SVG = '<svg viewBox="0 0 20 16" width="18" height="15" aria-hidden="true"><path d="M1.5 2.5h6l2 2.2h9v9.3a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1z" fill="#f7bd4b" stroke="#d99a20" stroke-width=".8"/></svg>';
+const EXT_COLORS = {
+  js: 'amber', ts: 'blue', json: 'amber', php: 'purple', py: 'blue', go: 'cyan', rs: 'orange',
+  java: 'orange', css: 'blue', scss: 'pink', html: 'orange', xml: 'orange', sh: 'green',
+  yml: 'green', yaml: 'green', md: 'cyan', sql: 'purple', env: 'gray', conf: 'gray',
+  png: 'pink', jpg: 'pink', jpeg: 'pink', gif: 'pink', svg: 'orange', pdf: 'red',
+  zip: 'amber', gz: 'amber', tar: 'amber', exe: 'red', dll: 'red', so: 'red',
+};
+
+function fileExt(item) {
+  const name = String(item.name || '');
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+
+function fileTypeLabel(item) {
+  if (item.isDir) return '文件夹';
+  const ext = fileExt(item);
+  return ext ? `${ext.toUpperCase()} 文件` : '文件';
+}
+
+/** 目录统一用黄色文件夹图标；文件按后缀给彩色类型角标，与远程 SFTP 的识别结果兼容。 */
+function fileGlyph(item) {
+  if (item.isDir) return `<span class="ft-icon ft-folder" title="文件夹">${FOLDER_SVG}</span>`;
+  if (item.icon) return `<span class="ft-icon ft-${esc(item.color || 'gray')}" title="${esc(item.language || fileTypeLabel(item))}">${esc(item.icon)}</span>`;
+  const ext = fileExt(item);
+  const label = ext ? ext.slice(0, 3).toUpperCase() : 'TXT';
+  return `<span class="ft-icon ft-${EXT_COLORS[ext] || 'ext'}" title="${esc(fileTypeLabel(item))}">${esc(label)}</span>`;
+}
+
+function sortHeader(label, key, sort, attr) {
+  const active = sort.key === key;
+  const arrow = active ? (sort.dir === 'asc' ? '▲' : '▼') : '⇅';
+  return `<th class="sortable${active ? ' sorted' : ''}" ${attr}="${key}" title="点击按${esc(label)}排序，再点切换升 / 降序">${esc(label)}<span class="sort-arrow">${arrow}</span></th>`;
+}
+
+function toggleSort(sort, key) {
+  if (sort.key === key) sort.dir = sort.dir === 'asc' ? 'desc' : 'asc';
+  else { sort.key = key; sort.dir = 'asc'; }
+  return sort;
+}
+
+/** 文件夹永远排在文件前面；组内按名称 / 修改时间 / 类型 / 大小排序。 */
+function sortFileItems(items, sort) {
+  const key = sort.key || 'name';
+  const sign = sort.dir === 'desc' ? -1 : 1;
+  const name = (f) => String(f.name || '');
+  const cmpName = (a, b) => name(a).localeCompare(name(b), 'zh-CN', { numeric: true, sensitivity: 'base' });
+  const time = (f) => {
+    const v = Date.parse(f.mtime || f.modified || 0);
+    return Number.isFinite(v) ? v : 0;
+  };
+  return (Array.isArray(items) ? [...items] : []).sort((a, b) => {
+    if (Boolean(a.isDir) !== Boolean(b.isDir)) return a.isDir ? -1 : 1;
+    let r = 0;
+    if (key === 'mtime') r = time(a) - time(b);
+    else if (key === 'size') r = Number(a.size || 0) - Number(b.size || 0);
+    else if (key === 'type') r = fileTypeLabel(a).localeCompare(fileTypeLabel(b), 'zh-CN', { sensitivity: 'base' });
+    else r = cmpName(a, b);
+    return (r || cmpName(a, b)) * sign;
+  });
 }
 
 function toast(message, isError = false) {
@@ -309,6 +378,10 @@ function activateTab(id) {
   }
   if (tab.onActivate) {
     try { tab.onActivate(tab); } catch { /* noop */ }
+  }
+  // v0.3.11：Compose 的 CodeMirror 在隐藏页里初始化，切到该页后必须刷新一次才能正确布局。
+  if (tab.kind === 'module' && tab.module === 'docker-compose') {
+    try { if (composeState.cm) setTimeout(() => composeState.cm.refresh(), 0); } catch { /* noop */ }
   }
   persistTabs();
 }
@@ -885,6 +958,18 @@ async function loadIde() {
     const d = await api('/ide');
     $('#ide-home').href = d.url;
     $('#ide-url').textContent = `服务地址：${d.url} · 平台工作区：${d.workspace}`;
+    // v0.3.11：独立「IDE 配置」页展示服务 / 工作区 / 凭据来源，工作台页专注打开项目。
+    const info = $('#ide-config-info');
+    if (info) {
+      const p = d.password || {};
+      info.innerHTML = [
+        ['服务地址', d.url],
+        ['平台工作区', d.workspace],
+        ['容器内映射', '/home/coder/project'],
+        ['密码配置项', `${p.key || 'CODE_SERVER_PASSWORD'}（对应 ${p.envVar || '$PASSWORD'}）`],
+        ['密码状态', p.configured ? '已配置 · 可在下方显示 / 复制' : '未配置 · 请到「环境配置」新增该项'],
+      ].map(([k, v]) => `<div class="ide-config-row"><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join('');
+    }
     // v0.3.10：登录页那句「Password was set from $PASSWORD」对应 .env 的哪一项，讲清楚并可复制。
     const p = d.password || {};
     ideCredState.configured = Boolean(p.configured);
@@ -919,6 +1004,81 @@ async function openIde() {
     $('#ide-frame').src = d.url;
     window.open(d.url, '_blank', 'noopener');
   } catch (e) { toast(e.message, true); }
+}
+
+/* ------------- v0.3.11 · IDE 项目目录浏览选择器 ------------- */
+const ideDirState = { path: '/', parent: '/', bound: false };
+
+async function loadIdeDirs(path) {
+  const box = $('#ide-dir-list');
+  if (box) box.innerHTML = '<div class="muted" style="padding:14px">读取中…</div>';
+  try {
+    const d = await api(`/ide/dirs?path=${encodeURIComponent(path || '/')}`);
+    ideDirState.path = d.path || '/';
+    ideDirState.parent = d.parent || '/';
+    const bar = $('#ide-dir-pathbar');
+    if (bar) {
+      bar.innerHTML = pathBarHtml(ideDirState.path);
+      bindPathBar(bar, {
+        onGo: (v) => loadIdeDirs(v),
+        onUp: () => loadIdeDirs(ideDirState.parent),
+      });
+    }
+    const cur = $('#ide-dir-current');
+    if (cur) cur.textContent = `当前目录：${ideDirState.path} · 容器内 /home/coder/project${ideDirState.path === '/' ? '' : ideDirState.path}`;
+    const sub = $('#ide-dir-sub');
+    if (sub) sub.textContent = `${d.workspace || '工作区'} · ${d.total || 0} 个子目录`;
+    if (box) {
+      const items = d.items || [];
+      box.innerHTML = items.length ? items.map((item) => `
+        <div class="dir-pick-row">
+          <button class="dir-pick-name" type="button" data-ide-dir-enter="${esc(item.path)}" title="进入 ${esc(item.name)}">${FOLDER_SVG}<b>${esc(item.name)}</b></button>
+          <button class="btn btn-sm" type="button" data-ide-dir-pick="${esc(item.path)}">选择此目录</button>
+        </div>`).join('') : '<div class="empty">该目录下没有子目录，可直接点「选择当前目录」</div>';
+    }
+  } catch (e) {
+    if (box) box.innerHTML = `<div class="notice error" style="margin:10px">${esc(e.message)}</div>`;
+  }
+}
+
+function selectIdeDir(path) {
+  const rel = String(path || '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  const input = $('#ide-path');
+  if (input) input.value = rel;
+  const picked = $('#ide-picked');
+  if (picked) {
+    picked.hidden = false;
+    picked.textContent = `已选择：${rel || '工作区根目录'} · IDE 内路径 /home/coder/project${rel ? `/${rel}` : ''}`;
+  }
+  const modal = $('#ide-dir-modal');
+  if (modal) modal.hidden = true;
+  toast(rel ? `已选择项目目录 ${rel}` : '已选择工作区根目录');
+}
+
+function openIdeDirPicker() {
+  const current = String(($('#ide-path') && $('#ide-path').value) || '').trim();
+  const modal = $('#ide-dir-modal');
+  if (modal) modal.hidden = false;
+  loadIdeDirs(current ? `/${current.replace(/^\/+/, '')}` : '/');
+  if (ideDirState.bound) return;
+  ideDirState.bound = true;
+  document.addEventListener('click', (e) => {
+    if (e.target.closest && e.target.closest('[data-ide-dir-close]')) {
+      const m = $('#ide-dir-modal');
+      if (m) m.hidden = true;
+      return;
+    }
+    const pick = e.target.closest && e.target.closest('[data-ide-dir-pick]');
+    if (pick) { selectIdeDir(pick.dataset.ideDirPick); return; }
+    const enter = e.target.closest && e.target.closest('[data-ide-dir-enter]');
+    if (enter) loadIdeDirs(enter.dataset.ideDirEnter);
+  });
+  const up = $('#ide-dir-up');
+  if (up) up.addEventListener('click', () => loadIdeDirs(ideDirState.parent));
+  const root = $('#ide-dir-root');
+  if (root) root.addEventListener('click', () => loadIdeDirs('/'));
+  const choose = $('#ide-dir-select');
+  if (choose) choose.addEventListener('click', () => selectIdeDir(ideDirState.path));
 }
 
 /* --------------------------------- 存储 ---------------------------------- */
@@ -1099,39 +1259,68 @@ function renderBreadcrumb(p) {
 
 function renderFileList(d) {
   storageState.files = d.content || [];
+  storageState.listData = d;
   storageState.selected.clear();
-  $('#storage-provider').textContent = `${d.provider || 'OpenList'} · ${d.total || 0} 项${d.write ? '' : ' · 只读'}`;
-  $('#file-list').innerHTML = table(['', '名称', '大小', '类型', '修改时间', '操作'], storageState.files.map((f) => {
+  const sort = storageState.sort;
+  const items = sortFileItems(storageState.files, sort);
+  const dirCount = items.filter((f) => f.isDir).length;
+  const fileCount = items.length - dirCount;
+  $('#storage-provider').textContent = `${d.provider || 'OpenList'} · ${d.total || 0} 项 · 文件夹 ${dirCount} / 文件 ${fileCount}${d.write ? '' : ' · 只读'}`;
+  const rows = [];
+  let group = '';
+  items.forEach((f) => {
+    const next = f.isDir ? 'dir' : 'file';
+    if (next !== group) {
+      group = next;
+      rows.push(`<tr class="file-group"><td colspan="6">${f.isDir
+        ? `📁 文件夹 · ${dirCount} 项（目录恒排在最前）`
+        : `📄 文件 · ${fileCount} 项`}</td></tr>`);
+    }
     const full = olJoin(currentStoragePath, f.name);
-    return `<tr class="file-row${f.isDir ? ' is-dir' : ''}" data-ol-dir="${f.isDir ? esc(full) : ''}" ${f.isDir ? 'title="双击进入该目录"' : ''}>
-      <td><input type="checkbox" data-ol-file="${esc(f.name)}" /></td>
-      <td><span class="file-name">${f.isDir ? '📁' : '📄'} <b>${esc(f.name)}</b></span></td>
-      <td>${f.isDir ? '-' : fmtSize(f.size)}</td>
-      <td>${f.isDir ? '目录' : '文件'}</td>
-      <td class="muted">${esc(fmtTime(f.modified))}</td>
-      <td class="actions"><div class="ext-actions">
+    rows.push(`<tr class="file-row ${f.isDir ? 'is-dir' : 'is-file'}" data-ol-dir="${f.isDir ? esc(full) : ''}" ${f.isDir ? 'title="双击进入该目录"' : ''}>
+      <td style="width:38px"><input type="checkbox" data-ol-file="${esc(f.name)}" /></td>
+      <td><span class="file-name">${fileGlyph(f)} <b>${esc(f.name)}</b></span></td>
+      <td style="width:110px">${f.isDir ? '-' : fmtSize(f.size)}</td>
+      <td style="width:120px">${esc(fileTypeLabel(f))}</td>
+      <td class="muted" style="width:170px">${esc(fmtTime(f.modified))}</td>
+      <td class="actions" style="width:270px"><div class="ext-actions">
         ${f.isDir
           ? ''
-          : `<button class="btn btn-sm" data-ol-get="${esc(full)}">下载</button>
+          : `<button class="btn btn-sm btn-primary" data-ol-edit="${esc(full)}" data-ol-edit-name="${esc(f.name)}">编辑</button>
+             <button class="btn btn-sm" data-ol-get="${esc(full)}">下载</button>
              <button class="btn btn-sm" data-ol-link="${esc(full)}">直链</button>`}
         <button class="btn btn-sm" data-ol-one-rename="${esc(full)}">重命名</button>
         <button class="btn btn-sm btn-danger" data-ol-one-del="${esc(f.name)}">删除</button>
       </div></td>
-    </tr>`;
-  }));
+    </tr>`);
+  });
+  $('#file-list').innerHTML = `<table><thead><tr>
+    <th style="width:38px"></th>
+    ${sortHeader('名称', 'name', sort, 'data-ol-sort')}
+    ${sortHeader('大小', 'size', sort, 'data-ol-sort')}
+    ${sortHeader('类型', 'type', sort, 'data-ol-sort')}
+    ${sortHeader('修改时间', 'mtime', sort, 'data-ol-sort')}
+    <th style="width:270px">操作</th>
+  </tr></thead><tbody>${rows.join('') || '<tr><td colspan="6" class="muted">目录为空</td></tr>'}</tbody></table>`;
   renderBreadcrumb(d.path || currentStoragePath);
+  // 表头即排序控件：同列再点一次切换升 / 降序，目录始终优先分组。
+  $('#file-list').querySelectorAll('[data-ol-sort]').forEach((th) => th.addEventListener('click', () => {
+    toggleSort(sort, th.dataset.olSort);
+    renderFileList(storageState.listData || d);
+  }));
   $$('[data-ol-file]').forEach((box) => box.addEventListener('change', () => {
     if (box.checked) storageState.selected.add(box.dataset.olFile);
     else storageState.selected.delete(box.dataset.olFile);
     const all = $$('[data-ol-file]');
     $('#storage-select-all').checked = all.length > 0 && all.every((x) => x.checked);
   }));
-  // v0.3.6：目录双击进入（宝塔式），不再需要每行一个「进入」按钮。
+  // v0.3.6 起目录统一双击进入（宝塔式），不额外占一列「进入」按钮。
   $$('[data-ol-dir]').forEach((row) => row.addEventListener('dblclick', (e) => {
     if (e.target.closest('button, input, a')) return;
     const target = row.dataset.olDir;
     if (target) { currentStoragePath = target; loadStorage(); }
   }));
+  $$('[data-ol-edit]').forEach((b) => b.addEventListener('click', () => openOlEditor(b.dataset.olEdit, b.dataset.olEditName)));
   $$('[data-ol-get]').forEach((b) => b.addEventListener('click', () => { window.open(olDownloadUrl(b.dataset.olGet), '_blank', 'noopener'); }));
   $$('[data-ol-link]').forEach((b) => b.addEventListener('click', () => olAction('link', [b.dataset.olLink])));
   $$('[data-ol-one-rename]').forEach((b) => b.addEventListener('click', () => olAction('rename', [b.dataset.olOneRename])));
@@ -1139,6 +1328,169 @@ function renderFileList(d) {
     e.preventDefault();
     olAction('remove', [b.dataset.olOneDel]);
   }));
+}
+
+/* ------------- v0.3.11 · OpenList 文件编辑（弹窗式 CodeMirror） ------------- */
+const olEditorState = {
+  path: '', name: '', cm: null, meta: null, bound: false,
+  encoding: 'utf-8', newline: 'LF', bom: false, dirty: false,
+};
+
+function olEditorValue() {
+  if (olEditorState.cm) {
+    try { return olEditorState.cm.getValue(); } catch { /* noop */ }
+  }
+  const area = $('#ol-ed-area');
+  return area ? String(area.value || '') : '';
+}
+
+function setOlEditorValue(text) {
+  const area = $('#ol-ed-area');
+  if (area) area.value = String(text || '');
+  if (olEditorState.cm) {
+    try { olEditorState.cm.setValue(String(text || '')); olEditorState.cm.refresh(); } catch { /* noop */ }
+  }
+}
+
+function setOlDirty(dirty) {
+  olEditorState.dirty = Boolean(dirty);
+  const el = $('#ol-ed-state');
+  if (el) { el.textContent = dirty ? '未保存' : '已保存'; el.className = `ed-state ${dirty ? 'dirty' : 'saved'}`; }
+}
+
+function updateOlEditorStatus() {
+  const text = olEditorValue();
+  let line = 1; let col = 1;
+  if (olEditorState.cm) {
+    try { const c = olEditorState.cm.getCursor(); line = c.line + 1; col = c.ch + 1; } catch { /* noop */ }
+  }
+  const pos = $('#ol-ed-pos');
+  const meta = $('#ol-ed-meta');
+  if (pos) pos.textContent = `行 ${line} · 列 ${col} / 共 ${text.split('\n').length} 行`;
+  if (meta) meta.textContent = `${olEditorState.meta ? (olEditorState.meta.language || '文本') : '文本'} · ${olEditorState.encoding} · ${olEditorState.newline}${olEditorState.bom ? ' · BOM' : ''} · ${fmtSize(olEditorState.meta ? olEditorState.meta.size : 0)}`;
+}
+
+function ensureOlCodeMirror() {
+  if (olEditorState.cm || typeof CodeMirror === 'undefined') return;
+  const area = $('#ol-ed-area');
+  if (!area) return;
+  olEditorState.cm = CodeMirror.fromTextArea(area, {
+    lineNumbers: true, mode: null, indentUnit: 2, tabSize: 2, indentWithTabs: false,
+    lineWrapping: false, matchBrackets: true, autoCloseBrackets: true,
+    styleActiveLine: true, foldGutter: true,
+    gutters: ['CodeMirror-linenumbers', 'CodeMirror-foldgutter'],
+    extraKeys: {
+      'Ctrl-S': () => saveOlEditor(), 'Cmd-S': () => saveOlEditor(),
+      'Ctrl-F': 'findPersistent', 'Cmd-F': 'findPersistent',
+    },
+  });
+  olEditorState.cm.on('change', () => { setOlDirty(true); updateOlEditorStatus(); });
+  olEditorState.cm.on('cursorActivity', updateOlEditorStatus);
+}
+
+async function loadOlEditor(encoding = 'auto') {
+  try {
+    const d = await api(`/openlist/files/content?path=${encodeURIComponent(olEditorState.path)}&encoding=${encodeURIComponent(encoding)}`);
+    olEditorState.meta = d;
+    olEditorState.encoding = d.encoding || 'utf-8';
+    olEditorState.newline = d.newline || 'LF';
+    olEditorState.bom = Boolean(d.hasBom);
+    fillSelect($('#ol-ed-lang'), d.languages, d.mode || '');
+    fillSelect($('#ol-ed-encoding'), d.encodings, 'auto');
+    fillSelect($('#ol-ed-newline'), d.newlines, olEditorState.newline);
+    const bom = $('#ol-ed-bom');
+    if (bom) bom.checked = olEditorState.bom;
+    const editable = d.editable !== false && d.kind === 'text';
+    setOlEditorValue(editable ? (d.content || '') : '');
+    const area = $('#ol-ed-area');
+    const cmEl = document.querySelector('.ol-ed-body .CodeMirror');
+    if (cmEl) cmEl.style.display = editable ? '' : 'none'; // 从二进制文件切回文本时恢复编辑器
+    if (area && !olEditorState.cm) area.style.display = editable ? 'block' : 'none';
+    const body = document.querySelector('.ol-ed-body');
+    if (body && !editable) {
+      body.innerHTML += `<div class="ed-preview">${esc(d.warning || '该文件不能按文本编辑，请使用下载 / 上传。')}</div>`;
+    }
+    if (olEditorState.cm) {
+      try { olEditorState.cm.setOption('mode', resolveMode(d.mode)); olEditorState.cm.refresh(); } catch { /* noop */ }
+    }
+    setOlDirty(false);
+    updateOlEditorStatus();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function saveOlEditor() {
+  if (!olEditorState.meta || olEditorState.meta.kind !== 'text' || olEditorState.meta.editable === false) {
+    toast('该文件不能按文本编辑', true); return;
+  }
+  try {
+    const d = await api('/openlist/files/content', {
+      method: 'PUT',
+      body: {
+        path: olEditorState.path, content: olEditorValue(),
+        encoding: olEditorState.encoding === 'auto' ? 'utf-8' : olEditorState.encoding,
+        newline: olEditorState.newline, bom: olEditorState.bom,
+      },
+    });
+    olEditorState.meta.size = d.size;
+    setOlDirty(false);
+    updateOlEditorStatus();
+    toast(`已保存 ${olEditorState.name}（${d.encoding} / ${d.newline}）`);
+    loadStorage();
+  } catch (e) { toast(e.message, true); }
+}
+
+function closeOlEditor(force = false) {
+  if (!force && olEditorState.dirty && !confirm('文件有未保存的修改，确定关闭吗？')) return;
+  const modal = $('#ol-editor-modal');
+  if (modal) modal.hidden = true;
+  olEditorState.dirty = false;
+}
+
+function openOlEditor(path, name) {
+  olEditorState.path = path;
+  olEditorState.name = name || path.split('/').filter(Boolean).pop() || path;
+  const title = $('#ol-editor-title');
+  const sub = $('#ol-editor-path');
+  if (title) title.textContent = `编辑 · ${olEditorState.name}`;
+  if (sub) sub.textContent = path;
+  const body = document.querySelector('.ol-ed-body');
+  // 上一次打开二进制文件时追加的提示先清掉，避免重复叠加。
+  if (body) Array.from(body.querySelectorAll('.ed-preview')).forEach((el) => el.remove());
+  const modal = $('#ol-editor-modal');
+  if (modal) modal.hidden = false;
+  ensureOlCodeMirror();
+  if (olEditorState.cm) { try { olEditorState.cm.refresh(); } catch { /* noop */ } }
+  if (!olEditorState.bound) {
+    olEditorState.bound = true;
+    document.addEventListener('click', (e) => {
+      if (e.target.closest && e.target.closest('[data-ol-ed-close]')) { closeOlEditor(); return; }
+      const button = e.target.closest && e.target.closest('[data-ol-ed]');
+      if (!button) return;
+      if (button.dataset.olEd === 'save') saveOlEditor();
+      else if (button.dataset.olEd === 'reload') {
+        if (olEditorState.dirty && !confirm('重新载入会丢弃未保存的修改，继续？')) return;
+        loadOlEditor($('#ol-ed-encoding') ? $('#ol-ed-encoding').value : 'auto');
+      } else if (button.dataset.olEd === 'find') {
+        if (olEditorState.cm && typeof CodeMirror !== 'undefined') { olEditorState.cm.focus(); CodeMirror.commands.findPersistent(olEditorState.cm); }
+        else toast('查找需要 CodeMirror 组件', true);
+      }
+    });
+    const lang = $('#ol-ed-lang');
+    if (lang) lang.addEventListener('change', () => {
+      if (olEditorState.cm) olEditorState.cm.setOption('mode', resolveMode(lang.value));
+      toast('语法高亮已切换');
+    });
+    const enc = $('#ol-ed-encoding');
+    if (enc) enc.addEventListener('change', () => {
+      if (olEditorState.dirty && !confirm('切换编码会重新读取文件并丢弃未保存的修改，继续？')) return;
+      loadOlEditor(enc.value);
+    });
+    const nl = $('#ol-ed-newline');
+    if (nl) nl.addEventListener('change', () => { olEditorState.newline = nl.value; updateOlEditorStatus(); });
+    const bom = $('#ol-ed-bom');
+    if (bom) bom.addEventListener('change', () => { olEditorState.bom = bom.checked; updateOlEditorStatus(); });
+  }
+  loadOlEditor('auto');
 }
 
 function renderMountList(items) {
@@ -1512,6 +1864,39 @@ async function watchLog(id) {
 
 /* -------------------------------- 服务器 --------------------------------- */
 
+/* ------------- v0.3.11 · 服务器登记信息可编辑 ------------- */
+/** 列表接口只回凭据「有没有」，不回明文；编辑表单用 ****** 占位，提交时后端沿用原值。 */
+function fillServerEditForm(server) {
+  const form = $('#server-form');
+  if (!form) return;
+  form.reset();
+  const f = form.elements;
+  $('#server-edit-id').value = server.id || '';
+  f.name.value = server.name || '';
+  f.host.value = server.host || '';
+  f.port.value = server.port || 22;
+  f.username.value = server.username || 'root';
+  f.password.value = server.hasPassword ? '******' : '';
+  f.passphrase.value = server.hasPassphrase ? '******' : '';
+  f.privateKey.value = server.hasPrivateKey && !server.privateKeyPath ? '******' : '';
+  f.privateKeyPath.value = server.privateKeyPath || '';
+  f.deployDir.value = server.deployDir || '/data/platform';
+  f.proxy.value = server.proxy || '';
+  $('#server-form-title').textContent = `编辑服务器 · ${server.name || ''}`;
+  $('#server-edit-tip').hidden = false;
+}
+
+function resetServerEditForm() {
+  const form = $('#server-form');
+  if (form) form.reset();
+  const id = $('#server-edit-id');
+  if (id) id.value = '';
+  const title = $('#server-form-title');
+  if (title) title.textContent = '添加服务器';
+  const tip = $('#server-edit-tip');
+  if (tip) tip.hidden = true;
+}
+
 async function loadServers() {
   try {
     const d = await api('/servers');
@@ -1536,6 +1921,7 @@ async function loadServers() {
         <div class="actions">
           <button class="btn btn-sm btn-primary" data-terminal="${esc(s.id)}">Web 终端</button>
           <button class="btn btn-sm" data-files="${esc(s.id)}">文件管理</button>
+          <button class="btn btn-sm" data-edit-server="${esc(s.id)}">编辑</button>
           <button class="btn btn-sm" data-status="${esc(s.id)}">检查状态</button>
           <button class="btn btn-sm" data-test="${esc(s.id)}">测试连接</button>
           <button class="btn btn-sm" data-server-proxy="${esc(s.id)}">代理</button>
@@ -1550,6 +1936,10 @@ async function loadServers() {
     $$('[data-files]').forEach((b) => b.addEventListener('click', () => {
       const server = cards.find((s) => s.id === b.dataset.files);
       if (server) openFilesTab(server);
+    }));
+    $$('[data-edit-server]').forEach((b) => b.addEventListener('click', () => {
+      const server = cards.find((s) => s.id === b.dataset.editServer);
+      if (server) { fillServerEditForm(server); switchView('server-new'); }
     }));
     $$('[data-status]').forEach((b) => b.addEventListener('click', () => checkStatus(b.dataset.status)));
     $$('[data-test]').forEach((b) => b.addEventListener('click', async () => {
@@ -1640,14 +2030,19 @@ function openFilesTab(server, startPath) {
           <button class="btn btn-sm btn-danger" data-fs="remove-selected">删除选中</button>
         </div>
         <div class="fs-table" data-role="fs-list"></div>
-        <div class="term-hint">点击文件名在新标签页打开编辑器：按后缀自动识别语言并语法高亮，可切换编码 / 换行符 / BOM。可以同时打开多个文件、多个终端与多个模块页。</div>
+        <div class="term-hint">目录与文件分组显示，点表头「名称 / 大小 / 类型 / 修改时间」可切换排序；点击文件名在新标签页打开编辑器（语法高亮 + 编码 / 换行符 / BOM）。可以同时打开多个文件、多个终端与多个模块页。</div>
       </div>
     </div>`);
   const tab = registerTab({
     id, kind: 'files', dynamic: true, closable: true, icon: '▤', pane,
     title: `文件 · ${server.name}`,
     sub: `${server.host} · SFTP 文件管理（可多标签编辑）`,
-    ctx: { serverId: server.id, serverName: server.name, host: server.host, path: start, parent: pathParent(start) },
+    ctx: {
+      serverId: server.id, serverName: server.name, host: server.host,
+      path: start, parent: pathParent(start),
+      // v0.3.11：每个文件标签独立记住自己的排序方式。
+      sort: { key: 'name', dir: 'asc' }, items: [],
+    },
   });
   bindFilesPane(tab);
   loadRemoteFiles(tab);
@@ -1687,6 +2082,51 @@ function bindFilesPane(tab) {
   // 路径跳转由上方 pathbar 统一处理：面包屑点击 / 空白点击输入 / 回车确认。
 }
 
+/** v0.3.11：目录恒优先并分组；表头点击按名称 / 大小 / 类型 / 修改时间升降序排列。 */
+function renderRemoteFileTable(tab) {
+  const box = q(tab.pane, 'fs-list');
+  if (!box) return;
+  const sort = tab.ctx.sort || (tab.ctx.sort = { key: 'name', dir: 'asc' });
+  const items = sortFileItems(tab.ctx.items || [], sort);
+  const dirCount = items.filter((i) => i.isDir).length;
+  const rows = [];
+  let group = '';
+  items.forEach((item) => {
+    const next = item.isDir ? 'dir' : 'file';
+    if (next !== group) {
+      group = next;
+      rows.push(`<tr class="file-group"><td colspan="6">${item.isDir
+        ? `📁 文件夹 · ${dirCount} 项（目录恒排在最前）`
+        : `📄 文件 · ${items.length - dirCount} 项`}</td></tr>`);
+    }
+    rows.push(`<tr class="file-row ${item.isDir ? 'is-dir' : 'is-file'}" data-fs-path="${esc(item.path)}" data-fs-name="${esc(item.name)}" data-fs-dir="${item.isDir ? 1 : 0}">
+      <td style="width:38px"><input type="checkbox" data-role="fs-check" value="${esc(item.name)}" /></td>
+      <td>${fileGlyph(item)} <a href="#" class="fs-name">${esc(item.name)}</a>
+        ${item.isDir ? '' : `<span class="ft-lang">${esc(item.language || '')}</span>`}</td>
+      <td style="width:110px">${item.isDir ? '—' : fmtSize(item.size)}</td>
+      <td style="width:120px">${esc(fileTypeLabel(item))}</td>
+      <td style="width:170px" class="muted">${esc(fmtTime(item.mtime))}</td>
+      <td class="fs-ops" style="width:230px">
+        ${item.isDir ? '' : '<button class="btn btn-xs" data-fs-act="edit">编辑</button><button class="btn btn-xs" data-fs-act="download">下载</button>'}
+        <button class="btn btn-xs" data-fs-act="rename">重命名</button>
+        <button class="btn btn-xs btn-danger" data-fs-act="delete">删除</button>
+      </td>
+    </tr>`);
+  });
+  box.innerHTML = `<table><thead><tr>
+    <th style="width:38px"></th>
+    ${sortHeader('名称（按类型识别）', 'name', sort, 'data-fs-sort')}
+    ${sortHeader('大小', 'size', sort, 'data-fs-sort')}
+    ${sortHeader('类型', 'type', sort, 'data-fs-sort')}
+    ${sortHeader('修改时间', 'mtime', sort, 'data-fs-sort')}
+    <th style="width:230px">操作</th>
+  </tr></thead><tbody>${rows.join('') || '<tr><td colspan="6" class="muted">目录为空</td></tr>'}</tbody></table>`;
+  box.querySelectorAll('[data-fs-sort]').forEach((th) => th.addEventListener('click', () => {
+    toggleSort(sort, th.dataset.fsSort);
+    renderRemoteFileTable(tab);
+  }));
+}
+
 async function loadRemoteFiles(tab) {
   const pane = tab.pane;
   const box = q(pane, 'fs-list');
@@ -1697,6 +2137,7 @@ async function loadRemoteFiles(tab) {
     if (!tabs.has(tab.id)) return;
     tab.ctx.path = data.path;
     tab.ctx.parent = data.parent;
+    tab.ctx.items = data.items || [];
     const bar = q(pane, 'fs-pathbar');
     if (bar) {
       bar.innerHTML = pathBarHtml(data.path);
@@ -1705,24 +2146,7 @@ async function loadRemoteFiles(tab) {
         onUp: () => { tab.ctx.path = tab.ctx.parent || '/'; loadRemoteFiles(tab); },
       });
     }
-    const rows = (data.items || []).map((item) => `
-      <tr data-fs-path="${esc(item.path)}" data-fs-name="${esc(item.name)}" data-fs-dir="${item.isDir ? 1 : 0}">
-        <td style="width:38px"><input type="checkbox" data-role="fs-check" value="${esc(item.name)}" /></td>
-        <td><span class="ft-icon ft-${esc(item.color || 'gray')}">${esc(item.icon || 'TXT')}</span>
-          <a href="#" class="fs-name">${esc(item.name)}</a>
-          ${item.isDir ? '' : `<span class="ft-lang">${esc(item.language || '')}</span>`}</td>
-        <td style="width:110px">${item.isDir ? '—' : fmtSize(item.size)}</td>
-        <td style="width:170px" class="muted">${esc(fmtTime(item.mtime))}</td>
-        <td class="fs-ops" style="width:230px">
-          ${item.isDir ? '' : '<button class="btn btn-xs" data-fs-act="edit">编辑</button><button class="btn btn-xs" data-fs-act="download">下载</button>'}
-          <button class="btn btn-xs" data-fs-act="rename">重命名</button>
-          <button class="btn btn-xs btn-danger" data-fs-act="delete">删除</button>
-        </td>
-      </tr>`).join('');
-    box.innerHTML = `<table><thead><tr>
-      <th style="width:38px"></th><th>名称（按类型识别）</th><th style="width:110px">大小</th>
-      <th style="width:170px">修改时间</th><th style="width:230px">操作</th>
-    </tr></thead><tbody>${rows || '<tr><td colspan="5" class="muted">目录为空</td></tr>'}</tbody></table>`;
+    renderRemoteFileTable(tab);
   } catch (e) {
     box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`;
   }
@@ -2349,6 +2773,8 @@ const extState = {
   catalog: null, items: [], manifestId: '', mode: 'external', defaultMode: 'external',
   backups: [], dbgate: null, reposInstanceId: '',
 };
+// v0.3.11：DbGate 登录凭据弹窗的复制文本，明文只在用户主动点开弹窗时暂存于内存。
+const extCredState = { text: '' };
 const repoState = { items: [] };
 const dockerState = { target: 'local', data: null, tab: 'containers' };
 
@@ -2420,6 +2846,7 @@ function renderExtList() {
       ops.push(`<button class="btn btn-sm" data-ext-op="restart" data-ext-id="${esc(i.id)}">重启</button>`);
       ops.push(`<button class="btn btn-sm" data-ext-op="logs" data-ext-id="${esc(i.id)}">日志</button>`);
     }
+    if (i.openable) ops.push(`<button class="btn btn-sm" data-ext-op="credentials" data-ext-id="${esc(i.id)}">登录凭据</button>`);
     if (i.canBackup && !db) ops.push(`<button class="btn btn-sm" data-ext-op="backup" data-ext-id="${esc(i.id)}">备份</button>`);
     if (i.canUpgrade) ops.push(`<button class="btn btn-sm" data-ext-op="upgrade" data-ext-id="${esc(i.id)}">升级</button>`);
     if (i.openable && i.status === 'online') {
@@ -2432,7 +2859,7 @@ function renderExtList() {
       <td>${i.mode === 'docker' ? badge('容器', 'blue') : badge('外部', 'gray')}<div class="ext-list-url">${esc(i.targetLabel || '本机')}</div></td>
       <td>${esc(i.host)}:${esc(i.port)}</td>
       <td>${badge(meta[0], meta[1])}<div class="ext-list-url">${esc(i.statusDetail || '')}</div></td>
-      <td><div class="ext-list-url">${esc(i.connectionMasked || '')}</div><div class="ext-actions" style="margin-top:8px">${ops.join('')}</div></td>
+      <td><div class="ext-list-url">${esc(i.connectionMasked || '')}</div>${i.openable ? `<div class="ext-list-url" style="margin-top:5px">登录账号：<b>${esc(i.loginUser || i.user || 'admin')}</b></div>` : ''}<div class="ext-actions" style="margin-top:8px">${ops.join('')}</div></td>
     </tr>`;
   });
   $('#ext-list').innerHTML = table(['实例', '模式 / 位置', '地址', '状态', '连接串与操作'], rows);
@@ -2897,7 +3324,7 @@ function switchDockerTab(tab) {
 const loaders = {
   overview: loadOverview,
   repos: loadRepos, 'repo-new': loadRepos, 'repo-clone': loadRepos,
-  ide: loadIde,
+  ide: loadIde, 'ide-config': loadIde,
   storage: loadStorage, 'storage-conn': loadStorage, 'storage-mounts': loadStorage, 'storage-drivers': loadStorage,
   builds: loadBuilds, 'build-start': loadBuilds, deploys: loadBuilds,
   servers: loadServers, 'server-new': loadServers,
@@ -2912,7 +3339,11 @@ const loaders = {
 /* 每个独立页顶部的子导航：点按钮打开对应标签，而不是把功能堆在一页里。 */
 document.addEventListener('click', (e) => {
   const button = e.target && e.target.closest ? e.target.closest('[data-open-view]') : null;
-  if (button) switchView(button.dataset.openView);
+  // 从子导航点「添加 / 编辑服务器」表示要新增，先清掉上一次的编辑态。
+  if (button) {
+    if (button.dataset.openView === 'server-new') resetServerEditForm();
+    switchView(button.dataset.openView);
+  }
 });
 
 $('#nav').addEventListener('click', (e) => {
@@ -3103,6 +3534,17 @@ $('#ext-install-form').addEventListener('submit', async (e) => {
   } catch (err) { toast(err.message || String(err), true); }
 });
 $('#ext-log-close').addEventListener('click', () => { $('#ext-log-card').hidden = true; });
+document.addEventListener('click', (e) => {
+  if (e.target.closest && e.target.closest('[data-ext-cred-close]')) {
+    $('#ext-cred-modal').hidden = true;
+    extCredState.text = '';
+  }
+});
+const extCredCopyBtn = $('#ext-cred-copy');
+if (extCredCopyBtn) extCredCopyBtn.addEventListener('click', () => {
+  if (!extCredState.text) { toast('请先打开登录凭据弹窗', true); return; }
+  copyText(extCredState.text, '账号与密码已复制');
+});
 $('#ext-list').addEventListener('click', async (e) => {
   const button = e.target.closest('[data-ext-op]');
   if (!button) return;
@@ -3113,6 +3555,17 @@ $('#ext-list').addEventListener('click', async (e) => {
       const d = await api(`/extensions/instances/${id}/connection`);
       await navigator.clipboard.writeText(d.url);
       toast('连接串已复制到剪贴板');
+    } else if (op === 'credentials') {
+      const d = await api(`/extensions/instances/${id}/credentials`);
+      extCredState.text = `账号：${d.login}\n密码：${d.password || '(未设置)'}`;
+      $('#ext-cred-title').textContent = `${d.label} · 登录凭据`;
+      $('#ext-cred-sub').textContent = '登录页需要账号 + 密码，明文只在本次弹窗显示';
+      $('#ext-cred-hint').textContent = d.hint || '';
+      $('#ext-cred-body').innerHTML = [
+        ['登录账号', d.login], ['登录密码', d.password || '（未设置）'],
+        ['账号环境变量', d.envLogin], ['密码环境变量', d.envPassword],
+      ].map(([k, v]) => `<div class="ide-config-row"><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join('');
+      $('#ext-cred-modal').hidden = false;
     } else if (op === 'inject') {
       const inst = extState.items.find((x) => x.id === id);
       const target = prompt('写入工作区内的哪个文件？', '.env');
@@ -3668,9 +4121,13 @@ $('#docker-network-form').addEventListener('submit', async (e) => {
 $('#docker-template-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
+    // CodeMirror 的内容在编辑器实例里，提交前显式回写 textarea，保证 FormData 拿到最新文本。
+    const area = $('#docker-template-content');
+    if (area) area.value = composeContent();
     await api('/docker/templates', { method: 'POST', body: formData(e.target) });
     toast('编排模板已保存（仅保存文本，不在平台内执行）');
     e.target.reset();
+    setComposeContent('');
     await renderDockerTemplates();
   } catch (err) { toast(err.message || String(err), true); }
 });
@@ -3880,6 +4337,12 @@ document.addEventListener('click', async (e) => {
 });
 
 $('#ide-open').addEventListener('click', openIde);
+const ideBrowseBtn = $('#ide-browse');
+if (ideBrowseBtn) ideBrowseBtn.addEventListener('click', openIdeDirPicker);
+const ideGotoConfigBtn = $('#ide-goto-config');
+if (ideGotoConfigBtn) ideGotoConfigBtn.addEventListener('click', () => switchView('ide-config'));
+const ideConfigGotoBtn = $('#ide-config-goto');
+if (ideConfigGotoBtn) ideConfigGotoBtn.addEventListener('click', () => switchView('ide'));
 
 // 服务器状态自动刷新：间隔可切换并记住；从后台标签切回来时立即补一次。
 $('#server-poll-interval').addEventListener('change', (e) => {
@@ -4068,8 +4531,20 @@ $('#build-form').addEventListener('submit', async (e) => {
 
 $('#server-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  try { await api('/servers', { method: 'POST', body: formData(e.target) }); toast('服务器已保存'); e.target.reset(); loadServers(); }
-  catch (err) { toast(err.message, true); }
+  const editing = Boolean($('#server-edit-id') && $('#server-edit-id').value);
+  try {
+    await api('/servers', { method: 'POST', body: formData(e.target) });
+    toast(editing ? '服务器信息已更新' : '服务器已保存');
+    resetServerEditForm();
+    loadServers();
+    if (editing) switchView('servers');
+  } catch (err) { toast(err.message, true); }
+});
+const serverEditCancelBtn = $('#server-edit-cancel');
+if (serverEditCancelBtn) serverEditCancelBtn.addEventListener('click', () => {
+  resetServerEditForm();
+  switchView('servers');
+  toast('已取消编辑');
 });
 
 function providerFormBody(form) {
@@ -4218,6 +4693,71 @@ function updateDockerCommands() {
   const vc = $('#docker-volume-cmd'); if (vc) vc.textContent = dockerVolumeCmd();
   const nc = $('#docker-network-cmd'); if (nc) nc.textContent = dockerNetworkCmd();
 }
+/* ------------- v0.3.11 · Compose 编排模板富编辑器 ------------- */
+const composeState = { cm: null, height: 480 };
+
+/** 始终以 CodeMirror 为准读内容，避免 textarea 与编辑器不同步。 */
+function composeContent() {
+  if (composeState.cm) {
+    try { return composeState.cm.getValue(); } catch { /* noop */ }
+  }
+  const area = $('#docker-template-content');
+  return area ? String(area.value || '') : '';
+}
+
+function setComposeContent(text) {
+  const value = String(text || '');
+  const area = $('#docker-template-content');
+  if (area) area.value = value;
+  if (composeState.cm) {
+    try { composeState.cm.setValue(value); composeState.cm.refresh(); } catch { /* noop */ }
+  }
+  renderYamlCheck();
+}
+
+/** 与文件编辑器同款：行号、YAML 高亮、折叠、括号匹配、查找与自动缩进。 */
+function ensureComposeEditor() {
+  const area = $('#docker-template-content');
+  if (!area || composeState.cm || typeof CodeMirror === 'undefined') return;
+  composeState.cm = CodeMirror.fromTextArea(area, {
+    lineNumbers: true, mode: resolveMode('yaml') || null,
+    indentUnit: 2, tabSize: 2, indentWithTabs: false, lineWrapping: false,
+    matchBrackets: true, autoCloseBrackets: true, styleActiveLine: true,
+    foldGutter: true, gutters: ['CodeMirror-linenumbers', 'CodeMirror-foldgutter'],
+    extraKeys: {
+      'Ctrl-S': () => { const f = $('#docker-template-form'); if (f && f.requestSubmit) f.requestSubmit(); },
+      'Cmd-S': () => { const f = $('#docker-template-form'); if (f && f.requestSubmit) f.requestSubmit(); },
+      'Ctrl-F': 'findPersistent', 'Cmd-F': 'findPersistent',
+    },
+  });
+  composeState.cm.on('change', () => renderYamlCheck());
+  applyComposeHeight(composeState.height);
+}
+
+function applyComposeHeight(px) {
+  const h = Math.max(220, Math.min(900, Number(px) || 480));
+  composeState.height = h;
+  const el = document.querySelector('.cm-compose .CodeMirror');
+  if (el) el.style.height = `${h}px`;
+  if (composeState.cm) {
+    try { composeState.cm.setSize(null, h); composeState.cm.refresh(); } catch { /* noop */ }
+  }
+  try { localStorage.setItem('dp_compose_height', String(h)); } catch { /* 隐私模式忽略 */ }
+}
+
+/** 安全的「整理格式」：只做空白归一化，不改写 YAML 语义与内容。 */
+function formatComposeYaml(text) {
+  const lines = String(text || '').replace(/\r\n?/g, '\n').replace(/\t/g, '  ').split('\n');
+  const out = [];
+  lines.forEach((line) => {
+    const clean = line.replace(/[ \t]+$/, '');
+    if (!clean.trim() && out.length && !out[out.length - 1].trim()) return;
+    out.push(clean);
+  });
+  while (out.length && !out[out.length - 1].trim()) out.pop();
+  return `${out.join('\n')}\n`;
+}
+
 function checkYaml(text) {
   const raw = String(text || '');
   const issues = [];
@@ -4230,9 +4770,8 @@ function checkYaml(text) {
 }
 function renderYamlCheck() {
   const box = $('#docker-yaml-check');
-  const area = $('#docker-template-content');
-  if (!box || !area) return;
-  const r = checkYaml(String(area.value || ''));
+  if (!box) return;
+  const r = checkYaml(composeContent());
   box.innerHTML = r.ok
     ? '✔ 基础检查通过：已包含 services 段与镜像定义，缩进使用空格。'
     : `⚠ 需要留意：${r.issues.map(esc).join('；')}`;
@@ -4252,6 +4791,24 @@ if (ownedOnlyBox) ownedOnlyBox.addEventListener('change', renderDockerContainers
 });
 const yamlArea = $('#docker-template-content');
 if (yamlArea) yamlArea.addEventListener('input', renderYamlCheck);
+// CodeMirror 未加载（离线 / 自检环境）时自动降级为原生 textarea，功能仍可用。
+ensureComposeEditor();
+try {
+  const savedHeight = Number(localStorage.getItem('dp_compose_height'));
+  const heightSel = $('#docker-tpl-height');
+  if (heightSel) {
+    if ([360, 480, 640].includes(savedHeight)) heightSel.value = String(savedHeight);
+    composeState.height = Number(heightSel.value) || 480;
+  }
+  applyComposeHeight(composeState.height);
+} catch { /* noop */ }
+const heightSel = $('#docker-tpl-height');
+if (heightSel) heightSel.addEventListener('change', () => applyComposeHeight(heightSel.value));
+const formatBtn = $('#docker-tpl-format');
+if (formatBtn) formatBtn.addEventListener('click', () => {
+  setComposeContent(formatComposeYaml(composeContent()));
+  toast('已整理缩进与空白（YAML 内容未改写）');
+});
 
 document.addEventListener('click', (e) => {
   const quick = e.target.closest && e.target.closest('[data-dk-quick-image]');
@@ -4270,14 +4827,12 @@ document.addEventListener('click', (e) => {
     if (!f) return;
     if (!t) {
       f.reset();
-      const area = $('#docker-template-content');
-      if (area) area.value = '';
+      setComposeContent('');
     } else {
       f.elements.name.value = t.name;
       f.elements.description.value = t.description;
-      $('#docker-template-content').value = t.content;
+      setComposeContent(t.content);
     }
-    renderYamlCheck();
     if (t) toast(`已套用「${t.name}」模板，可继续修改后保存`);
     return;
   }
@@ -4288,8 +4843,7 @@ document.addEventListener('click', (e) => {
     if (t && f) {
       f.elements.name.value = t.name;
       f.elements.description.value = t.description || '';
-      $('#docker-template-content').value = t.content || '';
-      renderYamlCheck();
+      setComposeContent(t.content || '');
       f.scrollIntoView({ behavior: 'smooth', block: 'start' });
       toast(`已载入「${t.name}」，修改后点保存即可更新`);
     }
@@ -4315,11 +4869,11 @@ if (copyVolCmd) copyVolCmd.addEventListener('click', () => copyText(dockerVolume
 const copyNetCmd = $('#docker-network-copy-cmd');
 if (copyNetCmd) copyNetCmd.addEventListener('click', () => copyText(dockerNetworkCmd(), '命令已复制，可到服务器执行'));
 const tplCopyNow = $('#docker-tpl-copy');
-if (tplCopyNow) tplCopyNow.addEventListener('click', () => copyText($('#docker-template-content').value, 'YAML 已复制'));
+if (tplCopyNow) tplCopyNow.addEventListener('click', () => copyText(composeContent(), 'YAML 已复制'));
 const tplDownloadNow = $('#docker-tpl-download');
 if (tplDownloadNow) tplDownloadNow.addEventListener('click', () => {
   const f = $('#docker-template-form');
-  downloadText(`${String(f.elements.name.value || 'docker-compose').trim()}.yml`, $('#docker-template-content').value);
+  downloadText(`${String(f.elements.name.value || 'docker-compose').trim()}.yml`, composeContent());
 });
 
 /* 面板偏好：自动刷新只在 Docker 分区激活且页面可见时工作，默认关闭。 */

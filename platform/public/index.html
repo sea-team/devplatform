@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261111e" />
+  <link rel="stylesheet" href="/style.css?v=20261111f" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -23,6 +23,7 @@
         <button class="nav-item active" data-view="overview"><span class="ico">◈</span>总览</button>
         <button class="nav-item" data-view="repos"><span class="ico">⑂</span>Git 仓库</button>
         <button class="nav-item" data-view="ide"><span class="ico">⌘</span>在线 IDE</button>
+        <button class="nav-item" data-view="ide-config"><span class="ico">⎈</span>IDE 配置</button>
         <button class="nav-item" data-view="storage"><span class="ico">▤</span>存储 / 文件</button>
         <button class="nav-item" data-view="builds"><span class="ico">⚙</span>构建 · 部署</button>
         <button class="nav-item" data-view="servers"><span class="ico">▣</span>服务器</button>
@@ -512,7 +513,19 @@
                 <label>模板名称<input name="name" placeholder="lnmp" required /></label>
                 <label>说明<input name="description" placeholder="用途描述" /></label>
               </div>
-              <label style="margin-top:10px">YAML 内容<textarea name="content" id="docker-template-content" rows="10" placeholder="services:&#10;  web:&#10;    image: nginx:latest" required></textarea></label>
+              <div class="cm-compose" style="margin-top:10px">
+                <div class="cm-compose-bar">
+                  <b>YAML 内容</b><span class="muted small">与文件编辑器同款 CodeMirror：语法高亮 / 行号 / 折叠 / 查找（Ctrl+F）/ 自动缩进</span>
+                  <span class="flex-spacer"></span>
+                  <label class="cm-height">编辑器高度<select id="docker-tpl-height" style="width:auto;min-width:118px">
+                    <option value="360">标准 360px</option>
+                    <option value="480" selected>宽裕 480px</option>
+                    <option value="640">超高 640px</option>
+                  </select></label>
+                  <button class="btn btn-sm" type="button" id="docker-tpl-format">整理格式</button>
+                </div>
+                <textarea name="content" id="docker-template-content" rows="14" placeholder="services:&#10;  web:&#10;    image: nginx:latest" required></textarea>
+              </div>
               <div class="notice" id="docker-yaml-check" style="margin-top:8px">填写 YAML 后会自动做基础检查（services 段、缩进、端口格式）。</div>
               <div class="hint">模板只作登记与查阅；实际部署请复制 / 下载 YAML 到目标服务器执行，或在「扩展 / 数据库」页使用清单化安装。</div>
               <div class="form-actions">
@@ -530,33 +543,67 @@
         </section>
 
         <!-- IDE -->
+        <!-- 在线 IDE：v0.3.11 起拆成「工作台」与「配置 / 凭据」两个独立页面，不再上下堆在一屏里 -->
         <section class="page" id="view-ide">
+          <div class="subnav">
+            <span class="subnav-label">在线 IDE</span>
+            <button class="subnav-btn active" data-open-view="ide">IDE 工作台</button>
+            <button class="subnav-btn" data-open-view="ide-config">配置 / 凭据</button>
+          </div>
           <div class="card">
-            <div class="card-head"><h2>在线 VSCode</h2><span class="muted">code-server，工作区与构建流水线共享同一目录</span></div>
+            <div class="card-head"><h2>打开项目</h2><span class="muted">code-server，工作区与构建流水线共享同一目录</span></div>
             <div class="form">
-              <label>项目目录（相对工作区）<input id="ide-path" placeholder="my-project" /></label>
+              <label>项目目录（相对工作区）
+                <div class="row" style="gap:8px;flex-wrap:nowrap">
+                  <input id="ide-path" placeholder="点击「浏览目录」选择，或直接填写相对路径" autocomplete="off" />
+                  <button class="btn" type="button" id="ide-browse">浏览目录</button>
+                </div>
+              </label>
               <div class="row">
                 <button class="btn btn-primary" id="ide-open">打开 IDE</button>
                 <a class="btn" id="ide-home" href="#" target="_blank" rel="noopener">打开 IDE 首页</a>
+                <button class="btn btn-ghost btn-sm" type="button" id="ide-goto-config">配置 / 登录凭据</button>
               </div>
               <div class="hint" id="ide-url"></div>
-              <div class="notice ide-cred" id="ide-cred" style="margin-top:12px">
-                <div class="row gap wrap" style="align-items:center">
-                  <b>登录凭据</b><span class="muted" id="ide-cred-state">读取中…</span>
-                </div>
-                <div class="hint" id="ide-cred-hint" style="margin-top:6px"></div>
-                <div class="row gap wrap" style="margin-top:8px;align-items:center">
-                  <code id="ide-cred-value">—</code>
-                  <button class="btn btn-sm" id="ide-cred-reveal" type="button">显示密码</button>
-                  <button class="btn btn-sm" id="ide-cred-copy" type="button">复制密码</button>
-                  <button class="btn btn-sm" id="ide-cred-env" type="button">去环境配置修改</button>
-                </div>
-              </div>
+              <div class="hint" id="ide-picked" hidden></div>
             </div>
           </div>
           <div class="card">
             <div class="card-head"><h2>嵌入式预览</h2><span class="muted">如被浏览器拦截，请用上方按钮新窗口打开</span></div>
             <iframe id="ide-frame" class="ide-frame" title="code-server"></iframe>
+          </div>
+        </section>
+
+        <!-- 在线 IDE · 配置 / 凭据（独立页） -->
+        <section class="page" id="view-ide-config">
+          <div class="subnav">
+            <span class="subnav-label">在线 IDE</span>
+            <button class="subnav-btn" data-open-view="ide">IDE 工作台</button>
+            <button class="subnav-btn active" data-open-view="ide-config">配置 / 凭据</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>服务与工作区</h2><span class="muted">只读信息，改地址 / 密码请到「环境配置」</span></div>
+            <div id="ide-config-info" class="dk-kv-list">—</div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>登录凭据</h2><span class="muted">code-server 登录页的密码来自 .env</span></div>
+            <div class="notice ide-cred" id="ide-cred">
+              <div class="row gap wrap" style="align-items:center">
+                <b>登录密码</b><span class="muted" id="ide-cred-state">读取中…</span>
+              </div>
+              <div class="hint" id="ide-cred-hint" style="margin-top:6px"></div>
+              <div class="row gap wrap" style="margin-top:8px;align-items:center">
+                <code id="ide-cred-value">—</code>
+                <button class="btn btn-sm" id="ide-cred-reveal" type="button">显示密码</button>
+                <button class="btn btn-sm" id="ide-cred-copy" type="button">复制密码</button>
+                <button class="btn btn-sm" id="ide-cred-env" type="button">去环境配置修改</button>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>项目目录</h2><span class="muted">在「IDE 工作台」用浏览选择器定位</span></div>
+            <div class="hint">code-server 容器把平台工作区映射为 <code>/home/coder/project</code>；在 IDE 工作台选择工作区内的子目录后，打开时会自动带上 <code>?folder=</code> 参数，直接进入该目录。</div>
+            <div class="form-actions"><button class="btn btn-sm" type="button" id="ide-config-goto">回到 IDE 工作台</button></div>
           </div>
         </section>
 
@@ -829,11 +876,13 @@
           <div class="subnav">
             <span class="subnav-label">服务器</span>
             <button class="subnav-btn" data-open-view="servers">服务器列表</button>
-            <button class="subnav-btn active" data-open-view="server-new">添加服务器</button>
+            <button class="subnav-btn active" data-open-view="server-new">添加 / 编辑服务器</button>
           </div>
           <div class="card">
-            <div class="card-head"><h2>添加服务器</h2><span class="muted">通过 SSH 连接，凭据保存在本机 data/state.json（600 权限）</span></div>
+            <div class="card-head"><h2 id="server-form-title">添加服务器</h2><span class="muted">通过 SSH 连接，凭据保存在本机 data/state.json（600 权限）</span></div>
             <form id="server-form" class="form">
+              <input type="hidden" name="id" id="server-edit-id" value="" />
+              <div class="notice" id="server-edit-tip" hidden>正在编辑已登记服务器：显示 <code>******</code> 的凭据栏保持原样即可沿用；要改成新值直接覆盖填写。<button class="btn btn-sm" type="button" id="server-edit-cancel" style="margin-left:10px">取消编辑</button></div>
               <div class="grid-3">
                 <label>名称<input name="name" placeholder="生产服务器" required /></label>
                 <label>主机<input name="host" placeholder="10.0.0.11" required /></label>
@@ -1270,12 +1319,82 @@
       </div>
     </div>
   </div>
+  <!-- v0.3.11 · OpenList 文件编辑器：与远程文件编辑器一样的编码 / 换行 / 语法高亮 -->
+  <div class="modal" id="ol-editor-modal" hidden aria-modal="true" role="dialog" aria-labelledby="ol-editor-title">
+    <div class="modal-mask" data-ol-ed-close></div>
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div><h2 id="ol-editor-title">编辑文件</h2><span class="muted" id="ol-editor-path">—</span></div>
+        <button class="btn btn-ghost btn-sm" type="button" data-ol-ed-close>✕ 关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="ed-toolbar">
+          <div class="ed-opts">
+            <label>语法高亮<select id="ol-ed-lang"></select></label>
+            <label>文件编码<select id="ol-ed-encoding"></select></label>
+            <label>换行符<select id="ol-ed-newline"></select></label>
+            <label class="ed-bom"><input type="checkbox" id="ol-ed-bom" /> 保留 BOM</label>
+          </div>
+          <div class="ed-ops">
+            <button class="btn btn-sm" type="button" data-ol-ed="find">查找</button>
+            <button class="btn btn-sm" type="button" data-ol-ed="reload">重载</button>
+            <button class="btn btn-sm btn-primary" type="button" data-ol-ed="save">保存 · Ctrl+S</button>
+          </div>
+        </div>
+        <div class="ol-ed-body"><textarea id="ol-ed-area" spellcheck="false"></textarea></div>
+        <div class="ed-status">
+          <span id="ol-ed-pos">行 1 · 列 1</span><span id="ol-ed-meta">—</span>
+          <span class="ed-state saved" id="ol-ed-state">已保存</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- v0.3.11 · IDE 项目目录选择器 -->
+  <div class="modal" id="ide-dir-modal" hidden aria-modal="true" role="dialog" aria-labelledby="ide-dir-title">
+    <div class="modal-mask" data-ide-dir-close></div>
+    <div class="modal-panel modal-narrow">
+      <div class="modal-head">
+        <div><h2 id="ide-dir-title">选择项目目录</h2><span class="muted" id="ide-dir-sub">只列出平台工作区内的目录</span></div>
+        <button class="btn btn-ghost btn-sm" type="button" data-ide-dir-close>✕ 关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="pathbar-slot" id="ide-dir-pathbar"></div>
+        <div class="notice" id="ide-dir-current" style="margin-top:10px">当前目录：/</div>
+        <div class="dir-picker" id="ide-dir-list"><div class="empty">读取中…</div></div>
+        <div class="form-actions" style="margin-top:12px">
+          <button class="btn btn-sm" type="button" id="ide-dir-up">↑ 上一级</button>
+          <span class="flex-spacer"></span>
+          <button class="btn btn-sm" type="button" id="ide-dir-root">工作区根目录</button>
+          <button class="btn btn-primary btn-sm" type="button" id="ide-dir-select">选择当前目录</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- v0.3.11 · DbGate 等管理端登录凭据 -->
+  <div class="modal" id="ext-cred-modal" hidden aria-modal="true" role="dialog" aria-labelledby="ext-cred-title">
+    <div class="modal-mask" data-ext-cred-close></div>
+    <div class="modal-panel modal-narrow">
+      <div class="modal-head">
+        <div><h2 id="ext-cred-title">登录凭据</h2><span class="muted" id="ext-cred-sub">—</span></div>
+        <button class="btn btn-ghost btn-sm" type="button" data-ext-cred-close>✕ 关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="notice" id="ext-cred-hint">—</div>
+        <div class="dk-kv-list" id="ext-cred-body" style="margin-top:12px"></div>
+        <div class="form-actions" style="margin-top:12px">
+          <button class="btn btn-sm" type="button" id="ext-cred-copy">复制账号 + 密码</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <div id="toast" class="toast"></div>
   <script src="/vendor/xterm.min.js"></script>
   <script src="/vendor/addon-fit.min.js"></script>
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261111e"></script>
+  <script src="/app.js?v=20261111f"></script>
 </body>
 </html>

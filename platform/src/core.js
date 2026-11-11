@@ -216,9 +216,11 @@ function resolveImage(image, prefix) {
   const raw = String(image || '').trim().replace(/^\/+/, '');
   const p = String(prefix || '').trim().replace(/\/+$/, '');
   if (!p) return raw;
-  const first = raw.split('/')[0];
-  // 第一段含 . 或 : 说明镜像自带 registry 域名，加速器代理不到它。
-  if (first.includes('.') || first.includes(':') || first === 'localhost') return raw;
+  // 只有「第一段 / 之后还有路径」时才可能是自带 registry 域名；
+  // node:22-bookworm 这类「官方镜像 + tag」的冒号是标签分隔符，不能误判成 registry 端口。
+  const slash = raw.indexOf('/');
+  const first = slash >= 0 ? raw.slice(0, slash) : '';
+  if (first && (first.includes('.') || first.includes(':') || first === 'localhost')) return raw;
   const base = p.replace(/\/library$/, '');
   return `${base}${raw.includes('/') ? '' : '/library'}/${raw}`;
 }

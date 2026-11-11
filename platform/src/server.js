@@ -28,6 +28,7 @@ const openlist = require('./openlist');
 const envConfig = require('./envConfig');
 const hostInfo = require('./hostInfo');
 const workspaceGit = require('./workspaceGit');
+const fileTypes = require('./fileTypes');
 
 // 面板里保存过的 OpenList 连接优先于 .env（不改文件、重启后仍然生效）。
 openlist.applyConfig();
@@ -416,6 +417,29 @@ app.get('/api/ide', wrap(async (req, res) => {
   });
 }));
 
+/**
+ * v0.3.11 · IDE 项目目录选择器：只读列出工作区内的下一级目录。
+ * 路径相对工作区，全部经 safeWorkspacePath 校验，绝不返回工作区之外的目录。
+ */
+app.get('/api/ide/dirs', wrap(async (req, res) => {
+  const raw = String(req.query.path || '/').replace(/\\/g, '/');
+  const abs = safeWorkspacePath(raw === '/' ? '' : raw.replace(/^\/+/, ''));
+  let stat;
+  try { stat = fs.statSync(abs); } catch { throw notFound(`工作区内不存在目录：${raw}`); }
+  if (!stat.isDirectory()) throw badRequest(`不是目录：${raw}`);
+  const rel = relativeWorkspacePath(abs);
+  const current = `/${rel}`.replace(/\/+$/, '') || '/';
+  const segments = current.split('/').filter(Boolean);
+  const parent = segments.length ? `/${segments.slice(0, -1).join('/')}` : '/';
+  const items = fs.readdirSync(abs, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !String(entry.name).includes('\0'))
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true }))
+    .slice(0, 300)
+    .map((entry) => ({ name: entry.name, path: `${current === '/' ? '' : current}/${entry.name}` }));
+  ok(res, { path: current.replace(/\/{2,}/g, '/'), parent: parent.replace(/\/{2,}/g, '/') || '/',
+    workspace: config.workspaceDir, items, total: items.length });
+}));
+
 // 明文只在这个显式 reveal 接口返回：列表接口一律脱敏，避免巡检 / 日志顺带带出密码。
 app.post('/api/ide/password', wrap(async (req, res) => {
   const reveal = Boolean(req.body && req.body.reveal === true);
@@ -566,6 +590,32 @@ app.get('/api/openlist/files/download', wrap(async (req, res) => {
   });
   res.end(file.buffer);
 }));
+/**
+ * v0.3.11 · OpenList 文件编辑：与远程 SFTP 编辑器共用 fileTypes 的编码 / 换行 / 语法识别。
+ * GET 返回归一化后的文本（\n 换行），PUT 按所选编码还原并覆盖上传，二进制 / 图片禁止编辑。
+ */
+app.get('/api/openlist/files/content', wrap(async (req, res) => {
+  const p = openlist.safeDir(String(req.query.path || ''));
+  if (p === '/') throw badRequest('请选择要编辑的文件');
+  const file = await openlist.download(p, 2 * 1024 * 1024);
+  const name = path.posix.basename(p);
+  const info = fileTypes.analyzeBuffer(name, file.buffer, String(req.query.encoding || 'auto'));
+  ok(res, {
+    path: p, name, ...info,
+    encodings: fileTypes.ENCODINGS, newlines: fileTypes.NEWLINES, languages: fileTypes.LANGUAGE_OPTIONS,
+  });
+}));
+
+app.put('/api/openlist/files/content', wrap(async (req, res) => {
+  requireBody(req.body, ['path', 'content']);
+  const p = openlist.safeDir(String(req.body.path));
+  const name = path.posix.basename(p);
+  if (p === '/' || !name) throw badRequest('路径必须是具体文件');
+  const { buffer, encoding, newline } = fileTypes.encodeContent(String(req.body.content), req.body);
+  await openlist.upload(path.posix.dirname(p), name, buffer);
+  ok(res, { path: p, size: buffer.length, encoding, newline, bom: Boolean(req.body.bom) });
+}));
+
 app.put('/api/openlist/files/upload', wrap(async (req, res) => {
   const p = String(req.query.path || '/');
   const name = String(req.query.name || 'upload.bin');
@@ -1026,6 +1076,11 @@ app.post('/api/extensions/instances/:id/health', wrap(async (req, res) => {
 
 app.get('/api/extensions/instances/:id/connection', wrap(async (req, res) => {
   ok(res, extensions.connectionOfInstance(req.params.id));
+}));
+
+// v0.3.11：DbGate 等 Web 管理端的登录账号 / 密码，只在用户点「登录凭据」时读取明文。
+app.get('/api/extensions/instances/:id/credentials', wrap(async (req, res) => {
+  ok(res, extensions.credentialsOfInstance(req.params.id));
 }));
 
 app.get('/api/extensions/instances/:id/logs', wrap(async (req, res) => {

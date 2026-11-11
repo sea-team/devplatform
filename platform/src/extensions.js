@@ -14,7 +14,7 @@ const proxyModule = require('./proxy');
 const crypto = require('crypto');
 const {
   config, state, update, uid, safeWorkspacePath, relativeWorkspacePath,
-  resolveImage, imageCandidates, upstream,
+  resolveImage, imageCandidates, upstream, badRequest,
 } = require('./core');
 const catalog = require('./catalog');
 const runtime = require('./extRuntime');
@@ -158,7 +158,13 @@ function templateVars(inst) {
 
 function renderEnv(manifest, inst) {
   const vars = templateVars(inst);
-  const plain = { ...vars, PASSWORD: String(inst.secrets.PASSWORD || '') };
+  // USER 在连接串里要 URL 编码，但写进容器环境变量（如 DbGate 的 LOGIN）必须是明文。
+  // 旧实例没保存 user 时回退到清单默认值，避免重建出 LOGIN= 空值导致无法登录。
+  const plain = {
+    ...vars,
+    PASSWORD: String(inst.secrets.PASSWORD || ''),
+    USER: String(inst.user || manifest.defaults.USER || ''),
+  };
   const env = {};
   for (const [key, value] of Object.entries(manifest.env || {})) {
     env[key] = catalog.renderTemplate(value, plain);
@@ -189,6 +195,7 @@ function publicInstance(inst) {
     label: (manifest && manifest.label) || inst.catalogId,
     name: inst.name, mode: inst.mode, image: inst.image, tag: inst.tag,
     port: inst.port, host: inst.host, user: inst.user || '', dbName: inst.dbName || '',
+    loginUser: inst.user || (manifest && manifest.defaults.USER) || '',
     envKey: (manifest && manifest.envKey) || 'DATABASE_URL',
     status: inst.status, statusDetail: inst.statusDetail || '',
     containerName: inst.containerName || '', volumeName: inst.volumeName || '',
@@ -364,6 +371,24 @@ function connectionOfInstance(id) {
   return connectionOf(inst);
 }
 
+/**
+ * v0.3.11：Web 管理端（DbGate）登录页要账号 + 密码，连接串里没有这两项。
+ * 明文只在这个显式接口返回，列表 / 连接串接口一律不携带。
+ */
+function credentialsOfInstance(id) {
+  const inst = findInstance(id);
+  if (!inst) throw new Error(`扩展实例不存在：${id}`);
+  const manifest = getManifest(inst.catalogId);
+  if (!manifest.openable) throw badRequest(`${manifest.label} 没有 Web 登录页，无需登录凭据`);
+  return {
+    label: manifest.label,
+    login: String(inst.user || manifest.defaults.USER || 'admin'),
+    password: String(inst.secrets.PASSWORD || ''),
+    envLogin: 'LOGIN', envPassword: 'PASSWORD',
+    hint: '账号 / 密码来自安装表单，写进容器的 LOGIN / PASSWORD 环境变量；修改后需要重建容器才生效。',
+  };
+}
+
 /** 把 ENV_KEY=连接串 写进工作区内的 .env（保留其它行，同名键覆盖）。 */
 function injectEnv(id, targetPath, extraTargets = []) {
   const inst = findInstance(id);
@@ -449,6 +474,6 @@ module.exports = {
   listCatalog, listInstances, publicInstance, findInstance,
   createInstance, actionInstance, removeInstance, healthOf, logsOf,
   diagnoseAll, rebuildInstance,
-  connectionOfInstance, injectEnv, customDir,
+  connectionOfInstance, credentialsOfInstance, injectEnv, customDir,
   allManifests, getManifest, renderEnv, setInstance, templateVars,
 };

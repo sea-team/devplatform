@@ -118,8 +118,17 @@ const BUILTIN = [
     image: 'dbgate/dbgate', tags: ['latest'], defaultTag: 'latest',
     port: 3000, internalPort: 3000, volume: '/root/.dbgate',
     envKey: 'DBGATE_URL', connection: 'http://${HOST}:${PORT}/',
-    env: { LOGIN: 'admin', PASSWORD: '${PASSWORD}', LANGUAGE: 'zh' },
-    command: [], health: {}, fields: [], defaults: {},
+    // v0.3.11：DbGate 登录页要「账号 + 密码」。以前 LOGIN 硬编码成 admin、安装表单也没有账号栏，
+    // 现在账号可在安装时填写并写进容器 LOGIN 环境变量（旧实例仍回退到 admin）。
+    env: { LOGIN: '${USER}', PASSWORD: '${PASSWORD}', LANGUAGE: 'zh' },
+    command: [], health: {},
+    fields: [
+      {
+        key: 'USER', label: '登录账号', type: 'text', default: 'admin', required: true,
+        placeholder: 'admin', help: 'DbGate 登录页需要账号 + 密码；账号写入容器的 LOGIN 环境变量',
+      },
+    ],
+    defaults: { USER: 'admin' },
     dynamicEnv: 'dbgate-connections', openable: true,
   },
 ];

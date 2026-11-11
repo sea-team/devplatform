@@ -75,6 +75,8 @@ const SKIP = new Set([
   'POST /api/docker/containers/:id/action',
   'POST /api/docker/containers/:id/exec',
   'PUT /api/storage/upload',
+  // v0.3.11：覆盖写 OpenList 文件会改动真实内容，巡检绝不触发。
+  'PUT /api/openlist/files/content',
   'PUT /api/openlist/files/upload',
   'PUT /api/servers/:id/files/upload',
 ]);
