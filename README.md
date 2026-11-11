@@ -2230,10 +2230,13 @@ v0.3.7 把外部 Gitea 的笼统 `fetch failed` 定位成 `CERT_HAS_EXPIRED`，�
 | 本机 / 246 版本 | SEA exe 重编译重启、`remote.js deploy 10.0.0.246` 两次成功，两端 `/api/health` 均为 `0.3.8` |
 | `.env` 挂载 | 246 容器新增 `/data/platform/.env → /app/.env` 单文件挂载并注入 `DP_ENV_FILE=/app/.env`；`/api/env-config` 读到 `/app/.env`（22 项、5 条建议、可写、Token 脱敏、`DP_EXT_HOST` 已是 `10.0.0.246` 且无待重启项） |
 | TLS 端到端 | 默认 `/api/repos` 报 `TLS_CERT_INVALID`（`CERT_HAS_EXPIRED`）→ 通过 `PUT /api/env-config` 写入 `DP_TLS_INSECURE=1` + `DP_TLS_INSECURE_HOSTS=47.100.44.43`，**无需重启立即生效**，`/api/repos` 错误消失、远端仓库聚合成功 → 还原为空值后 `tlsInsecure=false`，恢复严格校验 |
-| 写入安全边界 | 每次写入自动备份 `.env.bak.<时间戳>`、600 权限；脱敏占位符回传不覆盖原 Token；未带 `confirm` 返回 400；非白名单键（如 `PATH`）返回 400 |
+| 写入安全边界 | 每次写入自动备份到 `DP_ENV_BACKUP_DIR`（容器注入 `/app/data` → 宿主机 `/data/platform/data/`）、600 权限，部署包排除 `.env.bak.*`；脱敏占位符回传不覆盖原 Token；未带 `confirm` 返回 400；非白名单键（如 `PATH`）返回 400 |
+| 备份落点回归 | 实测两次写入的备份均为 `/app/data/.env.bak.<时间戳>`（600），宿主机落在 `/data/platform/data/`，代码目录 `/data/platform/platform/` 已无备份残留 |
 | DbGate（D 中的 A） | `.env` 写入 `DP_EXT_BIND_IP=0.0.0.0` / `DP_EXT_HOST=10.0.0.246`（原文件备份为 `.env.bak.pre-v038`），重新 deploy 重启平台后重建实例；修复「重建不更新 host」后 `host=10.0.0.246`、`status=online`、连接串 `http://10.0.0.246:3003/`，宿主机访问 `3003` 返回 HTTP 200 |
 | 扩展体检 | 2 / 2 项正常，Redis 与 DbGate 均无 `problem`、无 `PORT_UNREACHABLE` |
 | 全接口巡检 | 本机 0 个 500；246 `--full` 已测 149 项（跳过 26 个副作用路由），**0 个 500**、0 超时、0 降级异常 |
 | 自检与冒烟 | `npm run check`、`check-frontend.js` 60 项断言、四套冒烟 40 / 31 / 28 / 60 全部通过；`release.yml` YAML 通过 |
 
 > 提醒：246 的全局 TLS 开关在验证结束时已还原为关闭；如需长期连那个证书过期的外部 Gitea，请在「Git 源」弹窗**只对该源**选择「忽略证书校验」，或在「环境配置」页按域名限定开启，避免影响其它服务。
+>
+> 版本说明：`v0.3.7` tag → `5026cac`，`v0.3.8` tag → `bc4bb59`，两次 Release 均由 CI 构建并发布 6 个资产。发布后追加的「.env 备份目录」修复（`3f597ba`）已在 `main` 与 10.0.0.246 生效；Windows 单文件版的 `.env` 与备份同在 exe 目录，不受该问题影响。需要与 `main` 完全一致的源码时直接用仓库主分支。
