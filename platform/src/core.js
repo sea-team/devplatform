@@ -26,6 +26,9 @@ const config = {
   giteaUrl: env('GITEA_URL', 'http://localhost:3002').replace(/\/+$/, ''),
   giteaToken: env('GITEA_TOKEN'),
   codeServerUrl: env('CODE_SERVER_URL', 'http://localhost:8080').replace(/\/+$/, ''),
+  // v0.3.10：code-server 登录页提示的 $PASSWORD 就来自这个值（容器部署由 .env 注入）。
+  // 平台自身不启动 code-server，但要在控制台把「密码是什么、去哪改」讲清楚。
+  codeServerPassword: env('CODE_SERVER_PASSWORD'),
   openlistUrl: env('OPENLIST_URL', 'http://localhost:5244').replace(/\/+$/, ''),
   openlistToken: env('OPENLIST_TOKEN'),
   openlistUser: env('OPENLIST_USER', 'admin'),

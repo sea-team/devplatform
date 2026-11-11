@@ -2291,3 +2291,62 @@ v0.3.7 把外部 Gitea 的笼统 `fetch failed` 定位成 `CERT_HAS_EXPIRED`，�
 | 安全边界 | 用 `file://` 本地路径试探克隆被 `cloneUrl 必须是 http(s)/ssh/git 地址` 拦截（预期行为），未产生任何残留目录 |
 | 回归 | 本机巡检 0 个 500；246 `--full` 149 项（跳过 26 个副作用路由）0 个 500、0 超时、0 降级异常；扩展体检 2 / 2 正常 |
 | 自检 | `npm run check`、前端自检 61 项、四套冒烟 40 / 31 / 29 / 60 全部通过；`smoke-environment.js` 新增「容器无 Git + 宿主机 Git 可用 → 体检判正常」断言 |
+
+---
+
+## 37. v0.3.10 · IDE 凭据、运行主机信息与仓库操作
+
+### 37.1 在线 IDE 的 `$PASSWORD`
+
+code-server 登录页提示「Please log in below. Password was set from $PASSWORD.」，而 `.env` 里明明有 `CODE_SERVER_PASSWORD`，控制台「环境配置」页却查不到这一项 —— 根因是白名单只登记了 `CODE_SERVER_URL`，`core.js` 也从未读取该值。
+
+| 位置 | 改动 |
+|---|---|
+| `core.js` / `envConfig.js` | 新增 `config.codeServerPassword`；`CODE_SERVER_PASSWORD` 纳入白名单（敏感、脱敏、需重启）并在运行时生效值中展示 |
+| `GET /api/ide` | 返回 `{ configured, masked, key, envVar, hint }`，**列表接口绝不返回明文** |
+| `POST /api/ide/password` | 只有显式 `{reveal:true}` 才返回明文；巡检列入副作用跳过 |
+| IDE 页 | 「登录凭据」卡说明 `$PASSWORD` 与本平台 `.env` 键的对应关系，提供显示 / 复制密码与「去环境配置修改」 |
+
+### 37.2 运行平台与总览主机信息
+
+`linux/x64` 无法区分「平台容器」与「真正执行 Git 的宿主机」。现在同一份报告把两侧分开：
+
+| 数据来源 | 内容 |
+|---|---|
+| 平台进程（本地同步） | 版本、Node、OS 发行版、内核、主机名、CPU / 内存、已运行时间、容器形态与镜像、工作区、`.env` 路径 |
+| SSH 宿主机（复用 `probeHostGit` 的同一次 SSH） | `lsb_release -ds` / `/etc/os-release` 的 PRETTY_NAME、`uname -sr`、`hostname -I`、Git 版本与路径、`lsb_release -a` 原始输出 |
+| `collectStatus()` | CPU 核数、负载、内存、磁盘 `/`、运行中容器数 |
+
+`GET /api/host-info` 整份报告缓存 60 秒（`?force=1` 强制重采）；总览新增全宽「运行主机」卡片，Git 运行时卡片新增「运行平台」（`linux/x64 · Alpine Linux 3.23.3 · 内核 ...`）、「运行镜像」与「Git 宿主机」（`Debian GNU/Linux 9.13 (stretch) · 内核 4.9.x · Git 2.11.0`），并可展开宿主机 `lsb_release -a`。
+
+### 37.3 仓库列表的文件管理与 Git 命令
+
+工作区仓库（来源标为「工作区」）现在每个都有 5 个入口：
+
+| 入口 | 行为 |
+|---|---|
+| IDE 打开 | 原有，按目录打开 code-server |
+| **文件管理** | 打开独立 SFTP 远程文件标签并直接定位到 `<HOST_WORKSPACE_DIR>/<仓库名>`，可浏览 / 编辑 / 上传 / 删除，和「服务器 → 文件管理」一致 |
+| **终端** | 打开 SSH Web 终端标签，连接后自动 `cd` 到仓库目录，可直接敲任意 git 命令 |
+| **Git 操作** | 弹窗提供 status / log / branch / remote / diff / fetch / pull 快捷命令和自定义命令，显示完整命令、执行通道、Git 版本与输出 |
+| 复制地址 | 原有 |
+
+`POST /api/repos/git`（`GET /api/repos/git/presets` 取快捷命令）安全边界：
+
+- 仓库名只能是工作区一级目录且必须含 `.git`；子命令白名单，**写操作只放开 `fetch` / `pull`**；
+- 参数禁止 `; & | \` $ < >` 换行及 `--git-dir` / `--work-tree` / `-c` / `--exec` 等越权选项；
+- 容器内有 Git 走 `gitRuntime.exec(['-C', ...])`，容器内无 Git 则借 SSH 宿主机执行 `git -C <hostPath> ...`（与克隆同一通道）；
+- 输出中的带凭据 URL 自动脱敏，最多回传 20 KB。
+
+### 37.4 实测（本机 + 10.0.0.246，2026-11-11）
+
+| 验证项 | 结果 |
+|---|---|
+| IDE 凭据 | `/api/ide` → `configured=true`、脱敏 `4d3******22a`、key `CODE_SERVER_PASSWORD`；`POST /api/ide/password` 不带 `reveal` 返回空、带 `reveal` 返回 24 位明文；环境配置页可见该项（脱敏、敏感、运行时生效值一致） |
+| 密码真实性 | 246 上 `.env` 的 `CODE_SERVER_PASSWORD` 与 `dp-code-server` 容器的 `PASSWORD` 逐字比对 **MATCH**，IDE 页复制的就是登录密码 |
+| 运行主机 | `/api/host-info`：平台进程 `v0.3.10 · Alpine Linux v3.23 · node:20-alpine · Node v20.20.1`；宿主机 `Debian GNU/Linux 9.13 (stretch) · Linux 4.9.0-19-amd64 · 10.0.0.246 · Git 2.11.0 · 8 核 / 7986 MB / 16G（58%）/ 18 个容器`，`lsb_release -a` 原始输出可展开 |
+| Git 运行时 | 运行平台 `linux/x64 · Alpine Linux v3.23 · 内核 4.9.0-19-amd64`；Git 宿主机 `Debian GNU/Linux 9.13 (stretch) · 内核 Linux 4.9.0-19-amd64 · debian` |
+| Git 命令 | `POST /api/repos/git {repo:secure, command:status}` → 通道 `ssh-host`、exit 0、输出 `## master...origin/master`；`command:rm` 返回 400 白名单拒绝；7 个快捷命令（含 fetch / pull 两项写操作） |
+| 安全校验（本机单测） | `rm` / `; echo pwned` / `--git-dir=/etc` / `-c` 全部 400；合法 `status` 走 local 通道 |
+| 回归 | 本机巡检 0 个 500；246 `--full` **151 项**（跳过 28 个副作用路由）0 个 500、0 超时（2 个 502 为外部服务不可达）；扩展体检 2 / 2 正常；启动体检 8 正常 / 0 提醒 / 0 异常 |
+| 自检 | `npm run check`、前端自检 63 项、四套冒烟 40 / 31 / 29 / 60 全部通过 |

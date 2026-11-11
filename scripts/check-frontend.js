@@ -82,7 +82,18 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
-note(html.includes('?v=20261111d'), '静态资源版本已升到 20261111d');
+note(html.includes('?v=20261111e'), '静态资源版本已升到 20261111e');
+
+// v0.3.10：IDE 登录凭据、总览运行主机卡片、仓库文件 / 终端 / Git 操作。
+note(html.includes('id="ide-cred"') && html.includes('id="ide-cred-reveal"')
+  && html.includes('id="host-info-body"') && html.includes('id="repo-git-modal"')
+  && app.includes('revealIdePassword') && app.includes('loadHostInfo')
+  && app.includes('openRepoGitModal') && app.includes('data-repo-files'),
+'IDE 登录凭据、总览运行主机卡片与仓库 Git 操作弹窗已接线');
+note(app.includes("api('/repos/git'") && app.includes("api('/host-info")
+  && app.includes('openFilesTab(ctx.server') && app.includes('openTerminalTab(ctx.server')
+  && app.includes('initialCommand'),
+'工作区仓库可直接打开文件管理 / 终端，并经白名单接口执行 Git 命令');
 
 // v0.3.9：宿主机 Git 实测结果在运行时卡片与环境体检中可见。
 note(app.includes('const hg = d.hostGit || {}') && app.includes("kv('宿主机 Git'")

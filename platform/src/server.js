@@ -26,6 +26,8 @@ const buildBackends = require('./buildBackends');
 const proxy = require('./proxy');
 const openlist = require('./openlist');
 const envConfig = require('./envConfig');
+const hostInfo = require('./hostInfo');
+const workspaceGit = require('./workspaceGit');
 
 // 面板里保存过的 OpenList 连接优先于 .env（不改文件、重启后仍然生效）。
 openlist.applyConfig();
@@ -282,6 +284,11 @@ app.post('/api/repos/clone', wrap(async (req, res) => {
   ok(res, await gitSources.cloneRepo(req.body || {}));
 }));
 
+/* -------------------- 工作区仓库 Git 命令（v0.3.10） -------------------- */
+app.get('/api/repos/git/presets', (req, res) => ok(res, { items: workspaceGit.presets() }));
+app.post('/api/repos/git', wrap(async (req, res) =>
+  ok(res, await workspaceGit.run(req.body || {}))));
+
 /* ------------------------- Git 运行时（v0.3.3） ------------------------- */
 // 容器 / Windows exe 未把 git 放进 PATH 时，提供诊断、手工指定路径与重新探测。
 // v0.3.9：容器内无 Git 时顺带实测宿主机 Git，让「246 上有 git」在页面上可见。
@@ -381,10 +388,39 @@ app.get('/api/builds/backends', wrap(async (req, res) => {
   ok(res, { items: await buildBackends.detectBackends(), current: config.buildExecutor });
 }));
 
+/* --------------------------- 运行主机信息（v0.3.10） --------------------------- */
+// 平台进程（容器 / 本机）与真正执行 Git 的 SSH 宿主机分开呈现，避免「linux/x64」这种糊涂账。
+app.get('/api/host-info', wrap(async (req, res) =>
+  ok(res, await hostInfo.report({ force: String(req.query.force || '') === '1' }))));
+
 /* -------------------------------- 在线 IDE ------------------------------- */
 
+const maskSecret = (v) => {
+  const s = String(v || '');
+  if (!s) return '';
+  return s.length <= 8 ? `${s.slice(0, 1)}******` : `${s.slice(0, 3)}******${s.slice(-3)}`;
+};
+
 app.get('/api/ide', wrap(async (req, res) => {
-  ok(res, { url: config.codeServerUrl, workspace: config.workspaceDir });
+  const pwd = String(config.codeServerPassword || '');
+  ok(res, {
+    url: config.codeServerUrl,
+    workspace: config.workspaceDir,
+    password: {
+      configured: Boolean(pwd),
+      masked: maskSecret(pwd),
+      key: 'CODE_SERVER_PASSWORD',
+      envVar: '$PASSWORD',
+      hint: 'code-server 登录页的「Password was set from $PASSWORD」指的就是平台 .env 里的 CODE_SERVER_PASSWORD；容器部署时由 .env 注入 code-server 容器的 PASSWORD。',
+    },
+  });
+}));
+
+// 明文只在这个显式 reveal 接口返回：列表接口一律脱敏，避免巡检 / 日志顺带带出密码。
+app.post('/api/ide/password', wrap(async (req, res) => {
+  const reveal = Boolean(req.body && req.body.reveal === true);
+  const pwd = String(config.codeServerPassword || '');
+  ok(res, { configured: Boolean(pwd), revealed: reveal, password: reveal ? pwd : '', key: 'CODE_SERVER_PASSWORD' });
 }));
 
 app.post('/api/ide/open', wrap(async (req, res) => {

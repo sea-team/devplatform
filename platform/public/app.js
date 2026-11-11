@@ -445,7 +445,60 @@ async function loadOverview() {
     const pill = $('#demo-pill');
     pill.textContent = '正常模式';
     pill.classList.add('live');
+    void loadHostInfo().catch(() => {});
   } catch (e) { toast(e.message, true); }
+}
+
+/* ------------------------- 运行主机信息（v0.3.10） ------------------------- */
+async function loadHostInfo(force = false) {
+  const body = $('#host-info-body');
+  if (!body) return;
+  const checked = $('#host-info-checked');
+  try {
+    if (checked) checked.textContent = '采集中…';
+    const d = await api('/host-info' + (force ? '?force=1' : ''));
+    const l = d.local || {};
+    const h = d.host || {};
+    const kv = (k, v) => `<div class="dk-kv-row"><span class="dk-kv-key">${esc(k)}</span><span class="dk-kv-val">${esc(v || '—')}</span></div>`;
+    const side = (title, rows, extra = '') => `<div class="host-info-side"><h3>${esc(title)}</h3><div class="dk-kv">${rows.join('')}</div>${extra}</div>`;
+    const localRows = [
+      kv('平台版本', l.version ? `v${l.version}` : ''),
+      kv('运行形态', l.container ? `容器 · ${l.runtimeImage || '未知镜像'}` : '宿主机 / 本机进程'),
+      kv('操作系统', l.os),
+      kv('内核', l.kernel),
+      kv('主机名', l.hostname),
+      kv('运行时', `${l.node || '—'} · ${l.platform || '—'}/${l.arch || '—'}`),
+      kv('CPU / 内存', `${l.cpuCores || '—'} 核 · ${l.totalMemMB || '—'} MB（空闲 ${l.freeMemMB || '—'} MB）`),
+      kv('已运行', l.uptime),
+      kv('工作区', l.workspaceDir),
+      kv('.env 文件', l.envFile),
+    ];
+    const hostRows = [
+      kv('发行版', h.os),
+      kv('内核', h.kernel),
+      kv('主机名 / IP', `${h.hostname || h.systemHost || '—'}${h.ip ? ` · ${h.ip}` : ''}`),
+      kv('登记节点', `${h.name || '—'}（${h.host || '—'}）`),
+      kv('CPU / 负载', `${h.cpuCores || '—'} 核 · ${h.load1 !== null && h.load1 !== undefined ? `${h.load1} / ${h.load5} / ${h.load15}` : '—'}`),
+      kv('内存', h.memory ? `${h.memory.usedMB} / ${h.memory.totalMB} MB（${h.memory.usagePct}%）` : ''),
+      kv('磁盘 /', h.disk ? `${h.disk.used} / ${h.disk.total}（${h.disk.usagePct}）` : ''),
+      kv('Git', h.git && h.git.available ? `${h.git.version} · ${h.git.bin}` : '未检测到'),
+      kv('宿主机工作区', h.workspace ? `${h.workspace}${h.workspaceWritable === true ? ' · 可写' : (h.workspaceWritable === false ? ' · 不可写' : '')}` : ''),
+      kv('Docker 容器', h.containers !== null && h.containers !== undefined ? String(h.containers) : ''),
+    ];
+    const lsbExtra = h.lsb
+      ? `<details class="dk-raw" style="margin-top:8px"><summary>lsb_release -a 原始输出</summary><pre class="log short">${esc(h.lsb)}</pre></details>`
+      : '';
+    body.innerHTML = side('平台进程（当前运行环境）', localRows)
+      + side('SSH 宿主机（真正执行 Git / Docker 的机器）', hostRows, lsbExtra)
+      + (h.error ? `<div class="notice warn" style="grid-column:1/-1">${esc(h.error)}</div>` : '');
+    if (checked) {
+      const t = d.checkedAt ? new Date(d.checkedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '—';
+      checked.textContent = `检测于 ${t}${d.cached ? ' · 缓存' : ''}`;
+    }
+  } catch (e) {
+    body.innerHTML = `<div class="empty">主机信息采集失败：${esc(e.message)}</div>`;
+    if (checked) checked.textContent = '采集失败';
+  }
 }
 
 /* --------------------------------- 仓库 ---------------------------------- */
@@ -492,6 +545,9 @@ async function loadRepos() {
         <td class="muted">${esc(fmtTime(r.updatedAt))}</td>
         <td class="actions"><div class="ext-actions">
           <button class="btn btn-sm" data-ide="${esc(r.name)}">IDE 打开</button>
+          <button class="btn btn-sm" data-repo-files="${esc(r.name)}">文件管理</button>
+          <button class="btn btn-sm" data-repo-git="${esc(r.name)}">Git 操作</button>
+          <button class="btn btn-sm" data-repo-term="${esc(r.name)}">终端</button>
           ${r.cloneUrl ? `<button class="btn btn-sm" data-copy="${esc(r.cloneUrl)}">复制地址</button>` : ''}
         </div></td>
       </tr>`;
@@ -514,6 +570,10 @@ async function loadRepos() {
       $('#ide-path').value = b.dataset.ide;
       switchView('ide');
     }));
+    // v0.3.10：工作区仓库像文件管理一样可打开目录，并可直接执行 Git 命令。
+    $$('[data-repo-files]').forEach((b) => b.addEventListener('click', () => openRepoFiles(b.dataset.repoFiles)));
+    $$('[data-repo-git]').forEach((b) => b.addEventListener('click', () => openRepoGitModal(b.dataset.repoGit)));
+    $$('[data-repo-term]').forEach((b) => b.addEventListener('click', () => openRepoTerminal(b.dataset.repoTerm)));
     $$('[data-clone-repo]').forEach((b) => b.addEventListener('click', () => {
       const url = b.dataset.cloneRepo;
       if (!url) { toast('该仓库没有可用的 HTTP 克隆地址', true); return; }
@@ -537,6 +597,94 @@ async function loadRepos() {
   }
 }
 
+/* ------------------- 工作区仓库 · 文件 / 终端 / Git 操作 ------------------- */
+
+/** 工作区仓库在宿主机上的真实目录 + 可用于 SFTP / SSH 的服务器。 */
+async function repoHostContext() {
+  const [rt, list] = await Promise.all([api('/git/runtime'), api('/servers')]);
+  const fb = rt.fallback || {};
+  const dir = String(fb.hostWorkspaceDir || rt.hostWorkspaceDir || '').replace(/\/+$/, '');
+  const items = (list && list.items) || [];
+  const server = items.find((s) => s.id === fb.serverId) || items[0];
+  if (!server) { toast('未登记 SSH 服务器：请先在「服务器」页登记宿主机', true); return null; }
+  const base = dir || `${String(server.deployDir || '/data/platform').replace(/\/+$/, '')}/workspace`;
+  return { server, base };
+}
+
+function repoHostPath(ctx, name) {
+  return `${ctx.base}/${String(name).replace(/[^A-Za-z0-9_.-]/g, '-')}`;
+}
+
+async function openRepoFiles(name) {
+  try {
+    const ctx = await repoHostContext();
+    if (!ctx) return;
+    openFilesTab(ctx.server, repoHostPath(ctx, name));
+    toast(`已打开 ${name} 的远程文件管理`);
+  } catch (e) { toast(e.message, true); }
+}
+
+async function openRepoTerminal(name) {
+  try {
+    const ctx = await repoHostContext();
+    if (!ctx) return;
+    openTerminalTab(ctx.server, repoHostPath(ctx, name));
+    toast(`终端已打开并切换到 ${name}`);
+  } catch (e) { toast(e.message, true); }
+}
+
+let repoGitRepo = '';
+let repoGitPresets = [];
+
+async function openRepoGitModal(repo) {
+  repoGitRepo = String(repo || '');
+  const modal = $('#repo-git-modal');
+  if (!modal) return;
+  const title = $('#repo-git-title');
+  if (title) title.textContent = `Git 操作 · ${repoGitRepo}`;
+  const out = $('#repo-git-output');
+  if (out) out.textContent = '选择上方快捷命令，或输入自定义命令后点「执行」。';
+  try {
+    const [rt, presets] = await Promise.all([api('/git/runtime'), api('/repos/git/presets')]);
+    const eff = rt.effectiveGit || {};
+    const sub = $('#repo-git-sub');
+    if (sub) sub.textContent = `通道：${rt.effective === 'container' ? '平台容器 / 本机' : `SSH 宿主机 ${eff.host || ''}`}${eff.version ? ` · Git ${eff.version}` : ''} · 工作区仓库 ${repoGitRepo}`;
+    repoGitPresets = presets.items || [];
+    const box = $('#repo-git-presets');
+    if (box) {
+      box.innerHTML = repoGitPresets.map((p) => `<button class="btn btn-sm" type="button" data-repo-git-preset="${esc(p.key)}" title="${esc(p.write ? '会写入远端仓库元数据 / 更新分支' : '只读命令')}">${esc(p.label)}</button>`).join('');
+      box.querySelectorAll('[data-repo-git-preset]').forEach((b) => b.addEventListener('click', () => {
+        const p = repoGitPresets.find((x) => x.key === b.dataset.repoGitPreset);
+        if (p) void runRepoGit(p.command, p.args);
+      }));
+    }
+  } catch (e) { toast(e.message, true); }
+  modal.hidden = false;
+}
+
+function closeRepoGitModal() {
+  const modal = $('#repo-git-modal');
+  if (modal) modal.hidden = true;
+}
+
+async function runRepoGit(command, args) {
+  const out = $('#repo-git-output');
+  const btn = $('#repo-git-run');
+  if (!repoGitRepo) { toast('请先从仓库列表选择仓库', true); return; }
+  if (btn) { btn.disabled = true; btn.textContent = '执行中…'; }
+  if (out) out.textContent = `执行中：git ${command} ${(args || []).join(' ')} …`;
+  try {
+    const r = await api('/repos/git', { method: 'POST', body: { repo: repoGitRepo, command, args: args || [] } });
+    if (out) out.textContent = `> ${r.commandText}\n[${r.channelLabel} · Git ${r.gitVersion || '—'} · exit ${r.code}]\n\n${r.output || '(无输出)'}`;
+    if (r.code !== 0) toast(`Git ${command} 返回 ${r.code}，请查看输出`, true);
+  } catch (e) {
+    if (out) out.textContent = `执行失败：${e.message}`;
+    toast(e.message, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '执行'; }
+  }
+}
+
 /* ------------------------- Git 运行时（v0.3.3） ------------------------- */
 // 点击「克隆」之前就能看到 Git 是否就绪；容器镜像缺 Git 时提示走 SSH 宿主机兜底。
 async function loadGitRuntime() {
@@ -547,6 +695,7 @@ async function loadGitRuntime() {
     const fb = d.fallback || {};
     const hg = d.hostGit || {};
     const eff = d.effectiveGit || {};
+    const pd = d.platformDetail || {};
     // v0.3.9：宿主机实测到 Git 就按「正常」展示，不再笼统报「未找到可用的 Git」。
     const stateBadge = d.available
       ? badge(`Git ${d.version || '可用'}`, 'green')
@@ -589,7 +738,9 @@ async function loadGitRuntime() {
           : '无可用 Git')}
         ${kv('宿主机工作区可写', hg.workspaceWritable === true ? '是' : (hg.workspaceWritable === false ? '否' : '—'))}
         ${kv('手工指定路径', d.configuredBin || '未指定')}
-        ${kv('运行平台', d.platform || '—')}
+        ${kv('运行平台', pd.current || d.platform || '—')}
+        ${pd.runtimeImage ? kv('运行镜像', pd.runtimeImage) : ''}
+        ${pd.host ? kv('Git 宿主机', `${pd.host}${hg.version ? ` · Git ${hg.version}` : ''}`) : ''}
         ${kv('工作区', d.workspaceDir || '—')}
         ${kv('宿主机映射', d.hostWorkspaceDir || '—')}
         ${kv('克隆通道', d.channel || '—')}
@@ -597,6 +748,7 @@ async function loadGitRuntime() {
           ? `就绪 · ${fb.serverName || ''}（${fb.serverHost || ''}）` : `未就绪 · ${fb.reason || '未登记 SSH 服务器'}`))}
       </div>
       <div class="notice" style="margin-top:10px">${hintLines}</div>
+      ${pd.lsb ? `<details class="dk-raw" style="margin-top:8px"><summary>宿主机发行版信息（lsb_release -a）</summary><pre class="log short">${esc(pd.lsb)}</pre></details>` : ''}
       <details class="dk-raw" style="margin-top:8px">
         <summary>可执行文件探测明细（${tried.length + (hostProbeLine ? 1 : 0)} 条）</summary>
         <div class="git-probe-list">${triedHtml}${hostProbeLine}</div>
@@ -726,12 +878,37 @@ async function loadEnvironment() {
 
 /* ---------------------------------- IDE ---------------------------------- */
 
+const ideCredState = { configured: false, plain: '' };
+
 async function loadIde() {
   try {
     const d = await api('/ide');
     $('#ide-home').href = d.url;
     $('#ide-url').textContent = `服务地址：${d.url} · 平台工作区：${d.workspace}`;
+    // v0.3.10：登录页那句「Password was set from $PASSWORD」对应 .env 的哪一项，讲清楚并可复制。
+    const p = d.password || {};
+    ideCredState.configured = Boolean(p.configured);
+    ideCredState.plain = '';
+    const st = $('#ide-cred-state');
+    if (st) st.textContent = p.configured
+      ? `已配置 · ${esc(p.key || 'CODE_SERVER_PASSWORD')}（对应 ${esc(p.envVar || '$PASSWORD')}）`
+      : `未配置 · 请到「环境配置」填写 ${esc(p.key || 'CODE_SERVER_PASSWORD')}`;
+    const h = $('#ide-cred-hint');
+    if (h) h.textContent = p.hint || '';
+    const v = $('#ide-cred-value');
+    if (v) v.textContent = p.configured ? (p.masked || '******') : '—';
   } catch (e) { toast(e.message, true); }
+}
+
+/** 显式点「显示 / 复制」才向后端取明文，列表接口永远只给脱敏值。 */
+async function revealIdePassword() {
+  if (!ideCredState.configured) { toast('尚未配置 CODE_SERVER_PASSWORD', true); return ''; }
+  if (ideCredState.plain) return ideCredState.plain;
+  const d = await api('/ide/password', { method: 'POST', body: { reveal: true } });
+  ideCredState.plain = d.password || '';
+  const v = $('#ide-cred-value');
+  if (v) v.textContent = d.password || '—';
+  return ideCredState.plain;
 }
 
 async function openIde() {
@@ -1440,10 +1617,11 @@ function restartServerPolling() {
 
 /* ==================== 远程文件管理器（独立标签） ==================== */
 
-function openFilesTab(server) {
-  const id = `files:${server.id}`;
+function openFilesTab(server, startPath) {
+  // v0.3.10：从仓库列表打开时按「服务器 + 起始目录」开独立标签，可直接落在仓库目录。
+  const id = startPath ? `files:${server.id}:${encodeURIComponent(startPath)}` : `files:${server.id}`;
   if (tabs.has(id)) return activateTab(id);
-  const start = server.deployDir || '/data/platform';
+  const start = startPath || server.deployDir || '/data/platform';
   const pane = newPane(id, `
     <div class="ws-panel">
       <div class="ws-head">
@@ -1469,7 +1647,7 @@ function openFilesTab(server) {
     id, kind: 'files', dynamic: true, closable: true, icon: '▤', pane,
     title: `文件 · ${server.name}`,
     sub: `${server.host} · SFTP 文件管理（可多标签编辑）`,
-    ctx: { serverId: server.id, serverName: server.name, host: server.host, path: start, parent: '/' },
+    ctx: { serverId: server.id, serverName: server.name, host: server.host, path: start, parent: pathParent(start) },
   });
   bindFilesPane(tab);
   loadRemoteFiles(tab);
@@ -1880,7 +2058,9 @@ function bindEditorPane(tab) {
 
 /* ==================== Web SSH 终端（可多标签多会话） ==================== */
 
-function openTerminalTab(server) {
+function openTerminalTab(server, cwd) {
+  // v0.3.10：从仓库列表打开时自动 cd 到该仓库目录，进去就能敲 git 命令。
+  const initialCommand = cwd ? `cd '${String(cwd).replace(/'/g, "'\\''")}' && pwd\n` : '';
   const id = `term:${server.id}:${++tabCounter}`;
   const pane = newPane(id, `
     <div class="ws-panel">
@@ -1907,7 +2087,7 @@ function openTerminalTab(server) {
     id, kind: 'terminal', dynamic: true, closable: true, icon: '⌨', pane,
     title: `终端 · ${server.name}`,
     sub: `${server.username || 'root'}@${server.host} · 交互式 SSH`,
-    ctx: { serverId: server.id, sid: null, term: null, fit: null, source: null, resizeHandler: null },
+    ctx: { serverId: server.id, sid: null, term: null, fit: null, source: null, resizeHandler: null, initialCommand },
     onActivate: (t) => {
       if (t.ctx.fit) { try { t.ctx.fit(); } catch { /* noop */ } }
       if (t.ctx.term) { try { t.ctx.term.focus(); } catch { /* noop */ } }
@@ -1983,6 +2163,16 @@ async function connectTerminal(tab, server) {
         method: 'POST', body: { sid: c.sid, input: data },
       }).catch((err) => toast(err.message, true));
     });
+
+    // 连接建立后自动切到仓库目录（延迟一拍，等 shell 提示符就绪）。
+    if (c.initialCommand) {
+      setTimeout(() => {
+        if (!c.sid) return;
+        api(`/servers/${server.id}/terminal/input`, {
+          method: 'POST', body: { sid: c.sid, input: c.initialCommand },
+        }).catch(() => {});
+      }, 900);
+    }
 
     const syncSize = () => {
       if (activeTabId !== tab.id || !c.term || !c.sid) return;
@@ -3568,6 +3758,47 @@ $('#git-runtime-form').addEventListener('submit', async (e) => {
 });
 
 $('#git-runtime-refresh').addEventListener('click', refreshGitRuntime);
+
+/* --------------------------- v0.3.10 交互绑定 --------------------------- */
+const ideCredRevealBtn = $('#ide-cred-reveal');
+if (ideCredRevealBtn) ideCredRevealBtn.addEventListener('click', async () => {
+  try { await revealIdePassword(); toast('已显示当前 IDE 登录密码'); }
+  catch (e) { toast(e.message, true); }
+});
+const ideCredCopyBtn = $('#ide-cred-copy');
+if (ideCredCopyBtn) ideCredCopyBtn.addEventListener('click', async () => {
+  try {
+    const pwd = await revealIdePassword();
+    if (!pwd) { toast('没有可复制的密码：请先在环境配置页设置', true); return; }
+    await navigator.clipboard.writeText(pwd);
+    toast('IDE 登录密码已复制');
+  } catch (e) { toast(e.message, true); }
+});
+const ideCredEnvBtn = $('#ide-cred-env');
+if (ideCredEnvBtn) ideCredEnvBtn.addEventListener('click', () => openEnvConfig(['CODE_SERVER_PASSWORD'], ''));
+
+const hostInfoRefreshBtn = $('#host-info-refresh');
+if (hostInfoRefreshBtn) hostInfoRefreshBtn.addEventListener('click', () => { void loadHostInfo(true); });
+
+const repoGitForm = $('#repo-git-form');
+if (repoGitForm) repoGitForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const input = $('#repo-git-input');
+  const parts = String(input ? input.value : '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) { toast('请输入 Git 子命令，例如 status 或 log --oneline -n 5', true); return; }
+  void runRepoGit(parts[0], parts.slice(1));
+});
+const repoGitClearBtn = $('#repo-git-clear');
+if (repoGitClearBtn) repoGitClearBtn.addEventListener('click', () => {
+  const o = $('#repo-git-output');
+  if (o) o.textContent = '—';
+});
+$$('[data-repo-git-close]').forEach((b) => b.addEventListener('click', closeRepoGitModal));
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const m = $('#repo-git-modal');
+  if (m && !m.hidden) closeRepoGitModal();
+});
 
 /* ----------------- 环境适配中心：配置 / 体检 / 处置（v0.3.4） ----------------- */
 const envConfigForm = $('#env-config-form');

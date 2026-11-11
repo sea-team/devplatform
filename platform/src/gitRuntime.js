@@ -15,8 +15,21 @@
  */
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { spawn, spawnSync } = require('child_process');
 const { config, state, update } = require('./core');
+
+/** 当前进程所在系统的发行版名称：容器里是 Alpine，Windows exe 里是 Windows 版本号。 */
+function localOsName() {
+  try {
+    if (process.platform === 'linux') {
+      const text = fs.readFileSync('/etc/os-release', 'utf8');
+      const m = text.match(/^PRETTY_NAME="?([^"\n]+)"?/m);
+      if (m) return m[1];
+    }
+  } catch { /* 非 Linux / 无该文件时退回 Node 的报告 */ }
+  return `${os.type()} ${os.release()}`;
+}
 
 const WINDOWS_CANDIDATES = () => {
   const local = process.env.LOCALAPPDATA || '';
@@ -73,6 +86,7 @@ function emptyHostProbe(reason = '尚未探测') {
   return {
     checked: false, skipped: false, available: false, bin: '', version: '',
     host: '', serverName: '', workspaceWritable: null, detail: '', error: reason, checkedAt: '',
+    os: '', kernel: '', hostname: '', ip: '', lsb: '',
   };
 }
 
@@ -110,19 +124,35 @@ async function probeHostGit({ force = false, timeoutMs = 8000 } = {}) {
       const server = (state().servers || []).find((s) => s.id === fb.serverId);
       if (!server) throw new Error(`SSH 服务器 ${fb.serverId} 不存在`);
       const dir = JSON.stringify(fb.hostWorkspaceDir || '/workspace');
+      // v0.3.10：同一次 SSH 顺带采集宿主机发行版 / 内核 / 主机名，
+      // 让「运行平台」能明确区分容器（Alpine）与真正跑 Git 的宿主机（Debian 9.13）。
       const command = [
         `printf 'GIT_BIN='; command -v git 2>/dev/null || printf 'MISSING\\n'`,
         'git --version 2>/dev/null || true',
         `test -d ${dir} && test -w ${dir} && echo WS_WRITABLE || echo WS_DENIED`,
+        'echo "===HOSTOS==="; (lsb_release -ds 2>/dev/null || ( . /etc/os-release 2>/dev/null && printf "%s\\n" "$PRETTY_NAME" ) || head -1 /etc/issue 2>/dev/null)',
+        'echo "===HOSTKERNEL==="; uname -sr',
+        'echo "===HOSTNAME==="; hostname',
+        "echo \"===HOSTIP===\"; hostname -I 2>/dev/null | awk '{print $1}'",
+        'echo "===LSB==="; lsb_release -a 2>/dev/null || true',
       ].join('; ');
       const r = await sshExec(server, command, timeoutMs);
       const text = `${r.stdout || ''}${r.stderr || ''}`;
+      const sec = (name) => {
+        const m = text.match(new RegExp(`===${name}===([\\s\\S]*?)(?=\\n===|$)`));
+        return m ? m[1].trim() : '';
+      };
       const binMatch = text.match(/GIT_BIN=([^\r\n]+)/);
       const verMatch = text.match(/git version\s+([\w.]+)/i);
       out.bin = binMatch && !/MISSING/.test(binMatch[1]) ? binMatch[1].trim() : '';
       out.version = verMatch ? verMatch[1] : '';
       out.available = Boolean(out.bin && out.version) && r.code === 0;
       out.workspaceWritable = /WS_WRITABLE/.test(text);
+      out.os = sec('HOSTOS');
+      out.kernel = sec('HOSTKERNEL');
+      out.hostname = sec('HOSTNAME');
+      out.ip = sec('HOSTIP');
+      out.lsb = sec('LSB');
       out.detail = text.trim().replace(/\s+/g, ' ').slice(0, 240);
       out.error = out.available ? '' : `宿主机 ${out.host || out.serverName} 未检测到可用的 Git${out.detail ? `：${out.detail}` : ''}`;
     } catch (e) {
@@ -310,6 +340,17 @@ function describe() {
     },
     hostGit,
     fallback: fb,
+    // v0.3.10：明确区分「平台进程所在的容器」与「真正执行 Git 的宿主机」。
+    platformDetail: {
+      current: `${process.platform}/${process.arch} · ${localOsName()} · 内核 ${os.release()}`,
+      container: config.runtimeKind === 'container' || fs.existsSync('/.dockerenv'),
+      runtimeImage: config.runtimeImage || '',
+      host: hostGit.available
+        ? `${hostGit.os || hostGit.host || '未知发行版'}${hostGit.kernel ? ` · 内核 ${hostGit.kernel}` : ''}${hostGit.hostname ? ` · ${hostGit.hostname}` : ''}`
+        : '',
+      hostIp: hostGit.ip || '',
+      lsb: hostGit.lsb || '',
+    },
     hint: r.available
       ? `Git ${r.version} 可用（${r.source}），克隆将在本机 / 当前容器执行。`
       : (hostGit.available && fb.ready
@@ -324,7 +365,7 @@ function describe() {
 }
 
 module.exports = {
-  resolve, refresh, describe, exec, probe, fallback,
+  resolve, refresh, describe, exec, probe, fallback, localOsName,
   probeHostGit, hostGitSummary,
   setBin, setFallback, missingMessage, friendlyError,
 };

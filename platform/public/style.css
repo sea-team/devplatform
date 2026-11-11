@@ -654,7 +654,16 @@ body.dk-compact .card { padding: 14px; }
   .grid-2, .server-grid, .ext-grid { grid-template-columns: 1fr; }
   .grid-3 { grid-template-columns: repeat(2, 1fr); }
 }
-@media (max-width: 900px) { .pill-mini { display: none; } }
+/* v0.3.10 · 运行主机信息卡片 / IDE 登录凭据 */
+.host-info-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.host-info-side { min-width: 0; }
+.host-info-side h3 { margin: 0 0 8px; font-size: 13px; font-weight: 700; color: var(--text, #0f172a); }
+.host-info-side .dk-kv-val { word-break: break-all; }
+.ide-cred code { font-size: 13px; padding: 4px 8px; background: var(--surface-2, #f1f5f9); border-radius: 6px; }
+@media (max-width: 900px) {
+  .host-info-grid { grid-template-columns: 1fr; }
+  .pill-mini { display: none; }
+}
 @media (max-width: 720px) {
   .sidebar { width: 64px; flex-basis: 64px; }
   .brand { justify-content: center; padding: 18px 8px; }

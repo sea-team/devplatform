@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261111d" />
+  <link rel="stylesheet" href="/style.css?v=20261111e" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -79,6 +79,14 @@
         <!-- 总览 -->
         <section class="page" id="view-overview">
           <div class="stat-grid" id="stat-grid"></div>
+          <div class="card" id="host-info-card" style="margin-bottom:14px">
+            <div class="card-head">
+              <h2>运行主机</h2>
+              <span class="muted" id="host-info-checked">正在采集…</span>
+              <button class="btn btn-sm" id="host-info-refresh" type="button">刷新</button>
+            </div>
+            <div id="host-info-body" class="host-info-grid"><div class="empty">正在采集平台与宿主机信息…</div></div>
+          </div>
           <div class="grid-2">
             <div class="card">
               <div class="card-head"><h2>集成服务</h2><span class="muted">各组件连通性</span></div>
@@ -532,6 +540,18 @@
                 <a class="btn" id="ide-home" href="#" target="_blank" rel="noopener">打开 IDE 首页</a>
               </div>
               <div class="hint" id="ide-url"></div>
+              <div class="notice ide-cred" id="ide-cred" style="margin-top:12px">
+                <div class="row gap wrap" style="align-items:center">
+                  <b>登录凭据</b><span class="muted" id="ide-cred-state">读取中…</span>
+                </div>
+                <div class="hint" id="ide-cred-hint" style="margin-top:6px"></div>
+                <div class="row gap wrap" style="margin-top:8px;align-items:center">
+                  <code id="ide-cred-value">—</code>
+                  <button class="btn btn-sm" id="ide-cred-reveal" type="button">显示密码</button>
+                  <button class="btn btn-sm" id="ide-cred-copy" type="button">复制密码</button>
+                  <button class="btn btn-sm" id="ide-cred-env" type="button">去环境配置修改</button>
+                </div>
+              </div>
             </div>
           </div>
           <div class="card">
@@ -1228,12 +1248,34 @@
       </div>
     </div>
   </div>
+  <!-- 工作区仓库 · Git 命令操作面板 -->
+  <div class="modal" id="repo-git-modal" hidden aria-modal="true" role="dialog" aria-labelledby="repo-git-title">
+    <div class="modal-mask" data-repo-git-close></div>
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div><h2 id="repo-git-title">Git 操作</h2><span class="muted" id="repo-git-sub">—</span></div>
+        <button class="btn btn-ghost btn-sm" type="button" data-repo-git-close>✕ 关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="notice warn">命令在平台容器或 SSH 宿主机上执行；子命令走白名单，写操作只放开 fetch / pull，参数禁止 shell 元字符。</div>
+        <div class="row gap wrap" id="repo-git-presets" style="margin:12px 0"></div>
+        <form id="repo-git-form" class="form">
+          <label>自定义命令（不含开头的 git）<input id="repo-git-input" placeholder="例如 log --oneline -n 5" autocomplete="off" /></label>
+          <div class="row gap">
+            <button class="btn btn-primary" type="submit" id="repo-git-run">执行</button>
+            <button class="btn btn-ghost" type="button" id="repo-git-clear">清空输出</button>
+          </div>
+        </form>
+        <pre class="log short" id="repo-git-output" style="margin-top:12px;min-height:120px;white-space:pre-wrap">选择上方快捷命令，或输入自定义命令后点「执行」。</pre>
+      </div>
+    </div>
+  </div>
   <div id="toast" class="toast"></div>
   <script src="/vendor/xterm.min.js"></script>
   <script src="/vendor/addon-fit.min.js"></script>
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261111d"></script>
+  <script src="/app.js?v=20261111e"></script>
 </body>
 </html>
