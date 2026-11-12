@@ -16,6 +16,9 @@ const css = fs.readFileSync(path.join(PUBLIC, 'style.css'), 'utf8');
 const app = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
 const catalog = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'catalog.js'), 'utf8');
 const envcfg = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'envConfig.js'), 'utf8');
+const authSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'auth.js'), 'utf8');
+const permSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'permissions.js'), 'utf8');
+const serverSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'server.js'), 'utf8');
 const errors = [];
 const note = (ok, label, extra = '') => {
   console.log(`${ok ? '✔' : '✖'} ${label}${extra ? ` · ${extra}` : ''}`);
@@ -33,11 +36,12 @@ const sections = [...html.matchAll(/class="page" id="view-([a-z0-9-]+)"/g)].map(
 const SUBPAGES = ['repo-new', 'repo-clone', 'storage-conn', 'storage-mounts', 'storage-drivers',
   'build-start', 'deploys', 'server-new', 'docker-containers', 'docker-images',
   'docker-volumes', 'docker-networks', 'docker-compose'];
-// v0.3.11：新增「IDE 配置」主模块页（有自己的侧栏入口），总数 27 → 28。
-note(sections.length === 28 && sections.includes('gitsrc') && sections.includes('docker')
+// v0.4.0：新增「账号管理」「资源协作」两个主模块页，总数 28 → 30。
+note(sections.length === 30 && sections.includes('gitsrc') && sections.includes('docker')
   && sections.includes('proxy') && sections.includes('environment') && sections.includes('envcfg')
-  && sections.includes('ide-config') && SUBPAGES.every((v) => sections.includes(v)),
-'28 个独立页面（15 主模块 + 13 个子功能页）均已转为可标签化的 .page', sections.join(', '));
+  && sections.includes('ide-config') && sections.includes('users') && sections.includes('collab')
+  && SUBPAGES.every((v) => sections.includes(v)),
+'30 个独立页面（17 主模块 + 13 个子功能页）均已转为可标签化的 .page', sections.join(', '));
 note(['/git-sources', '/docker/overview', '/extensions/backups', '/extensions/dbgate', '/builds/backends']
   .every((p) => app.includes(p)) && app.includes('function loadGitSources') && app.includes('function loadDocker'),
 'Git 源 / Docker 管理 / 备份 / DbGate / 构建后端接口已全部接线');
@@ -85,7 +89,7 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
-note(html.includes('?v=20261112a'), '静态资源版本已升到 20261112a');
+note(html.includes('?v=20261112b'), '静态资源版本已升到 20261112b');
 
 // v0.3.10：IDE 登录凭据、总览运行主机卡片、仓库文件 / 终端 / Git 操作。
 note(html.includes('id="ide-cred"') && html.includes('id="ide-cred-reveal"')
@@ -157,6 +161,23 @@ note(envcfg.includes('AUTH_DISABLED') && envcfg.includes('authEnabled')
   && envcfg.includes('detail:') && envcfg.includes('ADMIN_TOKEN 不能含空格')
   && app.includes('renderEnvcfgAuthState(d.security)'),
 '后端 env-config 回传鉴权布尔状态、详细说明与未启用时的置顶建议（不泄露令牌）');
+
+// v0.4.0：账号体系（登录、owner 隔离、协作者、全局配置只读）。
+note(html.includes('id="login-view"') && html.includes('id="login-form"')
+  && html.includes('id="password-form"') && html.includes('id="auth-box"')
+  && app.includes('async function startWorkbench') && app.includes("fetch('/api/auth/status')")
+  && app.includes("authFetch('/auth/login'") && css.includes('.login-view[hidden]'),
+'未登录遮罩、首次改密、登录状态检查与工作台延迟启动链路齐全');
+note(html.includes('id="view-users"') && html.includes('id="view-collab"')
+  && html.includes('id="collab-modal"') && app.includes('users: loadUsers')
+  && app.includes('collab: loadCollabResources') && app.includes("api('/collaborators'")
+  && app.includes("api('/resources'"),
+'账号管理页、资源协作页与协作者弹窗均已接线');
+note(authSrc.includes('scryptSync') && authSrc.includes('initial-admin.txt')
+  && authSrc.includes('dp_session') && permSrc.includes('function guard')
+  && permSrc.includes('collaborators') && serverSrc.includes('filterResponse')
+  && serverSrc.includes('authGate'),
+'后端密码哈希 / 会话 / 请求守卫 / 响应过滤 / 协作者链路齐全');
 
 // v0.3.7：Git 源弹窗、运行时检测明细、工作区仓库、扩展体检、表单控件统一排版。
 note(html.includes('id="gitsrc-modal"') && html.includes('id="gitsrc-add"')

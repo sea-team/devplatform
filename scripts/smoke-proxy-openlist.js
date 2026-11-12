@@ -195,7 +195,7 @@ async function api(pathname, options = {}) {
       DATA_DIR: TMP, PORT: String(apiPort),
       OPENLIST_URL: `http://127.0.0.1:${olPort}`, OPENLIST_TOKEN: 'fake-token',
       GITEA_URL: `http://127.0.0.1:${olPort}`, CODE_SERVER_URL: `http://127.0.0.1:${olPort}`,
-      ADMIN_TOKEN: '', DP_PROXY_GLOBAL: '',
+      ADMIN_TOKEN: '', DP_PROXY_GLOBAL: '', DP_AUTH_MODE: 'off',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

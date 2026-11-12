@@ -164,7 +164,7 @@ async function testApi() {
     cwd: PLATFORM,
     env: {
       ...process.env,
-      DATA_DIR: TMP, PORT: String(apiPort), ADMIN_TOKEN: '',
+      DATA_DIR: TMP, PORT: String(apiPort), ADMIN_TOKEN: '', DP_AUTH_MODE: 'off',
       WORKSPACE_DIR: path.join(TMP, 'workspace'),
       GITEA_URL: 'http://127.0.0.1:1', OPENLIST_URL: 'http://127.0.0.1:1',
       CODE_SERVER_URL: 'http://127.0.0.1:1', DP_PROXY_GLOBAL: '',

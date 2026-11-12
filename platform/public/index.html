@@ -4,12 +4,39 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261112a" />
+  <link rel="stylesheet" href="/style.css?v=20261112b" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
 </head>
 <body>
+  <!-- 账号体系：未登录时覆盖整个工作台，登录 / 改密都在这里完成 -->
+  <div id="login-view" class="login-view" hidden>
+    <form id="login-form" class="login-card">
+      <div class="login-brand">DP</div>
+      <h2>登录 DevPlatform</h2>
+      <p class="muted">未登录无法调用任何业务接口。请使用平台账号登录。</p>
+      <label>账号<input name="username" autocomplete="username" required /></label>
+      <label>密码<input name="password" type="password" autocomplete="current-password" required /></label>
+      <div id="login-error" class="notice error" hidden></div>
+      <button class="btn btn-primary" type="submit">登录</button>
+      <div class="muted small">忘记密码：在本机执行 <code>node scripts/reset-admin-password.js</code>，单文件版用 <code>devplatform.exe reset-admin</code>。</div>
+    </form>
+    <form id="password-form" class="login-card" hidden>
+      <div class="login-brand">DP</div>
+      <h2 id="password-title">首次登录 · 请修改初始密码</h2>
+      <p class="muted">初始密码由平台首次启动生成，登录后必须修改；修改后所有旧会话会失效，需要重新登录。</p>
+      <label>当前密码<input name="oldPassword" type="password" autocomplete="current-password" required /></label>
+      <label>新密码（至少 8 位）<input name="newPassword" type="password" autocomplete="new-password" required /></label>
+      <label>确认新密码<input name="confirmPassword" type="password" autocomplete="new-password" required /></label>
+      <div id="password-error" class="notice error" hidden></div>
+      <div class="row gap">
+        <button class="btn btn-primary" type="submit">保存新密码</button>
+        <button class="btn" type="button" id="password-cancel">返回登录</button>
+      </div>
+    </form>
+  </div>
+
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
@@ -35,10 +62,22 @@
         <button class="nav-item" data-view="envcfg"><span class="ico">⚙</span>环境配置</button>
         <button class="nav-item" data-view="ai"><span class="ico">✦</span>AI 服务配置</button>
         <button class="nav-item" data-view="ops"><span class="ico">◎</span>AI 运维</button>
+        <button class="nav-item" data-view="users" id="nav-users"><span class="ico">♙</span>账号管理</button>
+        <button class="nav-item" data-view="collab"><span class="ico">⇆</span>资源协作</button>
       </nav>
       <div class="sidebar-foot">
         <span class="dot" id="health-dot"></span>
         <span id="health-text">连接中…</span>
+      </div>
+      <div class="auth-box" id="auth-box" hidden>
+        <div class="row gap wrap" style="align-items:center">
+          <span class="auth-name" id="auth-name"></span>
+          <span class="badge gray" id="auth-role"></span>
+        </div>
+        <div class="row gap wrap" style="margin-top:6px">
+          <button class="btn btn-sm" type="button" id="auth-password">修改密码</button>
+          <button class="btn btn-sm" type="button" id="auth-logout">登出</button>
+        </div>
       </div>
     </aside>
 
@@ -1280,6 +1319,39 @@
             <div id="envcfg-list" class="table-wrap" style="margin-top:12px"></div>
           </div>
         </section>
+
+        <!-- 账号管理（仅管理员）：新增 / 改角色 / 禁用 / 重置密码 -->
+        <section class="page" id="view-users">
+          <div class="card">
+            <div class="card-head"><h2>账号管理</h2><span class="muted">仅管理员可进入；普通用户只能看到自己与被授权协作的数据</span></div>
+            <div class="notice">
+              权限规则：管理员可查看 / 操作所有数据；创建者（owner）对自己的数据全权；协作者分 <code>read</code>（只读）与 <code>write</code>（可操作、不可删除 / 不可改协作者）。全局配置（.env、代理、环境适配、系统更新等）对普通用户只读。
+            </div>
+            <form id="user-form" class="form row gap wrap" style="margin-top:12px;align-items:flex-end">
+              <label>账号<input name="username" required placeholder="小写字母 / 数字 / _ . -" /></label>
+              <label>显示名<input name="displayName" placeholder="可留空" /></label>
+              <label>初始密码（≥8 位）<input name="password" type="password" required /></label>
+              <label>角色<select name="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
+              <button class="btn btn-primary" type="submit">新增账号</button>
+            </form>
+          </div>
+          <div class="card" style="margin-top:14px">
+            <div class="card-head"><h2>账号列表</h2><button class="btn btn-sm" type="button" id="users-reload">刷新</button></div>
+            <div id="users-list" class="table-wrap"></div>
+          </div>
+        </section>
+
+        <!-- 资源协作：统一给所有可归属资源设置协作者（Gitea 仓库协作者语义） -->
+        <section class="page" id="view-collab">
+          <div class="card">
+            <div class="card-head"><h2>资源协作</h2><span class="muted">列出当前账号可见的所有资源，点「协作者」管理授权</span></div>
+            <div class="notice">
+              只有资源的创建者或管理员能增删协作者；<code>read</code> 只能查看，<code>write</code> 可查看与操作但不能删除资源。派生资源（服务器文件 / 终端、Docker 容器、存储文件等）继承父资源权限。
+            </div>
+            <div class="row gap" style="margin-top:12px"><button class="btn btn-sm" type="button" id="collab-reload">刷新资源列表</button></div>
+            <div id="collab-resources" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+        </section>
       </div>
     </main>
   </div>
@@ -1432,12 +1504,29 @@
       </div>
     </div>
   </div>
+  <!-- 协作者管理弹窗 -->
+  <div class="modal" id="collab-modal" hidden aria-modal="true" role="dialog" aria-labelledby="collab-title">
+    <div class="modal-mask" data-collab-close></div>
+    <div class="modal-panel modal-narrow">
+      <div class="modal-head">
+        <div><h2 id="collab-title">协作者</h2><span class="muted" id="collab-sub">—</span></div>
+        <button class="btn btn-ghost btn-sm" type="button" data-collab-close>✕ 关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="notice" id="collab-hint">—</div>
+        <div id="collab-body" style="margin-top:12px"></div>
+        <div class="form-actions" style="margin-top:12px">
+          <button class="btn btn-primary btn-sm" type="button" id="collab-save">保存协作者</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <div id="toast" class="toast"></div>
   <script src="/vendor/xterm.min.js"></script>
   <script src="/vendor/addon-fit.min.js"></script>
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261112a"></script>
+  <script src="/app.js?v=20261112b"></script>
 </body>
 </html>

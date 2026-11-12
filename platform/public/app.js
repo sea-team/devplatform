@@ -32,6 +32,8 @@ const VIEW_META = {
   envcfg: ['环境配置', '查看与管理 .env：白名单写入、脱敏、待重启提示与诊断联动的配置指引'],
   ai: ['AI 服务配置', 'API 服务、宿主机 / WSL 本地 AI 程序与代理'],
   ops: ['AI 运维', '让 AI 查询状态、分析日志并给出建议'],
+  users: ['账号管理', '管理员新增账号、调整角色、禁用与重置密码'],
+  collab: ['资源协作', '按 Gitea 仓库协作者语义管理资源授权（read / write）'],
 };
 const MODULE_ICONS = {
   overview: '◈', repos: '⑂', 'repo-new': '＋', 'repo-clone': '⇩',
@@ -41,6 +43,7 @@ const MODULE_ICONS = {
   docker: '⬡', 'docker-containers': '▣', 'docker-images': '◫', 'docker-volumes': '⛁',
   'docker-networks': '⌘', 'docker-compose': '▦',
   proxy: '⇄', environment: '⌬', envcfg: '⚙', ai: '✦', ops: '◎',
+  users: '♙', collab: '⇆',
 };
 // 子页面归属：侧边栏主项保持高亮，标签栏仍显示各自的子页标题。
 const NAV_GROUP = {
@@ -194,6 +197,7 @@ async function api(path, options = {}) {
     err.code = json.code || '';
     err.hint = json.hint || '';
     err.rawError = json.error || '';
+    if (status === 401 && !path.startsWith('/auth/')) showLogin('登录状态已失效，请重新登录');
     throw err;
   }
   return json.data;
@@ -3334,6 +3338,7 @@ const loaders = {
   proxy: loadProxy,
   dbgate: loadExtExtras, backups: loadExtExtras,
   ai: loadAI, ops: loadOps, environment: loadEnvironment, envcfg: loadEnvConfig,
+  users: loadUsers, collab: loadCollabResources,
 };
 
 /* 每个独立页顶部的子导航：点按钮打开对应标签，而不是把功能堆在一页里。 */
@@ -4963,9 +4968,277 @@ if (dockerDensitySel) dockerDensitySel.addEventListener('change', (e) => {
 updateDockerCommands();
 renderYamlCheck();
 
+/* --------------------- 账号 / 会话 / 协作者（v0.4.0） --------------------- */
+let currentUser = null;
+let workbenchStarted = false;
+let authMode = 'required';
+let collabTarget = null;
+let forcePasswordChange = false;
+
+/** 登录 / 改密走原生 fetch，避免 api() 的 401 自动跳登录造成循环。 */
+async function authFetch(path, options = {}) {
+  const init = { method: options.method || 'GET', headers: { ...(options.headers || {}) } };
+  if (options.body !== undefined) {
+    init.headers['content-type'] = 'application/json';
+    init.body = JSON.stringify(options.body);
+  }
+  const response = await fetch(`/api${path}`, init);
+  let json = {};
+  try { json = await response.json(); } catch { /* 非 JSON 响应 */ }
+  if (!response.ok || json.ok === false) throw new Error(json.error || `HTTP ${response.status}`);
+  return json.data || {};
+}
+
+function setLoginError(selector, message) {
+  const box = $(selector);
+  if (!box) return;
+  box.textContent = message || '';
+  box.hidden = !message;
+}
+
+function showLogin(message = '') {
+  const view = $('#login-view');
+  if (view) view.hidden = false;
+  const form = $('#login-form');
+  const pass = $('#password-form');
+  if (form) form.hidden = false;
+  if (pass) pass.hidden = true;
+  setLoginError('#login-error', message);
+  const box = $('#auth-box');
+  if (box) box.hidden = true;
+}
+
+function showPasswordForm(title = '首次登录 · 请修改初始密码') {
+  const view = $('#login-view');
+  if (view) view.hidden = false;
+  const form = $('#login-form');
+  const pass = $('#password-form');
+  if (form) form.hidden = true;
+  if (pass) pass.hidden = false;
+  const heading = $('#password-title');
+  if (heading) heading.textContent = title;
+  setLoginError('#password-error', '');
+  const box = $('#auth-box');
+  if (box) box.hidden = true;
+}
+
+function hideLogin() {
+  const view = $('#login-view');
+  if (view) view.hidden = true;
+}
+
+function renderAuthBox(user) {
+  currentUser = user || null;
+  const box = $('#auth-box');
+  if (!box) return;
+  if (!currentUser) { box.hidden = true; return; }
+  box.hidden = false;
+  const name = $('#auth-name');
+  const role = $('#auth-role');
+  if (name) name.textContent = currentUser.displayName || currentUser.username;
+  if (role) role.textContent = currentUser.role === 'admin' ? '管理员' : '普通用户';
+  const navUsers = $('#nav-users');
+  if (navUsers) navUsers.hidden = currentUser.role !== 'admin';
+}
+
+const loginFormEl = $('#login-form');
+if (loginFormEl) loginFormEl.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  setLoginError('#login-error', '');
+  try {
+    const data = await authFetch('/auth/login', {
+      method: 'POST',
+      body: { username: f.elements.username.value, password: f.elements.password.value },
+    });
+    renderAuthBox(data.user);
+    if (data.mustChangePassword) {
+      forcePasswordChange = true;
+      showPasswordForm();
+      toast('首次登录请先修改初始密码');
+      return;
+    }
+    hideLogin();
+    await startWorkbench();
+  } catch (err) { setLoginError('#login-error', err.message || String(err)); }
+});
+
+const passwordFormEl = $('#password-form');
+if (passwordFormEl) passwordFormEl.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  if (f.elements.newPassword.value !== f.elements.confirmPassword.value) {
+    setLoginError('#password-error', '两次输入的新密码不一致');
+    return;
+  }
+  setLoginError('#password-error', '');
+  try {
+    await authFetch('/auth/password', {
+      method: 'POST',
+      body: { oldPassword: f.elements.oldPassword.value, newPassword: f.elements.newPassword.value },
+    });
+    forcePasswordChange = false;
+    toast('密码已修改，请重新登录');
+    showLogin('密码已修改，请用新密码重新登录');
+  } catch (err) { setLoginError('#password-error', err.message || String(err)); }
+});
+
+if ($('#password-cancel')) $('#password-cancel').addEventListener('click', () => {
+  if (forcePasswordChange || !currentUser) showLogin();
+  else { hideLogin(); renderAuthBox(currentUser); }
+});
+if ($('#auth-password')) $('#auth-password').addEventListener('click', () => {
+  forcePasswordChange = false;
+  showPasswordForm('修改当前账号密码');
+});
+if ($('#auth-logout')) $('#auth-logout').addEventListener('click', async () => {
+  try { await authFetch('/auth/logout', { method: 'POST' }); } catch { /* 忽略 */ }
+  renderAuthBox(null);
+  showLogin('已登出');
+  if (typeof location !== 'undefined') location.reload();
+});
+
+/* ------------------------------- 账号管理 -------------------------------- */
+async function loadUsers() {
+  const box = $('#users-list');
+  if (!box) return;
+  try {
+    const data = await api('/users');
+    const rows = (data.items || []).map((u) => `<tr>
+      <td><b>${esc(u.username)}</b><div class="desc muted small">${esc(u.displayName || '')}</div></td>
+      <td>${badge(u.role === 'admin' ? '管理员' : '普通用户', u.role === 'admin' ? 'green' : 'gray')}</td>
+      <td>${badge(u.status === 'disabled' ? '已禁用' : '正常', u.status === 'disabled' ? 'red' : 'green')}</td>
+      <td class="small">${esc(u.lastLoginAt || '从未登录')}</td>
+      <td class="actions">
+        <button class="btn btn-sm" type="button" data-user-role="${esc(u.id)}">切换角色</button>
+        <button class="btn btn-sm" type="button" data-user-reset="${esc(u.id)}">重置密码</button>
+        <button class="btn btn-sm" type="button" data-user-status="${esc(u.id)}">${u.status === 'disabled' ? '启用' : '禁用'}</button>
+      </td>
+    </tr>`);
+    box.innerHTML = table(['账号', '角色', '状态', '最近登录', '操作'], rows);
+    box.querySelectorAll('[data-user-role]').forEach((b) => b.addEventListener('click', async () => {
+      const u = (data.items || []).find((x) => x.id === b.dataset.userRole);
+      if (!u) return;
+      try {
+        await api(`/users/${u.id}`, { method: 'PUT', body: { role: u.role === 'admin' ? 'user' : 'admin' } });
+        await loadUsers(); toast('角色已更新');
+      } catch (e) { toast(e.message || String(e), true); }
+    }));
+    box.querySelectorAll('[data-user-reset]').forEach((b) => b.addEventListener('click', async () => {
+      const password = prompt('输入新密码（至少 8 位，留空则自动生成）', '') || '';
+      try {
+        const r = await api(`/users/${b.dataset.userReset}`, { method: 'PUT', body: password ? { password } : {} });
+        toast(`已重置 ${r.username} 的密码`);
+        await loadUsers();
+      } catch (e) { toast(e.message || String(e), true); }
+    }));
+    box.querySelectorAll('[data-user-status]').forEach((b) => b.addEventListener('click', async () => {
+      const u = (data.items || []).find((x) => x.id === b.dataset.userStatus);
+      if (!u) return;
+      try {
+        await api(`/users/${u.id}`, { method: 'PUT', body: { status: u.status === 'disabled' ? 'active' : 'disabled' } });
+        await loadUsers(); toast('账号状态已更新');
+      } catch (e) { toast(e.message || String(e), true); }
+    }));
+  } catch (e) { box.innerHTML = errorBlock(e.message, e.hint || ''); }
+}
+
+const userFormEl = $('#user-form');
+if (userFormEl) userFormEl.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api('/users', { method: 'POST', body: {
+      username: f.elements.username.value, displayName: f.elements.displayName.value,
+      password: f.elements.password.value, role: f.elements.role.value,
+    } });
+    if (f.reset) f.reset();
+    toast('账号已创建');
+    await loadUsers();
+  } catch (err) { toast(err.message || String(err), true); }
+});
+if ($('#users-reload')) $('#users-reload').addEventListener('click', () => loadUsers());
+
+/* ------------------------------- 资源协作 -------------------------------- */
+async function loadCollabResources() {
+  const box = $('#collab-resources');
+  if (!box) return;
+  try {
+    const data = await api('/resources');
+    const rows = (data.items || []).map((r) => `<tr>
+      <td>${esc(r.label)}</td>
+      <td><b>${esc(r.name)}</b><div class="desc muted small">${esc(r.id)}</div></td>
+      <td>${badge(r.permission === 'owner' ? '所有者' : (r.permission === 'write' ? '可写协作者'
+        : r.permission === 'read' ? '只读协作者' : '管理员可见'), r.permission === 'owner' ? 'green' : 'gray')}</td>
+      <td>${r.collaboratorCount || 0}</td>
+      <td class="actions"><button class="btn btn-sm" type="button" data-collab-open="${esc(r.type)}|${esc(r.id)}">协作者</button></td>
+    </tr>`);
+    box.innerHTML = table(['资源类型', '资源', '我的权限', '协作者数', '操作'], rows);
+    box.querySelectorAll('[data-collab-open]').forEach((b) => b.addEventListener('click', () => {
+      const [type, id] = b.dataset.collabOpen.split('|');
+      openCollabModal(type, id);
+    }));
+  } catch (e) { box.innerHTML = errorBlock(e.message, e.hint || ''); }
+}
+
+async function openCollabModal(type, id) {
+  try {
+    const data = await api(`/collaborators?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`);
+    collabTarget = { type, id };
+    const modal = $('#collab-modal');
+    if (modal) modal.hidden = false;
+    const title = $('#collab-title');
+    const sub = $('#collab-sub');
+    const hint = $('#collab-hint');
+    if (title) title.textContent = `协作者 · ${data.label}`;
+    if (sub) sub.textContent = `${data.name} (${id})`;
+    if (hint) hint.textContent = data.canManage
+      ? '可增删协作者：read 只读，write 可查看与操作但不能删除资源。'
+      : '你只有查看权限；只有资源创建者或管理员能修改协作者。';
+    const selected = new Map((data.collaborators || []).map((c) => [c.userId, c.permission]));
+    const rows = (data.users || []).map((u) => {
+      const cur = selected.get(u.id) || '';
+      return `<div class="collab-user">
+        <span><b>${esc(u.username)}</b> <span class="muted small">${esc(u.displayName || '')}</span></span>
+        <select data-collab-user="${esc(u.id)}">
+          <option value=""${cur ? '' : ' selected'}>不协作</option>
+          <option value="read"${cur === 'read' ? ' selected' : ''}>只读 read</option>
+          <option value="write"${cur === 'write' ? ' selected' : ''}>可写 write</option>
+        </select>
+      </div>`;
+    }).join('');
+    const body = $('#collab-body');
+    if (body) body.innerHTML = rows || '<div class="empty">暂无其他账号可授权</div>';
+    const save = $('#collab-save');
+    if (save) save.disabled = !data.canManage;
+  } catch (e) { toast(e.message || String(e), true); }
+}
+
+if ($('#collab-save')) $('#collab-save').addEventListener('click', async () => {
+  if (!collabTarget) return;
+  const collaborators = $$('#collab-body [data-collab-user]')
+    .map((el) => ({ userId: el.dataset.collabUser, permission: el.value }))
+    .filter((x) => x.permission);
+  try {
+    await api('/collaborators', { method: 'PUT',
+      body: { type: collabTarget.type, id: collabTarget.id, collaborators } });
+    const modal = $('#collab-modal');
+    if (modal) modal.hidden = true;
+    toast('协作者已保存');
+    await loadCollabResources();
+  } catch (e) { toast(e.message || String(e), true); }
+});
+$$('[data-collab-close]').forEach((b) => b.addEventListener('click', () => {
+  const modal = $('#collab-modal');
+  if (modal) modal.hidden = true;
+}));
+if ($('#collab-reload')) $('#collab-reload').addEventListener('click', () => loadCollabResources());
+
 /* --------------------------------- 启动 ---------------------------------- */
 
-(async function boot() {
+async function startWorkbench() {
+  if (workbenchStarted) return;
+  workbenchStarted = true;
   try {
     await api('/health');
     $('#health-dot').classList.add('on');
@@ -4977,4 +5250,25 @@ renderYamlCheck();
   loadSystemInfo();
   restartServerPolling();
   applyDockerPrefs();
+}
+
+(async function boot() {
+  let authStatus = null;
+  try {
+    const response = await fetch('/api/auth/status');
+    const json = await response.json();
+    authStatus = json && json.data ? json.data : null;
+  } catch { /* 服务不可达或旧版本：仍启动工作台，由接口自行报错 */ }
+  authMode = (authStatus && authStatus.mode) || 'off';
+  if (authStatus && authStatus.mode === 'required' && authStatus.authenticated === false) {
+    showLogin();
+    return;
+  }
+  renderAuthBox(authStatus && authStatus.user ? authStatus.user : null);
+  if (authStatus && authStatus.user && authStatus.user.mustChangePassword) {
+    forcePasswordChange = true;
+    showPasswordForm();
+    return;
+  }
+  await startWorkbench();
 })();

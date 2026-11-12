@@ -97,7 +97,7 @@ function serveStatic(staticDir, pathname, res) {
   return sendJSON(res, 404, { ok: false, error: '控制台文件不存在', status: 404 });
 }
 
-function createApp({ adminToken = '', staticDir = '', errorStatus = null } = {}) {
+function createApp({ adminToken = '', staticDir = '', errorStatus = null, authGate = null } = {}) {
   const routes = [];
   let staticRoot = staticDir;
 
@@ -123,6 +123,12 @@ function createApp({ adminToken = '', staticDir = '', errorStatus = null } = {})
 
   async function dispatch(req, res) {
     decorateResponse(res);
+    // 账号体系：统一过滤响应里的 items 数组，让所有列表接口都不泄露他人资源，
+    // 不必逐个改 168 条路由；只认能在归属集合里反查到 id 的对象。
+    if (authGate && authGate.filterResponse) {
+      const originalJson = res.json;
+      res.json = (payload) => originalJson(authGate.filterResponse(req, payload));
+    }
     let parsed;
     try { parsed = new URL(req.url, `http://${req.headers.host || 'localhost'}`); }
     catch { return sendJSON(res, 400, { ok: false, error: '非法请求路径', status: 400 }); }
@@ -130,8 +136,24 @@ function createApp({ adminToken = '', staticDir = '', errorStatus = null } = {})
 
     if (!pathname.startsWith('/api/')) return serveStatic(staticRoot, pathname, res);
 
-    if (adminToken && pathname !== '/api/health') {
-      // EventSource / 下载链接无法带自定义 Header，允许用 ?token= 传递同一个 ADMIN_TOKEN。
+    // 账号体系：统一在分发层解析身份；off 是应急回退，required 会拦截除公开路径外的所有 API。
+    // 资源级权限在 req.body / req.params 解析完成后再判（见下方 authorize）。
+    if (authGate) {
+      const currentMode = authGate.mode();
+      if (currentMode === 'off') {
+        req.user = { id: '__legacy__', username: 'legacy', role: 'admin', via: 'off' };
+        req.identity = { user: req.user, via: 'off' };
+      } else {
+        // 公开路径也要解析身份：/api/auth/status 需要据此告诉前端「是否已登录」。
+        const identity = authGate.identity(req, parsed);
+        if (!identity && currentMode === 'required' && !authGate.isPublic(pathname)) {
+          return sendJSON(res, 401, { ok: false, error: '未登录：请先登录控制台', status: 401 });
+        }
+        req.user = identity ? identity.user : null;
+        req.identity = identity;
+      }
+    } else if (adminToken && pathname !== '/api/health') {
+      // 兼容未注入 authGate 的调用方（旧脚本 / 单测）：仍按单一 ADMIN_TOKEN 校验。
       const header = req.headers.authorization || '';
       const queryToken = parsed.searchParams.get('token') || '';
       if (header !== `Bearer ${adminToken}` && queryToken !== adminToken) {
@@ -152,7 +174,16 @@ function createApp({ adminToken = '', staticDir = '', errorStatus = null } = {})
               limit: route.options.raw ? 100 * 1024 * 1024 : 2 * 1024 * 1024,
             })
           : {};
-        await route.handler(req, res);
+        if (authGate && req.identity && !authGate.isPublic(pathname) && !authGate.authorize(req, pathname, route)) {
+          return sendJSON(res, req.user ? 403 : 401, {
+            ok: false,
+            error: req.user ? '无权操作：该资源不属于你，或你的协作权限不足（全局配置仅管理员可改）'
+              : '未登录：请先登录控制台',
+            status: req.user ? 403 : 401,
+          });
+        }
+        if (authGate && authGate.withUser) await authGate.withUser(req.user, () => route.handler(req, res));
+        else await route.handler(req, res);
       } catch (error) {
         // 未经过 wrap() 的同步处理器也走同一套状态码推断，避免「明明是参数错误」却报 500。
         const status = Number(error && error.status) || (errorStatus ? errorStatus(error) : 500);

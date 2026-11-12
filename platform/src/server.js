@@ -5,7 +5,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { createApp } = require('./mini');
 const {
-  config, state, update, uid, ok, fail, wrap, appRoot,
+  config, state, update, uid, ok, fail, wrap, appRoot, HttpError, withUser,
   safeWorkspacePath, relativeWorkspacePath, badRequest, notFound, inferStatus,
 } = require('./core');
 const {
@@ -29,12 +29,51 @@ const envConfig = require('./envConfig');
 const hostInfo = require('./hostInfo');
 const workspaceGit = require('./workspaceGit');
 const fileTypes = require('./fileTypes');
+const auth = require('./auth');
+const permissions = require('./permissions');
 
 // 面板里保存过的 OpenList 连接优先于 .env（不改文件、重启后仍然生效）。
 openlist.applyConfig();
+// 首次启动创建初始管理员、把历史资源归属补齐；已有账号时不做任何改动。
+auth.initialize();
+
+// 账号体系：分发层统一解析身份（未登录拦截），资源级权限在 body/params 解析后判定。
+const authGate = {
+  mode: auth.mode,
+  isPublic: (pathname) => auth.PUBLIC_PATHS.includes(pathname),
+  identity: (req, parsed) => auth.identity(req, parsed),
+  authorize: (req, pathname) => auth.authorize(req, pathname),
+  filterResponse,
+  withUser,
+};
+const visible = (req, items) => permissions.visible(req.user, items);
+
+/**
+ * 响应兜底过滤：普通用户看不到不属于自己的资源。
+ * 只过滤能在归属集合里反查到 id 的对象，字典 / 模板列表 / 状态数组原样保留。
+ */
+function filterResponse(req, payload) {
+  const user = req.user;
+  if (!payload || !payload.ok || !payload.data || permissions.isAdmin(user)) return payload;
+  const keep = (item) => {
+    if (!item || typeof item !== 'object' || !item.id) return true;
+    const found = permissions.findResourceById(item.id);
+    return found ? permissions.can(user, found.item, 'read') : true;
+  };
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.filter(keep).map(walk);
+    if (node && typeof node === 'object') {
+      const out = {};
+      for (const [key, value] of Object.entries(node)) out[key] = walk(value);
+      return out;
+    }
+    return node;
+  };
+  return { ...payload, data: walk(payload.data) };
+}
 
 // 内置 HTTP 路由：本地零依赖即可启动；容器里装了 ssh2/undici 后自动启用 SSH 与代理。
-const app = createApp({ adminToken: config.adminToken, staticDir: config.publicDir, errorStatus: inferStatus });
+const app = createApp({ adminToken: config.adminToken, staticDir: config.publicDir, errorStatus: inferStatus, authGate });
 app.disable('x-powered-by');
 app.get('/api/health', (req, res) => {
   // 档案可在控制台热切换，必须每次请求实时读取，不能在模块加载时缓存。
@@ -52,8 +91,38 @@ app.get('/api/health', (req, res) => {
     },
   });
 });
-// 鉴权由 mini.js 在分发层统一处理（/api/health 除外）。
+// 鉴权由 mini.js 在分发层统一处理（/api/health、/api/auth/* 公开接口除外）。
 // 正常模式：外部服务未就绪时直接返回真实错误，不注入任何演示数据。
+
+/* --------------------- 账号 / 会话 / 协作者（v0.4.0） --------------------- */
+const requireAdmin = (req) => {
+  if (!permissions.isAdmin(req.user)) throw new HttpError(403, '仅管理员可管理账号');
+};
+
+app.get('/api/auth/status', (req, res) => ok(res, auth.status(req.user)));
+app.post('/api/auth/login', wrap(async (req, res) => ok(res, auth.login(req, res, req.body))));
+app.post('/api/auth/logout', wrap(async (req, res) => ok(res, auth.logout(req, res))));
+app.post('/api/auth/password', wrap(async (req, res) => {
+  if (!req.identity || req.identity.via !== 'session') throw new HttpError(401, '请以账号登录后修改密码');
+  ok(res, auth.changePassword(req.user, req.body));
+}));
+// 本机 CLI / 管理员重置密码；未登录的外部请求一律 401（分发层已拦）。
+app.post('/api/auth/reset-password', wrap(async (req, res) => {
+  const via = req.identity && req.identity.via;
+  if (via !== 'cli' && !permissions.isAdmin(req.user)) throw new HttpError(403, '无权重置账号密码');
+  ok(res, auth.resetPassword(req.body && req.body.username, req.body && req.body.password));
+}));
+
+app.get('/api/users', wrap(async (req, res) => { requireAdmin(req); ok(res, { items: auth.listUsers() }); }));
+app.post('/api/users', wrap(async (req, res) => { requireAdmin(req); ok(res, auth.createUser(req.body)); }));
+app.put('/api/users/:id', wrap(async (req, res) => { requireAdmin(req); ok(res, auth.updateUser(req.params.id, req.body, req.user)); }));
+app.delete('/api/users/:id', wrap(async (req, res) => { requireAdmin(req); ok(res, auth.deleteUser(req.params.id, req.user)); }));
+
+app.get('/api/resources', wrap(async (req, res) => ok(res, { items: permissions.resourcesFor(req.user) })));
+app.get('/api/collaborators', wrap(async (req, res) => ok(res, permissions.collaboratorsView(req.user, req.query.type, req.query.id))));
+app.put('/api/collaborators', wrap(async (req, res) => ok(res, permissions.setCollaborators(
+  req.user, req.body && req.body.type, req.body && req.body.id, req.body && req.body.collaborators,
+))));
 
 /* --------------------- 运行时 / 热更新（引导器 IPC） --------------------- */
 // 源码直跑时没有引导器；编译成 exe 后由 launcher 监督进程处理更新、回滚与重载。

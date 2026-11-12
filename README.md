@@ -2543,3 +2543,75 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 | 鉴权行为实测（`mini.js`） | 令牌为空：无 token → **200**；令牌为 `s3cr3t`：无 token → **401**、`Bearer` → **200**、`?token=` → **200**、`/api/health` 不受 401 拦截 |
 
 > 本版只提交源码与文档：未重新构建 `devplatform.exe`、未打 tag、未部署 246。需要发布 / 部署时再执行 `npm run build` 与 `scripts/remote.js deploy`。
+
+---
+
+## 41. 账号体系与资源协作（v0.4.0 功能）
+
+需求：默认初始管理账号；未登录不能调用任何操作接口；各账号添加的数据仅自己可查看 / 操作，管理员可查看 / 操作全部；数据可指定协作人，按 Gitea 仓库协作者语义授权。
+
+### 41.1 设计
+
+| 层 | 实现 |
+|---|---|
+| 账号 | `state.json.users[]`：`id / username / displayName / passwordHash(scrypt+salt) / role(admin\|user) / status / mustChangePassword`。首次启动无账号时自动建 `admin`，随机初始密码写 `data/initial-admin.txt`（600）并在启动日志打印一次，首次登录强制改密 |
+| 会话 | `state.json.sessions[]`；Cookie `dp_session` 只放随机 token 的 sha256 索引，HttpOnly + SameSite=Lax（HTTPS 自动加 Secure），7 天过期。改密 / 重置 / 禁用会吊销该账号全部会话；登录失败 5 次锁 60 秒 |
+| 拦截 | `mini.js` 分发层统一解析身份：`/api/health`、`/api/auth/login`、`/api/auth/status` 公开，其余未登录一律 **401**。`DP_AUTH_MODE=off\|optional\|required`（默认 `required`）可一键回退 |
+| 兼容 | `ADMIN_TOKEN` 的 `Bearer` / `?token=` 仍等价管理员，巡检脚本、SSE、下载链接与应急排障不受影响；本机 CLI 用回环 + `x-dp-cli: 1` 头调用「重置密码 / 重载」两个白名单路径 |
+| 归属 | 用户创建的集合（`servers / gitSources / aiProviders / builds / deploys / extensions / composeTemplates / backups / openlistConnections`）新增 `ownerId` + `collaborators`。`core.update()` 借 `AsyncLocalStorage` 请求上下文，给本次新增对象自动补 ownerId，**168 条原路由无需逐个改** |
+| 过滤 | `mini.js` 包装 `res.json`，普通用户响应里的 `items` 数组按 id 反查归属自动过滤；`permissions.guard()` 在 body / params 解析后校验带 id 的单条与派生资源操作，越权 **403** |
+
+### 41.2 权限矩阵
+
+| 动作 | 管理员 | owner | 协作者 read | 协作者 write | 无关账号 |
+|---|---|---|---|---|---|
+| 查看资源列表 / 详情 | ✔ 全部 | ✔ 自己的 + 被协作的 | ✔ 被协作的 | ✔ 被协作的 | ✖ |
+| 修改资源 | ✔ | ✔ | ✖ 403 | ✔ | ✖ |
+| 删除资源 | ✔ | ✔ | ✖ 403 | ✖ 403 | ✖ |
+| 管理协作者 | ✔ | ✔ | ✖ 403 | ✖ 403 | ✖ |
+| 全局配置（.env / 系统更新 / 代理 / 环境适配 / Git 运行时） | 可改 | 只读 | 只读 | 只读 | 只读 |
+| 账号管理 | ✔ | ✖ | ✖ | ✖ | ✖ |
+
+派生资源继承父资源：`/api/servers/:id/*`（SSH 文件、Web 终端、状态）、Docker 容器 / 镜像（按 `serverId`）、OpenList 文件（按 `connectionId`）、Git 仓库文件（按 `sourceId`）都会先校验父资源权限。
+
+### 41.3 界面
+
+- 未登录：全屏登录遮罩，工作台不初始化；`api()` 收到 401 自动回到登录页。
+- 首次登录 / 侧栏「修改密码」：改密表单；改密后旧会话失效，需重新登录。
+- 侧栏底部：当前账号、角色、修改密码、登出。
+- **账号管理**（仅管理员）：新增账号、切角色、禁用 / 启用、重置密码。禁用是软删除，避免资源 `ownerId` 悬空。
+- **资源协作**：列出当前账号可见的所有资源与我的权限；点「协作者」在弹窗里按账号设置 `read` / `write`，参照 Gitea 仓库协作者。
+
+### 41.4 命令行重置密码
+
+| 命令 | 场景 |
+|---|---|
+| `node scripts/reset-admin-password.js` | 本机；平台在线自动走 CLI 通道不停机重置，离线直接改 `state.json` |
+| `node scripts/reset-admin-password.js alice -p '新密码'` | 指定账号与新密码 |
+| `devplatform.exe reset-admin [账号]` | 单文件版在线重置（launcher 走本机 CLI 通道） |
+| `--offline` | 强制离线改 `state.json`，需先停平台 |
+| `--api http://10.0.0.246:9000 --token <ADMIN_TOKEN>` | 远端实例 |
+
+重置成功后返回新密码并吊销该账号所有会话；初始密码文件 `data/initial-admin.txt` 应在首次改密后删除。
+
+### 41.5 迁移与边界
+
+- 升级时 `auth.initialize()` 建初始管理员，把历史资源（无 `ownerId`）整体归到该管理员，不丢数据；`state.json` 仍 600 权限。
+- 不允许降级 / 禁用「最后一个管理员」，也不允许禁用自己。
+- **隔离粒度只到平台登记的资源对象**：某账号被授权操作一台服务器后，能看到该主机上的全部容器与文件；外部系统（SSH / Docker / OpenList / Git）内部的多租户隔离需靠它们自己的账号体系。
+- 部署到已有实例（如 246）后，所有浏览器与脚本立刻需要登录 / 令牌：建议先给 `.env` 配 `ADMIN_TOKEN` 供脚本使用，再从 `data/initial-admin.txt` 取初始密码登录并改密；忘记密码用上面的命令行重置。
+- `DP_AUTH_MODE=off` 是完全不鉴权的应急状态，排障后应立即改回 `required`；`?token=` 会进 URL 与访问日志，公网请配 HTTPS。
+- 账号体系没有 SSO / 多租户审计日志，需要这些能力请前置网关。
+
+### 41.6 验证
+
+| 项目 | 结果 |
+|---|---|
+| `scripts/smoke-auth.js` | **33 项全通过**：401 拦截、登录 / 改密、账号管理、owner 隔离、协作者 read/write、管理员全权、全局配置只读、令牌通道、CLI 重置、off 回退 |
+| `scripts/check-frontend.js` | **75 项全通过**（新增 3 项账号体系检查） |
+| 旧冒烟 | 四套脚本显式 `DP_AUTH_MODE=off`：52 / 29 / 31 / 60 项保持通过 |
+| `api-sweep --full`（临时实例） | 180 条路由、166 项已测：**0 个 500、0 超时、0 降级异常、0 错误体缺 status** |
+| `api-audit`（临时实例） | 180 条路由、296 次请求：**0 个 500、0 网络异常、0 问题** |
+| `npm run check` | 含新增 `auth.js` / `permissions.js` / `smoke-auth.js` / `reset-admin-password.js`，全部通过 |
+
+> 本次只提交源码与文档：**`package.json` 版本号仍为 `0.3.12`（发版时统一 bump 到 `0.4.0`）、未重新构建 exe、未打 tag、未部署 246**。发版与部署（尤其 246 会立刻要求登录）需单独确认。

@@ -665,6 +665,33 @@ body.dk-compact .card { padding: 14px; }
 .envcfg-detail summary { cursor: pointer; color: var(--primary); font-size: 12px; }
 .envcfg-detail ul { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 6px 0 0; padding-left: 18px; }
 
+/* ===== 账号体系：登录遮罩 / 当前账号 / 协作者弹窗 ===== */
+.login-view { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; background: var(--surface-2); }
+.login-view[hidden] { display: none; }
+.login-card {
+  width: min(420px, 92vw); box-sizing: border-box; padding: 28px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .12);
+}
+.login-card h2 { margin: 12px 0 6px; font-size: 20px; }
+.login-card p { font-size: 13px; line-height: 1.7; margin: 0 0 16px; }
+.login-card label { display: block; margin-bottom: 12px; font-size: 13px; color: var(--muted); }
+.login-card input {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 6px;
+  padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); color: var(--text); font-size: 14px;
+}
+.login-card .btn-primary { width: 100%; margin-top: 6px; }
+.login-brand {
+  width: 44px; height: 44px; border-radius: 12px; background: var(--primary); color: #fff;
+  display: flex; align-items: center; justify-content: center; font-weight: 700; letter-spacing: 1px;
+}
+.auth-box { padding: 10px 14px; border-top: 1px solid var(--border); }
+.auth-name { font-size: 13px; font-weight: 600; word-break: break-all; }
+.collab-user { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.collab-user:last-child { border-bottom: 0; }
+.collab-user select { margin-left: auto; }
+
 @media (max-width: 1100px) {
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .grid-2, .server-grid, .ext-grid { grid-template-columns: 1fr; }

@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const { AsyncLocalStorage } = require('async_hooks');
 const path = require('path');
 const crypto = require('crypto');
 
@@ -19,6 +20,7 @@ const config = {
   port: Number(env('PORT', '9000')),
   publicDir: PUBLIC_DIR,
   dataDir: DATA_DIR,
+  // 账号体系：.env 里的机器令牌仍作为管理员应急通道。
   adminToken: env('ADMIN_TOKEN'),
   // 默认值必须是「本机 / 源码直跑 / 单文件 exe」可解析的地址。
   // Docker compose 会显式注入 gitea:3000 / openlist:5244 等容器服务名覆盖这里；
@@ -101,6 +103,9 @@ function resolveEnvFile() {
 
 function defaultState() {
   return {
+    // 账号体系（v0.4.0）：首次启动由 auth.initialize() 创建初始管理员并迁移历史资源归属。
+    users: [],
+    sessions: [],
     servers: [],
     aiProviders: [],
     builds: [],
@@ -129,6 +134,18 @@ function defaultState() {
   };
 }
 
+/** 需要按账号归属的集合；新建数据时由 update() 自动补 ownerId。 */
+const OWNED_COLLECTIONS = [
+  'servers', 'gitSources', 'aiProviders', 'builds', 'deploys',
+  'extensions', 'composeTemplates', 'backups', 'openlistConnections',
+];
+const requestContext = new AsyncLocalStorage();
+const withUser = (user, fn) => requestContext.run({ user: user || null }, fn);
+const currentUser = () => {
+  const store = requestContext.getStore();
+  return store ? store.user : null;
+};
+
 let _state = null;
 
 function loadState() {
@@ -137,6 +154,9 @@ function loadState() {
     const base = defaultState();
     return {
       ...base, ...parsed,
+      // 账号数组不能被旧文件里的非数组值污染；旧 state.json 缺字段时按空数组处理。
+      users: Array.isArray(parsed.users) ? parsed.users : [],
+      sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
       // 嵌套对象要逐层补齐，避免旧 state.json 缺字段导致策略读取为 undefined。
       environment: { ...base.environment, ...(parsed.environment || {}) },
     };
@@ -162,7 +182,23 @@ function save() {
 }
 
 function update(mutator) {
+  const before = new Set();
+  for (const key of OWNED_COLLECTIONS) {
+    for (const item of (state()[key] || [])) if (item && item.id) before.add(`${key}:${item.id}`);
+  }
   const result = mutator(state());
+  // 只给本次新增的资源自动归属当前账号，避免把历史遗留数据误判成当前用户所有。
+  const user = currentUser();
+  if (user && user.id && user.id !== '__legacy__' && user.id !== '__cli__') {
+    for (const key of OWNED_COLLECTIONS) {
+      for (const item of (_state[key] || [])) {
+        if (!item || typeof item !== 'object' || !item.id) continue;
+        if (before.has(`${key}:${item.id}`)) continue;
+        if (!item.ownerId) item.ownerId = user.id;
+        if (!Array.isArray(item.collaborators)) item.collaborators = [];
+      }
+    }
+  }
   save();
   return result;
 }
@@ -289,6 +325,7 @@ function relativeWorkspacePath(abs) {
 // 正常模式：外部服务未配置 / 不可达时直接返回真实错误，不注入任何演示数据。
 module.exports = {
   config, state, save, update, uid, auth, ok, fail, wrap, appRoot: ROOT,
+  OWNED_COLLECTIONS, withUser, currentUser,
   safeWorkspacePath, relativeWorkspacePath, defaultState,
   envFileCandidates, resolveEnvFile,
   HttpError, badRequest, notFound, conflict, upstream, inferStatus,

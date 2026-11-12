@@ -55,6 +55,8 @@ const DEFAULT_ENV = [
   '#   且 /api/servers/:id/exec 降级为只读白名单）；对局域网 / 公网暴露时必须设置。',
   "# 启用：填强随机值 → 完全重启平台 → 每台浏览器执行 localStorage.setItem('dp_token', '<同一令牌>')。",
   '# 详细风险与步骤见 .env.example、README §5 / §40 与控制台「环境配置 → 鉴权说明」。',
+  '# 账号体系：首次启动自动生成 admin 初始密码（data/initial-admin.txt），首次登录强制改密；',
+  '# 未登录会拦截所有 /api/*；DP_AUTH_MODE=off 可应急回退；重置密码 devplatform.exe reset-admin。',
   '# ADMIN_TOKEN=',
 ].join('\n') + '\n';
 
@@ -423,13 +425,14 @@ function runWorker() {
   externalRequire(BUNDLE);
 }
 
-async function httpCommand(action, body = {}) {
+async function httpCommand(action, body = {}, cli = false) {
   const port = process.env.PORT || '9000';
   const token = process.env.ADMIN_TOKEN || '';
   const res = await fetch(`http://127.0.0.1:${port}${action}`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
+      ...(cli ? { 'x-dp-cli': '1' } : {}),
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(body),
@@ -464,6 +467,19 @@ async function main() {
       console.log('已触发重载：', JSON.stringify(data));
       break;
     }
+    case 'reset-admin': {
+      loadDotEnv();
+      try {
+        const data = await httpCommand('/api/auth/reset-password', { username: rest[0] || 'admin' }, true);
+        console.log(`已重置账号 ${data.username} 的密码（旧会话已失效）：${data.password}`);
+        console.log('请立即登录后修改密码；脚本重置请用：node scripts/reset-admin-password.js');
+      } catch (e) {
+        console.error('在线重置失败：', e.message);
+        console.error('平台未运行时可用：node scripts/reset-admin-password.js --offline [账号]');
+        process.exitCode = 1;
+      }
+      break;
+    }
     case 'update': {
       loadDotEnv();
       const result = await applyUpdate(rest[0], { force: rest.includes('--force') });
@@ -491,8 +507,10 @@ async function main() {
         '  devplatform.exe reload          平滑重启业务进程（不中断配置）',
         '  devplatform.exe update <source> 应用更新（目录 / release.json URL）',
         '  devplatform.exe rollback        回滚到最近一次备份',
+        '  devplatform.exe reset-admin [账号]  重置管理员/账号密码（旧会话失效，生成新密码）',
         '',
-        '  环境变量：DP_UPDATE_URL 默认更新源、PORT、ADMIN_TOKEN；也可放 dist/.env',
+        '  环境变量：DP_UPDATE_URL 默认更新源、PORT、ADMIN_TOKEN、DP_AUTH_MODE；也可放 dist/.env',
+        '  账号体系：首次启动自动生成 admin 初始密码，见 data/initial-admin.txt',
       ].join('\n'));
       break;
     default: startSupervisor(); break;

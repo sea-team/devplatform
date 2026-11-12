@@ -101,7 +101,7 @@ async function startServer(port) {
   const child = spawn(process.execPath, [path.join(PLATFORM, 'src', 'server.js')], {
     env: {
       ...process.env,
-      PORT: String(port), DATA_DIR: TMP, ADMIN_TOKEN: '',
+      PORT: String(port), DATA_DIR: TMP, ADMIN_TOKEN: '', DP_AUTH_MODE: 'off',
       GITEA_URL: 'http://127.0.0.1:1', GITEA_TOKEN: '',
       OPENLIST_URL: 'http://127.0.0.1:1', OPENLIST_TOKEN: '', OPENLIST_PASSWORD: '',
       CODE_SERVER_URL: 'http://127.0.0.1:1',
