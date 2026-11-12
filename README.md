@@ -2680,4 +2680,19 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 
 **回归**：`smoke-auth.js` 33 → **39 项**（新增：write 协作者编辑后仍可见、owner 编辑后仍可见、落盘归属与协作者保留、启动时补齐孤立资源）；`npm run check`、前端自检 75 项、四套旧冒烟 52/29/31/60、`api-sweep --full` 与 `api-audit` 296 次请求全过。
 
-v0.4.1 重新部署 246 后，重启时的迁移逻辑会自动修复那条孤立记录。
+### 42.4 v0.4.1 发布与 246 复验实测
+
+| 项 | 结果 |
+|---|---|
+| 提交 / tag | `56d04e4` → annotated tag `v0.4.1` |
+| CI | run `43206956375` success（2026-11-12T11:14:17Z） |
+| Release | 2026-11-12T11:13:57Z，draft / prerelease 均 false，6 资产：`devplatform-windows.zip` 145,025,200 B、`devplatform-services.zip` 108,445,228 B、`devplatform-windows-lite.zip` 36,579,754 B、`devplatform-dist.zip` 36,444,105 B、`devplatform.exe` 90,139,136 B、`SHA256SUMS.txt` 445 B（5 行，`64 hex + 文件名`，LF 无 BOM） |
+| 本机构建 | `bundle.cjs` 2,493 KB、`devplatform.exe` 90,177,536 B、`release.json` v0.4.1、bundle SHA256 一致 |
+| 246 重新部署 | `0.4.1 / normal`，服务器登记「更新」成功、环境体检 8 正常 / 0 异常；健康检查无鉴权可用 |
+| 归属修复 | 重启后 `orphans: []`，两条 `servers` 均有 `ownerId`；`users` 仍只有 `admin`，`sessions` 未被重置 |
+| 登录链路 | 未登录 401、`Bearer` 200，`/api/auth/status` = `mode=required, authenticated=false, tokenChannel=true` |
+| 全接口巡检 | `api-sweep --full --token`：**166 项已测、0 个 500、0 超时、0 降级异常、0 错误体缺 status**（1 个 502 为 OpenList 存储不存在，带修复提示） |
+| 深度审计 | `api-audit --token`：180 路由 / 296 次请求，**0 个 500、0 网络异常、0 问题**；取到 1 个真实凭据样本做脱敏扫描，无 `SECRET_LEAK` |
+| 端到端验证 | `verify.js`（`DP_TOKEN`）：集成服务全部在线；SFTP 读写 / 上传 / 下载（`?token=`）、编辑器 14 项、SSH 终端 SSE（`?token=`）、**容器化构建 + 测试 `status=success exit=0`** 全过 |
+
+> 巡检脚本的 `--token` / `DP_TOKEN`、`verify.js` 的 `?token=` 下载与 SSE 通道均在本次真实部署上验证通过。`DP_AUTH_MODE=off` 仍是应急回退开关，正常状态保持 `required`。
