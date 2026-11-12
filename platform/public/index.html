@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261111f" />
+  <link rel="stylesheet" href="/style.css?v=20261112a" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -1207,6 +1207,49 @@
 
         <!-- 环境配置（v0.3.8）：.env 可视化管理 + 诊断联动的配置指引 -->
         <section class="page" id="view-envcfg">
+          <!-- ADMIN_TOKEN 鉴权说明（说明补全，不改版本号）：状态由 /api/env-config 的 security 字段填充 -->
+          <div class="card" style="margin-bottom:14px" id="envcfg-auth-card">
+            <div class="card-head">
+              <h2>ADMIN_TOKEN 鉴权说明</h2>
+              <span id="envcfg-auth-state"><span class="muted small">正在读取状态…</span></span>
+            </div>
+            <div id="envcfg-auth-notice" class="notice warn">正在读取 .env…</div>
+            <div class="envcfg-auth-grid">
+              <div>
+                <b>它是什么 / 作用</b>
+                <p>平台唯一的一把<b>共享密钥</b>（不是账号体系）。启动时读入 <code>config.adminToken</code>，非空时由 <code>mini.js</code> 在 <code>/api/*</code> 入口统一校验，除 <code>/api/health</code> 外所有接口缺令牌一律 <b>401</b>；静态页面文件本身不鉴权。</p>
+                <ul>
+                  <li>普通请求：<code>Authorization: Bearer &lt;ADMIN_TOKEN&gt;</code></li>
+                  <li>SSE 终端 / 下载 / 上传链接：<code>?token=&lt;ADMIN_TOKEN&gt;</code></li>
+                </ul>
+              </div>
+              <div>
+                <b>留空（未配置）的影响</b>
+                <ul>
+                  <li><b>所有 API 完全不鉴权</b>：任何能访问 9000 端口的人都能读配置与连接串、浏览 / 编辑服务器文件、打开 Web 终端、增删容器、触发部署，等同拿到平台管理员权限。</li>
+                  <li>兜底降级：<code>/api/servers/:id/exec</code> 只允许只读白名单命令，写命令返回 <b>403</b>。</li>
+                  <li>只适合可信本机，或已用防火墙限制 9000 端口的内网。</li>
+                </ul>
+              </div>
+            </div>
+            <div class="envcfg-auth-steps">
+              <b>启用步骤</b>
+              <ol>
+                <li>生成强随机值（可用下方按钮），填入表格中 <code>ADMIN_TOKEN</code> 的「新值」列，点「保存并应用」（自动备份 .env、权限 600）。</li>
+                <li><b>完全重启平台</b>：本机重启 exe；容器部署重跑 <code>remote.js deploy</code>。<code>devplatform.exe reload</code> 只重启业务进程，不会重新读取 .env。</li>
+                <li>每台要访问控制台的浏览器按 F12 执行一次 <code>localStorage.setItem('dp_token', '&lt;同一个令牌&gt;')</code> 后刷新；curl / 脚本按上面的 Bearer / <code>?token=</code> 带令牌。</li>
+                <li>更换令牌后旧浏览器会持续 401，需要重新写入 <code>dp_token</code>。</li>
+              </ol>
+              <div class="row gap wrap" style="align-items:center">
+                <button class="btn btn-sm" type="button" id="envcfg-gen-token">生成随机令牌并填入</button>
+                <span class="muted small">只在表单里生成并填入，不会自动写 .env；保存前请复制该值备用。</span>
+              </div>
+              <div class="muted small" style="margin-top:8px">
+                局限与注意：单一共享令牌，没有多用户 / 过期 / 权限分级 / 操作审计；明文存于 .env（600）与浏览器 localStorage；<code>?token=</code> 会进入 URL 与访问日志，公网请配 HTTPS。它与 Gitea / OpenList / code-server 各自的登录密码互不相干。完整说明见 <code>.env.example</code> 与 README §5 / §40。
+              </div>
+            </div>
+          </div>
+
           <div class="card" style="margin-bottom:14px">
             <div class="card-head">
               <h2>.env 配置文件</h2>
@@ -1395,6 +1438,6 @@
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261111f"></script>
+  <script src="/app.js?v=20261112a"></script>
 </body>
 </html>

@@ -58,7 +58,15 @@ const SPECS = [
   { key: 'OPENLIST_PASSWORD', group: 'service', label: 'OpenList 管理员密码', sensitive: true, restart: true, example: '', kind: 'text', desc: '自动登录换取 token 时使用；也可在「存储 / 文件 → 连接管理」里改，无需改 .env。' },
   { key: 'CODE_SERVER_URL', group: 'service', label: '在线 IDE 地址', sensitive: false, restart: true, example: 'http://10.0.0.246:8080', kind: 'url', desc: 'code-server 对外地址。' },
   { key: 'CODE_SERVER_PASSWORD', group: 'service', label: '在线 IDE 登录密码', sensitive: true, restart: true, example: 'devplatform', kind: 'text', desc: 'code-server 登录页提示的「Password was set from $PASSWORD」就是这一项；容器部署由 .env 注入 code-server 的 PASSWORD。改完需重启 code-server，平台进程也要重启才能刷新此处显示。' },
-  { key: 'ADMIN_TOKEN', group: 'platform', label: '控制台鉴权令牌', sensitive: true, restart: true, example: '', kind: 'text', desc: '留空不做鉴权（仅限本机）。设置后浏览器需执行 localStorage.setItem("dp_token", "<同一 token>")。' },
+  { key: 'ADMIN_TOKEN', group: 'platform', label: '控制台鉴权令牌', sensitive: true, restart: true, example: '', kind: 'text',
+    desc: '留空＝所有 /api/* 无鉴权（仅可信本机 / 内网；exec 降级为只读白名单）。设置后除 /api/health 外全部要求 Bearer 或 ?token=，需完全重启平台并在浏览器写入 dp_token。详见行内「详细说明」。',
+    detail: [
+      '【作用】平台启动时读入 config.adminToken，由 mini.js 在 /api/* 入口统一校验：除 /api/health 外的所有接口都必须带 Authorization: Bearer <令牌> 或 ?token=<令牌>（SSE 终端、下载 / 上传链接用后者），否则返回 401。静态页面文件本身不鉴权。',
+      '【留空的影响】所有 API 完全不鉴权：任何能访问 9000 端口的人都能读取配置与连接串、浏览和编辑服务器文件、打开 Web 终端、增删容器、触发部署，等同拿到平台管理员权限。作为兜底，/api/servers/:id/exec 只允许只读白名单命令，写命令返回 403。仅适用于可信本机，或已用防火墙限制 9000 端口的内网。',
+      '【启用步骤】① 生成强随机值：node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"；② 填入本行或点页面上的「生成随机令牌」；③ 完全重启平台进程 / 容器（容器部署重跑 remote.js deploy；devplatform.exe reload 只重启业务进程，不重读 .env）；④ 每台浏览器按 F12 执行 localStorage.setItem(\'dp_token\', \'<同一个令牌>\') 后刷新；⑤ curl / 脚本按 Bearer 或 ?token= 带令牌。',
+      '【注意】更换令牌后旧浏览器会持续 401，需重新写入 dp_token；令牌明文保存在 .env（600）与浏览器 localStorage，不要提交 Git；?token= 会出现在 URL 里，可能被代理 / 访问日志记录，公网务必配 HTTPS。',
+      '【局限】这是单一共享密钥，不是账号体系：没有多用户、过期时间、权限分级与操作审计。需要这些能力请在平台前面加反向代理 / SSO；它与 Gitea、OpenList、code-server 各自的登录密码互不相干。',
+    ] },
   { key: 'HOST_WORKSPACE_DIR', group: 'git', label: '工作区宿主机路径', sensitive: false, restart: true, example: '/data/platform/workspace', kind: 'text', desc: '平台容器内 /workspace 在宿主机上的真实路径；必须与 docker run 的 -v 一致，否则挂载为空目录、SSH 宿主机克隆写不回。', problems: ['GIT_BIN_MISSING'] },
   { key: 'GIT_BIN', group: 'git', label: 'git 可执行文件路径', sensitive: false, restart: true, example: '/usr/bin/git', kind: 'text', desc: '容器镜像或单文件 exe 找不到 git 时可写死路径；控制台「Git 运行时」的设置优先级更高且无需重启。', problems: ['GIT_BIN_MISSING'] },
   { key: 'DP_GIT_FALLBACK_SERVER_ID', group: 'git', label: '克隆兜底服务器 ID', sensitive: false, restart: true, example: '', kind: 'text', desc: '容器内无 Git 时借哪台已登记 SSH 宿主机执行 clone；留空自动挑选。' },
@@ -163,6 +171,14 @@ function adviceFor(problem, ctx = {}) {
   const host = String(ctx.host || '<宿主机内网 IP>');
   const domain = String(ctx.domain || '<证书异常的域名>');
   const table = {
+    AUTH_DISABLED: {
+      id: 'auth', title: '当前未启用控制台鉴权',
+      reason: '.env 里 ADMIN_TOKEN 为空：所有 /api/* 请求都不校验身份，任何能访问 9000 端口的人都能读写配置、连接串、服务器文件与容器；/api/servers/:id/exec 因此也被降级为只读白名单命令。仅建议在可信本机或已限制端口的内网环境保持此状态。',
+      keys: ['ADMIN_TOKEN'],
+      snippet: `# 生成强随机值：node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"\n# 写入后必须完全重启平台，并在每台浏览器执行：\n# localStorage.setItem('dp_token', '<同一个令牌>')\n# ADMIN_TOKEN= 请改为「鉴权说明」卡片里生成的随机值`,
+      note: '建议点「生成随机令牌」按钮自动填入 32 字节随机值；保存并完全重启后，记得把同一个值写进浏览器 localStorage 的 dp_token，否则页面会一直 401。',
+      action: 'gen-token',
+    },
     TLS_CERT_INVALID: {
       id: 'tls', title: '外部服务证书过期 / 自签名',
       reason: '平台默认严格校验证书，服务端证书不受信任时 REST API 与 git clone 都会失败。',
@@ -202,8 +218,11 @@ function adviceFor(problem, ctx = {}) {
   return table[problem] || null;
 }
 
-function allAdvice(ctx) {
-  return ['TLS_CERT_INVALID', 'PORT_UNREACHABLE', 'IMAGE_DENIED', 'GIT_BIN_MISSING', 'PROXY_TARGET_UNREACHABLE']
+function allAdvice(ctx = {}) {
+  // 未启用鉴权是部署层面的安全配置，不是故障，但比故障更值得在「配置建议」里置顶提示。
+  const problems = ['TLS_CERT_INVALID', 'PORT_UNREACHABLE', 'IMAGE_DENIED', 'GIT_BIN_MISSING', 'PROXY_TARGET_UNREACHABLE'];
+  if (!config.adminToken) problems.unshift('AUTH_DISABLED');
+  return problems
     .map((p) => {
       const a = adviceFor(p, ctx);
       return a ? { ...a, problem: p } : null;
@@ -247,6 +266,11 @@ function read() {
     groups: GROUPS,
     items,
     advice: allAdvice(),
+    security: {
+      authEnabled: Boolean(config.adminToken),
+      // 只暴露布尔状态，绝不回传令牌本身（items 里的值同样一律脱敏）。
+      healthExcluded: true,
+    },
     runtime: {
       tlsInsecure: config.tlsInsecure,
       tlsInsecureHosts: config.tlsInsecureHosts,
@@ -270,6 +294,10 @@ function validateValue(key, value) {
   if (/[\r\n\0]/.test(v)) throw new HttpError(400, `${key} 的值不能包含换行或控制字符`);
   if (v.length > 2048) throw new HttpError(400, `${key} 的值过长（上限 2048 字符）`);
   v = v.trim();
+  // 防止把说明文字 / 占位符当成令牌写进 .env：那种值既不可预测也进不了 Bearer 头。
+  if (key === 'ADMIN_TOKEN' && v && (/[<>]/.test(v) || /\s/.test(v) || /CHANGE_ME|占位|请改为/i.test(v))) {
+    throw new HttpError(400, 'ADMIN_TOKEN 不能含空格、尖括号或占位文字；请填真实的随机字符串（可在页面点「生成随机令牌」）');
+  }
   if (spec.kind === 'bool' && v && !/^(0|1|true|false|yes|no|on|off)$/i.test(v)) {
     throw new HttpError(400, `${key} 只能填 0 / 1（或 true / false）`);
   }

@@ -3689,18 +3689,61 @@ function openEnvConfig(keys = [], problem = '') {
 let envcfgData = null;
 
 function envcfgAdviceHtml(d) {
-  return (d.advice || []).map((a, i) => `
+  return (d.advice || []).map((a, i) => {
+    // 鉴权建议的片段是说明文字，不该被「填入表单」当成令牌原样写进去；改成一键生成随机值。
+    const actionBtn = a.action === 'gen-token'
+      ? '<button class="btn btn-sm btn-primary" type="button" data-env-gen="1">生成随机令牌</button>'
+      : `<button class="btn btn-sm btn-primary" type="button" data-env-fill="${i}">填入表单</button>`;
+    return `
     <div class="envcfg-advice-card${envcfgProblem === a.problem ? ' envcfg-focus' : ''}" data-env-advice="${esc(a.problem)}">
       <div class="row gap wrap" style="align-items:center">
         <b>${esc(a.title)}</b>
         ${envcfgProblem === a.problem ? badge('来自刚才的诊断', 'red') : ''}
         <button class="btn btn-sm" type="button" data-env-copy="${i}">复制片段</button>
-        <button class="btn btn-sm btn-primary" type="button" data-env-fill="${i}">填入表单</button>
+        ${actionBtn}
       </div>
       <div class="muted small" style="margin-top:4px">${esc(a.reason)}</div>
       <pre class="envcfg-snippet">${esc(a.snippet)}</pre>
       <div class="muted small">↳ ${esc(a.note)}</div>
-    </div>`).join('') || '<div class="empty">暂无建议</div>';
+    </div>`;
+  }).join('') || '<div class="empty">暂无建议</div>';
+}
+
+/** 根据 /api/env-config 的 security 字段，把「当前有没有鉴权」讲清楚。 */
+function renderEnvcfgAuthState(security) {
+  const state = $('#envcfg-auth-state');
+  const notice = $('#envcfg-auth-notice');
+  if (!state || !notice) return;
+  const enabled = security ? Boolean(security.authEnabled) : null;
+  state.innerHTML = enabled === null ? '<span class="muted small">状态未知（请刷新）</span>'
+    : enabled ? badge('已启用鉴权', 'green') : badge('未启用鉴权 · 所有 API 无鉴权', 'red');
+  notice.className = `notice${enabled === false ? ' warn' : ''}`;
+  notice.innerHTML = enabled === false
+    ? '⚠ 当前 <code>ADMIN_TOKEN</code> 为空：任何能访问 9000 端口的人都能调用全部 API（读配置 / 连接串、改服务器文件、开终端、增删容器、触发部署），且 <code>/api/servers/:id/exec</code> 被降级为只读白名单。若这台机器不止你一个人能访问，请按下方步骤启用鉴权。'
+    : enabled === true
+      ? '✔ 已启用鉴权：除 <code>/api/health</code> 外所有 <code>/api/*</code> 都需要 <code>Bearer</code> 或 <code>?token=</code>。若页面一直 401，检查浏览器 <code>localStorage.dp_token</code> 是否与 .env 里的值完全一致；更换令牌后需要每台浏览器重新写入。'
+      : '未能取得鉴权状态，请点「刷新」重试；完整说明见 <code>.env.example</code> 与 README §5 / §40。';
+}
+
+/** 只生成并填入表单，不写 .env；保存后用户还需要把这个值写进 dp_token。 */
+async function generateAdminToken() {
+  const input = document.querySelector('#envcfg-list .envcfg-input[data-env-key="ADMIN_TOKEN"]');
+  if (!input) { toast('配置表还没加载完，请稍后重试', true); return; }
+  let token = '';
+  try {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    token = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch { toast('浏览器不支持安全随机数，请用 node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))" 生成', true); return; }
+  input.value = token;
+  const row = document.querySelector('#view-envcfg .envcfg-row[data-env-key="ADMIN_TOKEN"]');
+  if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  let copied = false;
+  try { await navigator.clipboard.writeText(token); copied = true; } catch { /* http 下可能没有剪贴板权限 */ }
+  if (!copied) { input.focus(); input.select(); }
+  toast(copied
+    ? '已生成 64 位随机令牌并复制到剪贴板；保存并重启后，请把它写入浏览器 dp_token'
+    : '已生成 64 位随机令牌（已选中，请手动复制）；保存并重启后需要写入浏览器 dp_token');
 }
 
 function envcfgFillAdvice(advice, announce = true) {
@@ -3730,6 +3773,7 @@ async function loadEnvConfig() {
   try {
     const d = await api('/env-config');
     envcfgData = d;
+    renderEnvcfgAuthState(d.security);
     const pending = (d.items || []).filter((x) => x.pendingRestart).length;
     if (summary) {
       summary.innerHTML = `<div class="row gap wrap" style="align-items:center">
@@ -3756,6 +3800,7 @@ async function loadEnvConfig() {
         const a = (d.advice || [])[Number(b.dataset.envFill)];
         if (a) envcfgFillAdvice(a);
       }));
+      adviceBox.querySelectorAll('[data-env-gen]').forEach((b) => b.addEventListener('click', () => generateAdminToken()));
     }
     const rows = [];
     for (const g of (d.groups || [])) {
@@ -3764,8 +3809,11 @@ async function loadEnvConfig() {
       rows.push(`<tr class="envcfg-group"><td colspan="5"><b>${esc(g.label)}</b> <span class="muted small">${esc(g.desc)}</span></td></tr>`);
       for (const it of gItems) {
         const focus = envcfgFocus.includes(it.key) ? ' envcfg-focus' : '';
+        const detail = (it.detail && it.detail.length)
+          ? `<details class="envcfg-detail"><summary>详细说明（${it.detail.length} 条）</summary><ul>${it.detail.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></details>`
+          : '';
         rows.push(`<tr class="envcfg-row${focus}" data-env-key="${esc(it.key)}">
-          <td><b>${esc(it.key)}</b><div class="desc muted">${esc(it.label)}</div><div class="desc muted small">${esc(it.desc)}</div></td>
+          <td><b>${esc(it.key)}</b><div class="desc muted">${esc(it.label)}</div><div class="desc muted small">${esc(it.desc)}</div>${detail}</td>
           <td><code class="envcfg-val">${esc(it.display)}</code>${it.masked ? ' <span class="muted small">脱敏</span>' : ''}</td>
           <td><code class="envcfg-val">${esc(it.runtimeValue || '默认')}</code>${it.pendingRestart ? ` ${badge('待重启', 'amber')}` : ''}</td>
           <td><input class="envcfg-input" data-env-key="${esc(it.key)}" placeholder="留空表示不修改" autocomplete="off" spellcheck="false" /></td>
@@ -3782,12 +3830,14 @@ async function loadEnvConfig() {
       envcfgFocus = [];
     }
   } catch (e) {
+    renderEnvcfgAuthState(null);
     if (summary) summary.innerHTML = errorBlock(e.message, e.hint || '');
     if (listBox) listBox.innerHTML = '';
     if (adviceBox) adviceBox.innerHTML = '';
   }
 }
 
+if ($('#envcfg-gen-token')) $('#envcfg-gen-token').addEventListener('click', () => generateAdminToken());
 if ($('#envcfg-reload')) $('#envcfg-reload').addEventListener('click', () => loadEnvConfig());
 if ($('#envcfg-save')) $('#envcfg-save').addEventListener('click', async () => {
   const values = {};

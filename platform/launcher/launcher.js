@@ -51,6 +51,10 @@ const DEFAULT_ENV = [
   '# DP_PROXY_AI=http://127.0.0.1:7890',
   '# DP_PROXY_NO=localhost,127.0.0.1,::1,10.0.0.0/8',
   '# DP_PROXY_GIT_RULES=github.com=http://127.0.0.1:7890;gitlab.internal=direct',
+  '# ADMIN_TOKEN：控制台 / API 访问令牌。留空＝所有 /api/* 无鉴权（仅限可信本机 / 内网，',
+  '#   且 /api/servers/:id/exec 降级为只读白名单）；对局域网 / 公网暴露时必须设置。',
+  "# 启用：填强随机值 → 完全重启平台 → 每台浏览器执行 localStorage.setItem('dp_token', '<同一令牌>')。",
+  '# 详细风险与步骤见 .env.example、README §5 / §40 与控制台「环境配置 → 鉴权说明」。',
   '# ADMIN_TOKEN=',
 ].join('\n') + '\n';
 

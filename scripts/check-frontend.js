@@ -15,6 +15,7 @@ const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
 const css = fs.readFileSync(path.join(PUBLIC, 'style.css'), 'utf8');
 const app = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
 const catalog = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'catalog.js'), 'utf8');
+const envcfg = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'envConfig.js'), 'utf8');
 const errors = [];
 const note = (ok, label, extra = '') => {
   console.log(`${ok ? '✔' : '✖'} ${label}${extra ? ` · ${extra}` : ''}`);
@@ -84,7 +85,7 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
-note(html.includes('?v=20261111f'), '静态资源版本已升到 20261111f');
+note(html.includes('?v=20261112a'), '静态资源版本已升到 20261112a');
 
 // v0.3.10：IDE 登录凭据、总览运行主机卡片、仓库文件 / 终端 / Git 操作。
 note(html.includes('id="ide-cred"') && html.includes('id="ide-cred-reveal"')
@@ -145,6 +146,17 @@ note(app.includes('function openEnvConfig') && app.includes('data-repo-fix="envc
 note(html.includes('DP_TLS_INSECURE_HOSTS') && html.includes('id="envcfg-save"')
   && css.includes('.envcfg-advice-card') && css.includes('.envcfg-focus'),
 'TLS / 扩展地址的 env 提示文案与配置页样式齐全');
+
+// ADMIN_TOKEN 作用 / 影响 / 启用步骤的说明闭环（说明补全，不改版本号）。
+note(html.includes('id="envcfg-auth-card"') && html.includes('id="envcfg-auth-state"')
+  && html.includes('id="envcfg-gen-token"') && html.includes('Authorization: Bearer')
+  && app.includes('renderEnvcfgAuthState') && app.includes('generateAdminToken')
+  && app.includes('envcfg-detail') && css.includes('.envcfg-auth-grid'),
+'环境配置页有 ADMIN_TOKEN 鉴权说明卡片、启用状态、行内详细说明与随机令牌生成入口');
+note(envcfg.includes('AUTH_DISABLED') && envcfg.includes('authEnabled')
+  && envcfg.includes('detail:') && envcfg.includes('ADMIN_TOKEN 不能含空格')
+  && app.includes('renderEnvcfgAuthState(d.security)'),
+'后端 env-config 回传鉴权布尔状态、详细说明与未启用时的置顶建议（不泄露令牌）');
 
 // v0.3.7：Git 源弹窗、运行时检测明细、工作区仓库、扩展体检、表单控件统一排版。
 note(html.includes('id="gitsrc-modal"') && html.includes('id="gitsrc-add"')

@@ -181,7 +181,7 @@ node scripts/verify.js http://<host>:9000
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `PORT` | 9000 | 控制台监听端口 |
-| `ADMIN_TOKEN` | 空 | 对外暴露时**必须设置**；空则不鉴权 |
+| `ADMIN_TOKEN` | 空 | 控制台 / API 唯一访问令牌。**留空＝所有 API 无鉴权**（仅限可信本机 / 内网，且 `exec` 降级为只读白名单）；对局域网 / 公网暴露时必须设置。作用、影响与启用步骤见 §5、§40，`.env.example` 里有逐行注释 |
 | `DATA_DIR` | `platform/data` | 状态文件目录，写入后自动 700 |
 | `WORKSPACE_DIR` | `platform/workspace` | 项目工作区（克隆、构建、IDE 共用） |
 | `GITEA_URL` | `http://localhost:3002` | 本机/源码直跑用 localhost；compose 内自动覆盖为 `http://gitea:3000`；独立容器用宿主机 IP |
@@ -223,6 +223,40 @@ node scripts/verify.js http://<host>:9000
    之后所有请求自动带 `Authorization: Bearer ...`；SSE 终端与下载链接通过 `?token=` 传递同一令牌。
 3. 未设置 `ADMIN_TOKEN` 时接口不鉴权（仅限可信本机/内网），且 `/api/servers/:id/exec` 会强制只允许只读白名单命令。
 4. 静态资源响应带 `cache-control: no-cache`，前端改动部署后刷新页面即可生效，无需强制刷新。
+
+### 5.1 `ADMIN_TOKEN` 的作用
+
+它是平台唯一的一把**共享密钥**，不是账号体系：启动时读入 `config.adminToken`（`core.js`），非空时由 `mini.js` 在 `/api/*` 入口统一校验，除 `/api/health` 外所有接口缺令牌一律返回 **401**。
+
+| 维度 | 说明 |
+|---|---|
+| 保护范围 | 所有 `/api/*`：系统更新 / 回滚、扩展明文连接串、服务器文件与 Web 终端、Docker 容器与镜像、构建部署、AI 运维等；`/api/health` 健康检查例外，静态页面文件本身也不鉴权 |
+| 传递方式 | 普通请求 `Authorization: Bearer <令牌>`；SSE 终端 / 下载 / 上传链接无法带自定义 Header，用 `?token=<令牌>` |
+| 前端链路 | `localStorage.dp_token` → `authHeaders()` 给 `fetch` 加头、`streamToken()` 给 SSE / 下载链接加查询参数；`devplatform.exe reload` 也带同一令牌 |
+| 存放位置 | 明文写在 `.env`（600 权限）与浏览器 localStorage；`/api/env-config` 读取时一律脱敏，只回传「是否启用」布尔值 |
+| 边界 | 与 Gitea / OpenList / code-server 各自的登录密码互不相干；没有多用户、过期时间、权限分级与操作审计，需要这些请前置网关 / SSO |
+
+### 5.2 留空（未配置）的影响
+
+| # | 影响 | 具体表现 |
+|---|---|---|
+| 1 | **所有 API 完全不鉴权** | 任何能访问 9000 端口的人（同网段、端口映射、反向代理）都能读配置与明文连接串、浏览 / 编辑服务器文件、打开 Web 终端、增删容器与镜像、触发构建部署，等同拿到平台管理员权限 |
+| 2 | `exec` 被降级 | `/api/servers/:id/exec` 只允许内置只读白名单命令，写命令返回 **403**（`当前未设置 ADMIN_TOKEN，仅允许只读诊断命令`） |
+| 3 | 没有日志追责 | 因为不校验身份，无法区分是谁调用了敏感接口 |
+| 4 | 适用场景收窄 | 只适合可信本机，或已用防火墙 / 安全组限制 9000 端口的内网；对局域网开放即建议启用 |
+
+> 它是「弱安全兜底」而非漏洞：设计上默认留空是为了本机开箱即用，但一旦平台监听 `0.0.0.0`，就应当视为必须配置。
+
+### 5.3 启用步骤与注意事项
+
+1. 生成强随机值：`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`（或 `openssl rand -hex 32`）。
+2. 写进 `.env` 的 `ADMIN_TOKEN=`，或在控制台「环境配置」页点「生成随机令牌并填入」→「保存并应用」（自动备份 `.env`、权限 600）。
+3. **完全重启平台**：本机重启 `devplatform.exe`，容器部署重跑 `remote.js deploy`。`devplatform.exe reload` 只重启业务进程，不会重新读取 `.env`；`envConfig.write` 也不会热更新 `config.adminToken`。
+4. 每台要访问控制台的浏览器按 F12 执行 `localStorage.setItem('dp_token', '<同一个令牌>')` 后刷新；`curl` 用 `-H 'Authorization: Bearer <令牌>'`，SSE / 下载链接用 `?token=<令牌>`。
+5. 更换令牌后旧浏览器会持续 401，需要重新写入 `dp_token`；令牌不要提交 Git、不要出现在截图里。
+6. `?token=` 会进入 URL，可能被反向代理 / 访问日志记录，公网部署请同时配置 HTTPS；需要更完整的身份体系请前置网关 / SSO。
+
+控制台「环境配置 → ADMIN_TOKEN 鉴权说明」卡片会显示当前**是否已启用**、上述影响与步骤，`ADMIN_TOKEN` 行的「详细说明」可展开同样内容；未启用时「配置建议」会置顶一条提醒。
 
 ---
 
@@ -2456,6 +2490,8 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 
 审计顺带确认远端 `.env` 里 `ADMIN_TOKEN` 为空，意味着当前 **所有 API 无鉴权**（仅建议内网隔离环境使用），并且 `/api/servers/:id/exec` 只能执行只读白名单命令。这属于部署配置，不是代码缺陷；如需启用，在「环境配置」页写 `ADMIN_TOKEN` 并重启，前端 / EventSource / 下载链接需带 `Bearer` 或 `?token=`。**本版未擅自改动该配置。**
 
+> 补充（§40）：v0.3.13 起在 `.env.example`、各安装模板与控制台「环境配置」页补齐了 `ADMIN_TOKEN` 的作用、留空影响与启用步骤说明，并在未启用时于「配置建议」置顶提醒；246 的 `.env` 仍保持原样，是否启用由使用者决定。
+
 静态资源穿越也做了 6 种 payload 验证：`/..%2f.env` 返回 403，其余返回的是 SPA fallback 的 `index.html`，均未读到 `.env` 内容。前端 117 条 `api()` 路径全部有对应后端路由（3 条启发式误报已核实是模板字符串动态拼接）。
 
 ### 39.4 回归实测
@@ -2471,3 +2507,39 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 本机与 246 均为 `0.3.12`；本版未改前端静态资源，缓存版本号仍为 `?v=20261111f`。
 
 **发布**：`main=71f0a0d`，annotated tag `v0.3.12`，CI success，Release 2026-11-12T08:09:59Z 发布，6 个资产齐全（`devplatform.exe` 90,092,032 B、`SHA256SUMS.txt` 445 B），draft / prerelease 均为 false。
+
+---
+
+## 40. `ADMIN_TOKEN` 配置说明补全（2026-11-12）
+
+§39 的全接口审计确认 246 的 `.env` 里 `ADMIN_TOKEN` 为空（所有 API 无鉴权），但原说明只有一句「留空不做鉴权（仅限本机）」，看不出影响面，也没讲启用后前端要做什么配合。本次只补说明与状态展示：**鉴权逻辑未改、版本号保持 `0.3.12`、没有替任何部署写入令牌**；前端静态缓存版本升到 `?v=20261112a`。完整概念见 §5.1–§5.3。
+
+### 40.1 说明写到了哪里
+
+| 位置 | 新增内容 |
+|---|---|
+| `.env.example` | `ADMIN_TOKEN` 上方逐行注释：作用 / 令牌传递方式 / 留空影响 / 5 步启用流程 / 局限与注意 |
+| 各安装模板 | `platform/build.mjs`、`platform/launcher/launcher.js`、`scripts/sync-integrations.js`（2 处）、`windows/install.ps1`（2 处）、`windows/native-services.ps1` 生成的 `.env` 都带同一段简版说明 |
+| `platform/src/envConfig.js` | `desc` 扩写 + 5 条 `detail` 行内详细说明；`read()` 新增 `security.authEnabled`（只回布尔值，不回令牌）；未启用时 `advice` 置顶 `AUTH_DISABLED`；`validateValue` 拒绝把占位符 / 含空格的值写成令牌 |
+| 前端「环境配置」页 | 新增「ADMIN_TOKEN 鉴权说明」卡片（作用 / 留空影响 / 启用步骤 / 局限）、运行时状态徽标、行内「详细说明」折叠区、「生成随机令牌并填入」按钮；鉴权建议卡片把「填入表单」换成「生成随机令牌」，避免把说明文字当成令牌写进 .env |
+| README | §4.1 表格指引、§5.1 作用、§5.2 留空影响、§5.3 启用步骤与注意、§39.3 补充指引 |
+| `scripts/check-frontend.js` | 新增 2 项静态检查（前端卡片链路 / 后端状态与防呆），自检 70 → 72 项 |
+
+### 40.2 行为边界
+
+- 未启用时 API 行为与之前完全一致；启用后仍由 `mini.js` 统一校验 `Bearer` / `?token=`，`/api/health` 例外。
+- 新增的 `security` 只暴露布尔值，`/api/env-config` 里的令牌值仍一律脱敏。
+- `.env` 写入仍需二次确认、自动备份与 600 权限；`envConfig.write()` 不热更新 `config.adminToken`，因此卡片明确写「必须完全重启」，`reload` 不算。
+- 246 的 `.env` 未改动；是否启用鉴权由使用者按 §5.3 自行决定。
+
+### 40.3 验证
+
+| 项目 | 结果 |
+|---|---|
+| `node scripts/check-frontend.js` | **72 项全通过**（含新增 2 项），app.js 顶层与 boot 无异常 |
+| `npm run check` + 5 个改动 JS 的 `node --check` | 全部通过 |
+| `smoke-environment.js` / `smoke-api-status.js` | 29 项 / 52 项全通过 |
+| `envConfig.read()` 结构实测 | `security.authEnabled=false`、`advice` 首项 `AUTH_DISABLED`、`detail` 5 条 |
+| 鉴权行为实测（`mini.js`） | 令牌为空：无 token → **200**；令牌为 `s3cr3t`：无 token → **401**、`Bearer` → **200**、`?token=` → **200**、`/api/health` 不受 401 拦截 |
+
+> 本版只提交源码与文档：未重新构建 `devplatform.exe`、未打 tag、未部署 246。需要发布 / 部署时再执行 `npm run build` 与 `scripts/remote.js deploy`。

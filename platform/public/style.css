@@ -649,6 +649,22 @@ body.dk-compact .card { padding: 14px; }
 #envcfg-list table { table-layout: fixed; }
 #envcfg-list td { word-break: break-word; }
 
+/* ===== ADMIN_TOKEN 鉴权说明卡片与行内详细说明（说明补全，不改版本号） ===== */
+.envcfg-auth-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-top: 12px; }
+.envcfg-auth-grid > div {
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+  background: var(--surface-2); min-width: 0;
+}
+.envcfg-auth-grid p, .envcfg-auth-grid ul, .envcfg-auth-steps ol {
+  color: var(--muted); font-size: 13px; line-height: 1.75; margin: 8px 0 0;
+}
+.envcfg-auth-grid ul, .envcfg-auth-steps ol { padding-left: 20px; }
+.envcfg-auth-steps { margin-top: 12px; }
+.envcfg-auth-steps code, .envcfg-auth-grid code { font-size: 12px; }
+.envcfg-detail { margin-top: 6px; }
+.envcfg-detail summary { cursor: pointer; color: var(--primary); font-size: 12px; }
+.envcfg-detail ul { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 6px 0 0; padding-left: 18px; }
+
 @media (max-width: 1100px) {
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .grid-2, .server-grid, .ext-grid { grid-template-columns: 1fr; }
