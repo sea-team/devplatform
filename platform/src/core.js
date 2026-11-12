@@ -182,21 +182,34 @@ function save() {
 }
 
 function update(mutator) {
-  const before = new Set();
+  // 记录更新前的归属快照：编辑型 handler 常用「构造新对象整体替换」，
+  // 如果新对象漏带 ownerId / collaborators，这里能恢复，避免资源变成无人所有、
+  // 普通用户编辑后反而看不到自己的数据（v0.4.1）。
+  const before = new Map();
   for (const key of OWNED_COLLECTIONS) {
-    for (const item of (state()[key] || [])) if (item && item.id) before.add(`${key}:${item.id}`);
+    for (const item of (state()[key] || [])) {
+      if (!item || !item.id) continue;
+      before.set(`${key}:${item.id}`, {
+        ownerId: item.ownerId || '',
+        collaborators: Array.isArray(item.collaborators) ? item.collaborators : null,
+      });
+    }
   }
   const result = mutator(state());
-  // 只给本次新增的资源自动归属当前账号，避免把历史遗留数据误判成当前用户所有。
+  // 新增资源归当前账号；已有资源只恢复被误删的归属，绝不改成当前用户。
   const user = currentUser();
-  if (user && user.id && user.id !== '__legacy__' && user.id !== '__cli__') {
-    for (const key of OWNED_COLLECTIONS) {
-      for (const item of (_state[key] || [])) {
-        if (!item || typeof item !== 'object' || !item.id) continue;
-        if (before.has(`${key}:${item.id}`)) continue;
-        if (!item.ownerId) item.ownerId = user.id;
-        if (!Array.isArray(item.collaborators)) item.collaborators = [];
+  const canOwn = Boolean(user && user.id && user.id !== '__legacy__' && user.id !== '__cli__');
+  for (const key of OWNED_COLLECTIONS) {
+    for (const item of (_state[key] || [])) {
+      if (!item || typeof item !== 'object' || !item.id) continue;
+      const prev = before.get(`${key}:${item.id}`);
+      if (prev) {
+        if (!item.ownerId && prev.ownerId) item.ownerId = prev.ownerId;
+        if (!Array.isArray(item.collaborators) && prev.collaborators) item.collaborators = prev.collaborators;
+      } else if (canOwn && !item.ownerId) {
+        item.ownerId = user.id;
       }
+      if (!Array.isArray(item.collaborators)) item.collaborators = [];
     }
   }
   save();

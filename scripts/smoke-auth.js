@@ -178,13 +178,41 @@ async function main() {
   const logout = await call('/api/auth/logout', { method: 'POST', cookie: cookieOf(bobAgain.setCookie) });
   check(logout.status === 200, '登出接口可用');
 
+  // v0.4.1 回归：编辑型 handler 用新对象整体替换，不得丢掉 ownerId / collaborators。
+  const afterWriteEdit = await call('/api/servers', { cookie: alice });
+  check((afterWriteEdit.json.data.items || []).some((s) => s.id === aId),
+    'write 协作者编辑后仍可见对应资源（归属与协作者未被清空）');
+  const ownerEdit = await call('/api/servers', { method: 'POST', cookie: alice,
+    body: { ...mk('alice-self-edit'), id: bId } });
+  check(ownerEdit.status === 200, 'owner 可编辑自己的资源');
+  const afterOwnerEdit = await call('/api/servers', { cookie: alice });
+  check((afterOwnerEdit.json.data.items || []).some((s) => s.id === bId),
+    'owner 编辑后仍可见自己的资源（ownerId 未丢失）');
+
+  const disk = JSON.parse(fs.readFileSync(path.join(TMP, 'state.json'), 'utf8'));
+  const aDisk = disk.servers.find((s) => s.id === aId);
+  const bDisk = disk.servers.find((s) => s.id === bId);
+  check(aDisk && aDisk.ownerId && (aDisk.collaborators || []).length === 1,
+    '落盘数据：被编辑资源仍保留 ownerId 与协作者');
+  check(bDisk && bDisk.ownerId === u1.json.data.id,
+    '落盘数据：owner 编辑后归属仍是原账号');
+
   child.kill();
   await new Promise((r) => setTimeout(r, 250));
+
+  // 启动时自动补齐历史 / 部署脚本留下的无归属资源。
+  const beforeRepair = JSON.parse(fs.readFileSync(path.join(TMP, 'state.json'), 'utf8'));
+  const orphan = beforeRepair.servers.find((x) => x.id === bId);
+  delete orphan.ownerId;
+  fs.writeFileSync(path.join(TMP, 'state.json'), JSON.stringify(beforeRepair, null, 2));
 
   // 回退开关：DP_AUTH_MODE=off 时完全不校验，用于应急排障。
   boot({ ADMIN_TOKEN: '', DP_AUTH_MODE: 'off' });
   await waitReady();
   check((await call('/api/servers')).status === 200, 'DP_AUTH_MODE=off 应急回退可免登录');
+  const repaired = JSON.parse(fs.readFileSync(path.join(TMP, 'state.json'), 'utf8'));
+  check(Boolean((repaired.servers.find((x) => x.id === bId) || {}).ownerId),
+    '启动时自动把无归属的历史资源补回管理员');
   child.kill();
 
   console.log(`\n账号体系冒烟：${pass} 项通过，${failures.length} 项失败`);

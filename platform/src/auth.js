@@ -87,6 +87,18 @@ function initialize() {
   if (!Array.isArray(s.users)) { s.users = []; changed = true; }
   if (!Array.isArray(s.sessions)) { s.sessions = []; changed = true; }
   if (s.users.length) {
+    // v0.4.1：兼容旧版 / 部署脚本「整体替换对象」留下的无归属资源，启动时归到管理员，
+    // 避免普通用户与协作者看不到这些历史数据；已有合法归属一律不动。
+    const admin = activeAdmins()[0];
+    if (admin) {
+      for (const key of permissions.COLLECTIONS) {
+        for (const item of (s[key] || [])) {
+          if (!item || typeof item !== 'object') continue;
+          if (item.id && !item.ownerId) { item.ownerId = admin.id; changed = true; }
+          if (!Array.isArray(item.collaborators)) { item.collaborators = []; changed = true; }
+        }
+      }
+    }
     if (changed) save();
     return null;
   }

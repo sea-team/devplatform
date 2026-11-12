@@ -791,7 +791,8 @@ app.post('/api/servers', wrap(async (req, res) => {
   }
   const previous = req.body.id ? state().servers.find((s) => s.id === req.body.id) : null;
   const keepSecret = (value, saved) => (String(value || '').includes('******') ? (saved || '') : (value || ''));
-  const server = {
+  // 编辑时显式保留归属与协作者；core.update 另有快照兜底，双重防止「保存后丢失资源」。
+  const server = permissions.assignOwner({
     id: req.body.id || uid('srv'),
     name: String(req.body.name), host: String(req.body.host),
     port: Number(req.body.port || 22), username: String(req.body.username),
@@ -803,7 +804,7 @@ app.post('/api/servers', wrap(async (req, res) => {
     // 单个服务器代理：留空继承「服务器代理 → 全局代理」，填 direct 明确直连
     proxy: proxy.validateUrl(keepSecret(req.body.proxy, previous && previous.proxy)),
     createdAt: (previous && previous.createdAt) || new Date().toISOString(),
-  };
+  }, req.user, previous);
   update((s) => {
     const index = s.servers.findIndex((x) => x.id === server.id);
     if (index >= 0) s.servers[index] = server; else s.servers.push(server);

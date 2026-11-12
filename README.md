@@ -2640,3 +2640,44 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 | `scripts/remote.js deploy` | 从远端 `.env` 静默读取 `ADMIN_TOKEN`（不打印令牌值），环境体检 curl 与服务器登记 fetch 自动带令牌；未配置时给出明确提示 |
 
 > v0.4.0 的构建、Release 与 246 部署实测记录见 §42。
+
+---
+
+## 42. v0.4.0 / v0.4.1 发布与 246 部署（2026-11-12）
+
+### 42.1 v0.4.0 发布
+
+| 项 | 结果 |
+|---|---|
+| 提交 | `c9f8348` 账号体系、`b171a9c` 发版适配；annotated tag `v0.4.0` → `b171a9c` |
+| CI | run `43205035776` success（2026-11-12T11:01:44Z） |
+| Release | 2026-11-12T11:01:20Z，draft / prerelease 均 false，6 资产齐全：`devplatform-windows.zip` 145,024,327 B、`devplatform-services.zip` 108,445,228 B、`devplatform-windows-lite.zip` 36,578,881 B、`devplatform-dist.zip` 36,443,739 B、`devplatform.exe` 90,138,112 B、`SHA256SUMS.txt` 445 B |
+| 本机构建 | `npm run build` 产出 `bundle.cjs` 2,492 KB、`devplatform.exe` 90,176,512 B；`release.json` v0.4.0 且 bundle SHA256 与文件一致 |
+
+### 42.2 246 部署与强制登录切换
+
+| 项 | 结果 |
+|---|---|
+| 部署前 | `10.0.0.246:9000` = 0.3.12，容器 `node:20-alpine`；`.env` 无 `ADMIN_TOKEN`、无 `DP_AUTH_MODE` |
+| 数据安全 | 备份 `data/state.json` → `data/state.json.bak-pre-v0.4.0`（27,708 B，sha256 一致，600 权限） |
+| 配置 | 以**追加**方式写入 `DP_AUTH_MODE=required` 与 48 字符强随机 `ADMIN_TOKEN`（不替换 inode，容器内单文件挂载仍有效）；本地留存 `data/deploy-admin-token-246.txt`（600，已 gitignore），远端与本地令牌 sha256 校验一致 |
+| 部署 | `remote.js deploy` 自动选 Docker 通道，重新 `docker run` 注入新 `.env`；健康检查 `0.4.0 / normal`；服务器登记「更新」成功、环境体检 8 正常 / 0 提醒 / 0 异常 |
+| 登录 | 未登录 `/api/servers` → **401**；`Bearer` 与 `?token=` → **200**；`/api/auth/status` 回 `mode=required, authenticated=false, tokenChannel=true`；静态页含 `id="login-view"`，`app.js?v=20261112b` 含 `showLogin` |
+| 初始管理员 | 自动创建 `admin`（`mustChangePassword=true`），初始密码写在 `data/initial-admin.txt`（600），首次登录强制改密 |
+| 迁移 | `users` 1 / `sessions` 0；历史 `builds` 18、`extensions` 2、`deploys` 1、`gitSources` 1、`openlistConnections` 1 均补 `ownerId`；`servers` 2 条中 1 条被部署脚本更新后清空（见 §42.3） |
+
+> 部署包排除 `.env` / `state.json` / `data/` / `dist/`，升级不会覆盖凭据与历史数据。强制登录后原有浏览器会立刻 401，需从初始密码登录并改密；脚本用 `ADMIN_TOKEN`（`--token` / `DP_TOKEN`）。
+
+### 42.3 v0.4.1 补丁：编辑资源不再丢失归属
+
+**发现**：v0.4.0 部署后核对 246 的 `state.json`，`servers` 有一条 `ownerId=null`。原因是 `remote.js deploy` 的 `bootstrapRemote` 用 `POST /api/servers` 带 id 更新服务器登记，而该 handler 构造新对象整体替换，漏带 `ownerId` / `collaborators`；`permissions.assignOwner()` 虽已定义却没有任何 handler 调用。由于 `visible()` 只放行管理员 / owner / 协作者，普通用户或协作者**编辑后会看不到自己的数据**。
+
+| 层 | 修复 |
+|---|---|
+| 接口 | `POST /api/servers` 用 `permissions.assignOwner(payload, req.user, previous)` 显式保留归属与协作者 |
+| 框架 | `core.update()` 在 mutator 前记录归属快照；已存在 id 的项若被替换后丢字段，从快照恢复（绝不改成当前用户），新增项仍归当前账号，覆盖其余同类编辑接口 |
+| 迁移 | `auth.initialize()` 在已有账号时，把无 `ownerId` 的历史资源补回第一个管理员，并补齐 `collaborators: []` |
+
+**回归**：`smoke-auth.js` 33 → **39 项**（新增：write 协作者编辑后仍可见、owner 编辑后仍可见、落盘归属与协作者保留、启动时补齐孤立资源）；`npm run check`、前端自检 75 项、四套旧冒烟 52/29/31/60、`api-sweep --full` 与 `api-audit` 296 次请求全过。
+
+v0.4.1 重新部署 246 后，重启时的迁移逻辑会自动修复那条孤立记录。
