@@ -181,7 +181,8 @@ node scripts/verify.js http://<host>:9000
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `PORT` | 9000 | 控制台监听端口 |
-| `ADMIN_TOKEN` | 空 | 控制台 / API 唯一访问令牌。**留空＝所有 API 无鉴权**（仅限可信本机 / 内网，且 `exec` 降级为只读白名单）；对局域网 / 公网暴露时必须设置。作用、影响与启用步骤见 §5、§40，`.env.example` 里有逐行注释 |
+| `ADMIN_TOKEN` | 空 | **v0.4.0 起为机器 / 应急管理员通道**：`Bearer` / `?token=` 等价管理员，供脚本与排障使用；人类用户走账号密码登录。留空不等于无鉴权（默认 `DP_AUTH_MODE=required`，未登录仍 401），只会导致巡检脚本与在线排障不可用。作用、影响与启用步骤见 §5、§40、§41，`.env.example` 里有逐行注释 |
+| `DP_AUTH_MODE` | `required` | 登录模式：`required` 强制登录（默认）/ `optional` 灰度放行 / `off` 应急回退为完全不鉴权。见 §41.2 |
 | `DATA_DIR` | `platform/data` | 状态文件目录，写入后自动 700 |
 | `WORKSPACE_DIR` | `platform/workspace` | 项目工作区（克隆、构建、IDE 共用） |
 | `GITEA_URL` | `http://localhost:3002` | 本机/源码直跑用 localhost；compose 内自动覆盖为 `http://gitea:3000`；独立容器用宿主机 IP |
@@ -215,46 +216,56 @@ node scripts/verify.js http://<host>:9000
 
 ## 5. 访问与鉴权
 
-1. 浏览器打开 `http://<host>:9000`，左侧导航进入各模块，点击即在标签栏打开一个标签。
-2. 若设置了 `ADMIN_TOKEN`，先在浏览器控制台执行一次：
-   ```js
-   localStorage.setItem('dp_token', '<与 ADMIN_TOKEN 相同的值>')
-   ```
-   之后所有请求自动带 `Authorization: Bearer ...`；SSE 终端与下载链接通过 `?token=` 传递同一令牌。
-3. 未设置 `ADMIN_TOKEN` 时接口不鉴权（仅限可信本机/内网），且 `/api/servers/:id/exec` 会强制只允许只读白名单命令。
-4. 静态资源响应带 `cache-control: no-cache`，前端改动部署后刷新页面即可生效，无需强制刷新。
+> **v0.4.0 变更**：平台已有账号体系，默认 `DP_AUTH_MODE=required`。人类用户用账号密码登录（HttpOnly Cookie 会话），`ADMIN_TOKEN` 退居为「机器 / 应急管理员通道」。下文 §5.1–§5.3 中「令牌是唯一门禁、留空＝无鉴权」是 v0.3.x 的语义，v0.4.0 起仅在显式 `DP_AUTH_MODE=off` 时成立。完整账号与权限规则见 §41。
+
+1. 浏览器打开 `http://<host>:9000`，未登录显示全屏登录遮罩；用账号密码登录后在标签栏打开各模块。
+2. 首次部署无账号时自动创建 `admin`，随机初始密码写在 `data/initial-admin.txt`（600）并在启动日志打印一次，**首次登录强制改密**；忘记密码用 `scripts/reset-admin-password.js`（§41.4）。
+3. 脚本 / 自动化用 `ADMIN_TOKEN`：`--token` / `DP_TOKEN` 环境变量，或 `curl -H 'Authorization: Bearer <令牌>'`；SSE 终端与下载链接用 `?token=<令牌>`。
+4. `ADMIN_TOKEN` 留空**不影响登录保护**，但巡检脚本、部署收尾体检与在线排障会 401；只有 `DP_AUTH_MODE=off` 才完全不鉴权（应急回退，排障后立即改回）。
+5. 若确需旧式免登录访问：浏览器控制台执行 `localStorage.setItem('dp_token', '<与 ADMIN_TOKEN 相同的值>')`，之后请求自动带令牌（令牌等价管理员，谨慎使用）。
+6. 静态资源响应带 `cache-control: no-cache`，前端改动部署后刷新页面即可生效，无需强制刷新。
 
 ### 5.1 `ADMIN_TOKEN` 的作用
 
-它是平台唯一的一把**共享密钥**，不是账号体系：启动时读入 `config.adminToken`（`core.js`），非空时由 `mini.js` 在 `/api/*` 入口统一校验，除 `/api/health` 外所有接口缺令牌一律返回 **401**。
+v0.4.0 起它是账号体系之外的**共享机器密钥**，不再是唯一门禁：启动时读入 `config.adminToken`（`core.js`），`mini.js` / `auth.js` 在 `/api/*` 入口统一解析身份，令牌、会话 Cookie、本机 CLI 三条通道任一命中即可，否则按 `DP_AUTH_MODE` 放行或返回 **401**。
 
 | 维度 | 说明 |
 |---|---|
-| 保护范围 | 所有 `/api/*`：系统更新 / 回滚、扩展明文连接串、服务器文件与 Web 终端、Docker 容器与镜像、构建部署、AI 运维等；`/api/health` 健康检查例外，静态页面文件本身也不鉴权 |
-| 传递方式 | 普通请求 `Authorization: Bearer <令牌>`；SSE 终端 / 下载 / 上传链接无法带自定义 Header，用 `?token=<令牌>` |
+| 身份等价 | `Bearer` / `?token=` 命中即等价「站点管理员」，能操作全部资源；创建的数据归到真实 `admin` 名下，不会留下虚拟账号 `ownerId` |
+| 保护范围 | 所有 `/api/*`：系统更新 / 回滚、扩展明文连接串、服务器文件与 Web 终端、Docker 容器与镜像、构建部署、AI 运维等；`/api/health`、`/api/auth/login`、`/api/auth/status` 例外，静态页面文件本身不鉴权 |
+| 传递方式 | 普通请求 `Authorization: Bearer <令牌>`；SSE 终端 / 下载 / 上传链接无法带自定义 Header，用 `?token=<令牌>`；巡检脚本用 `--token` 或 `DP_TOKEN` |
 | 前端链路 | `localStorage.dp_token` → `authHeaders()` 给 `fetch` 加头、`streamToken()` 给 SSE / 下载链接加查询参数；`devplatform.exe reload` 也带同一令牌 |
 | 存放位置 | 明文写在 `.env`（600 权限）与浏览器 localStorage；`/api/env-config` 读取时一律脱敏，只回传「是否启用」布尔值 |
-| 边界 | 与 Gitea / OpenList / code-server 各自的登录密码互不相干；没有多用户、过期时间、权限分级与操作审计，需要这些请前置网关 / SSO |
+| 边界 | 与 Gitea / OpenList / code-server 各自的登录密码互不相干；多用户、会话过期、权限分级与数据归属由账号体系提供（§41），令牌本身没有这些能力 |
 
 ### 5.2 留空（未配置）的影响
+
+**v0.4.0（`DP_AUTH_MODE=required`，默认）**：留空只是「没有机器通道」，安全性不降低，但可运维性变差。
+
+| # | 影响 | 具体表现 |
+|---|---|---|
+| 1 | 脚本无法调用接口 | `api-sweep.js` / `api-audit.js` / `verify.js` / `reset-admin-password.js --api` 全部 401；`remote.js deploy` 收尾的环境体检与服务器登记会被跳过 |
+| 2 | 无法在线排障 | 忘记管理员密码时只能停机用 `--offline` 改 `state.json` |
+| 3 | 仍受登录保护 | 未登录且无令牌的 `/api/*` 一律 401；`/api/servers/:id/exec` 写命令仍按「未授权写操作」拒绝 |
+| 4 | 建议 | 生产 / 多机部署一律配置；只有显式 `DP_AUTH_MODE=off` 才会退化成下表 v0.3.x 的无鉴权状态 |
+
+**v0.3.x 及 `DP_AUTH_MODE=off`（历史语义，仅作对照）**：
 
 | # | 影响 | 具体表现 |
 |---|---|---|
 | 1 | **所有 API 完全不鉴权** | 任何能访问 9000 端口的人（同网段、端口映射、反向代理）都能读配置与明文连接串、浏览 / 编辑服务器文件、打开 Web 终端、增删容器与镜像、触发构建部署，等同拿到平台管理员权限 |
 | 2 | `exec` 被降级 | `/api/servers/:id/exec` 只允许内置只读白名单命令，写命令返回 **403**（`当前未设置 ADMIN_TOKEN，仅允许只读诊断命令`） |
 | 3 | 没有日志追责 | 因为不校验身份，无法区分是谁调用了敏感接口 |
-| 4 | 适用场景收窄 | 只适合可信本机，或已用防火墙 / 安全组限制 9000 端口的内网；对局域网开放即建议启用 |
-
-> 它是「弱安全兜底」而非漏洞：设计上默认留空是为了本机开箱即用，但一旦平台监听 `0.0.0.0`，就应当视为必须配置。
+| 4 | 适用场景收窄 | 只适合可信本机，或已用防火墙 / 安全组限制 9000 端口的内网 |
 
 ### 5.3 启用步骤与注意事项
 
 1. 生成强随机值：`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`（或 `openssl rand -hex 32`）。
 2. 写进 `.env` 的 `ADMIN_TOKEN=`，或在控制台「环境配置」页点「生成随机令牌并填入」→「保存并应用」（自动备份 `.env`、权限 600）。
 3. **完全重启平台**：本机重启 `devplatform.exe`，容器部署重跑 `remote.js deploy`。`devplatform.exe reload` 只重启业务进程，不会重新读取 `.env`；`envConfig.write` 也不会热更新 `config.adminToken`。
-4. 每台要访问控制台的浏览器按 F12 执行 `localStorage.setItem('dp_token', '<同一个令牌>')` 后刷新；`curl` 用 `-H 'Authorization: Bearer <令牌>'`，SSE / 下载链接用 `?token=<令牌>`。
-5. 更换令牌后旧浏览器会持续 401，需要重新写入 `dp_token`；令牌不要提交 Git、不要出现在截图里。
-6. `?token=` 会进入 URL，可能被反向代理 / 访问日志记录，公网部署请同时配置 HTTPS；需要更完整的身份体系请前置网关 / SSO。
+4. 脚本用 `--token` / `DP_TOKEN`，或 `curl -H 'Authorization: Bearer <令牌>'`；SSE / 下载链接用 `?token=<令牌>`。浏览器登录页**无需令牌**；只有走旧式免登录时才需要写 `dp_token`。
+5. 更换令牌后旧脚本会持续 401；令牌不要提交 Git、不要出现在截图里。
+6. `?token=` 会进入 URL，可能被反向代理 / 访问日志记录，公网部署请同时配置 HTTPS。
 
 控制台「环境配置 → ADMIN_TOKEN 鉴权说明」卡片会显示当前**是否已启用**、上述影响与步骤，`ADMIN_TOKEN` 行的「详细说明」可展开同样内容；未启用时「配置建议」会置顶一条提醒。
 
@@ -2488,6 +2499,8 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 
 ### 39.3 非代码问题：246 未配置 `ADMIN_TOKEN`
 
+> **历史记录（v0.3.12 当时）**：以下「留空＝所有 API 无鉴权」的结论在 v0.4.0 起已失效。账号体系上线后默认强制登录，留空只是没有机器通道；246 的 `.env` 已在 v0.4.0 部署时补上 `ADMIN_TOKEN` 与 `DP_AUTH_MODE=required`，见 §42。
+
 审计顺带确认远端 `.env` 里 `ADMIN_TOKEN` 为空，意味着当前 **所有 API 无鉴权**（仅建议内网隔离环境使用），并且 `/api/servers/:id/exec` 只能执行只读白名单命令。这属于部署配置，不是代码缺陷；如需启用，在「环境配置」页写 `ADMIN_TOKEN` 并重启，前端 / EventSource / 下载链接需带 `Bearer` 或 `?token=`。**本版未擅自改动该配置。**
 
 > 补充（§40）：v0.3.13 起在 `.env.example`、各安装模板与控制台「环境配置」页补齐了 `ADMIN_TOKEN` 的作用、留空影响与启用步骤说明，并在未启用时于「配置建议」置顶提醒；246 的 `.env` 仍保持原样，是否启用由使用者决定。
@@ -2511,6 +2524,8 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 ---
 
 ## 40. `ADMIN_TOKEN` 配置说明补全（2026-11-12）
+
+> **历史记录**：本节描述 v0.3.13 的文档补全与「留空＝无鉴权」语义；v0.4.0 账号体系上线后语义已变，见 §5 顶部的变更说明与 §41。
 
 §39 的全接口审计确认 246 的 `.env` 里 `ADMIN_TOKEN` 为空（所有 API 无鉴权），但原说明只有一句「留空不做鉴权（仅限本机）」，看不出影响面，也没讲启用后前端要做什么配合。本次只补说明与状态展示：**鉴权逻辑未改、版本号保持 `0.3.12`、没有替任何部署写入令牌**；前端静态缓存版本升到 `?v=20261112a`。完整概念见 §5.1–§5.3。
 
@@ -2614,4 +2629,14 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 | `api-audit`（临时实例） | 180 条路由、296 次请求：**0 个 500、0 网络异常、0 问题** |
 | `npm run check` | 含新增 `auth.js` / `permissions.js` / `smoke-auth.js` / `reset-admin-password.js`，全部通过 |
 
-> 本次只提交源码与文档：**`package.json` 版本号仍为 `0.3.12`（发版时统一 bump 到 `0.4.0`）、未重新构建 exe、未打 tag、未部署 246**。发版与部署（尤其 246 会立刻要求登录）需单独确认。
+### 41.7 发版适配
+
+账号体系默认强制登录，原先「无鉴权直连」的自动化链路需要同步改造，否则部署后接口巡检与部署收尾会全部 401：
+
+| 位置 | 适配 |
+|---|---|
+| `scripts/api-sweep.js` / `api-audit.js` | 新增 `--token`，也读 `DP_TOKEN` 环境变量，所有请求带 `Authorization: Bearer` |
+| `scripts/verify.js` | `api()` 带令牌头；上传 / 下载 / SSE 终端等无法带自定义头的链接改用 `?token=` |
+| `scripts/remote.js deploy` | 从远端 `.env` 静默读取 `ADMIN_TOKEN`（不打印令牌值），环境体检 curl 与服务器登记 fetch 自动带令牌；未配置时给出明确提示 |
+
+> v0.4.0 的构建、Release 与 246 部署实测记录见 §42。

@@ -353,8 +353,23 @@ async function startInContainer(server, target, host) {
 
 /* --------------------------------- 部署 ---------------------------------- */
 
-async function bootstrapRemote(host, server) {
+/**
+ * v0.4.0：账号体系默认强制登录，部署收尾的 API 调用要走 ADMIN_TOKEN 机器通道。
+ * 用 quiet 读取，令牌绝不进入部署日志；远端 shell 里也只用变量传递，不落到命令行明文。
+ */
+async function readAdminToken(server, target) {
+  const r = await sshExec(server,
+    `grep -E '^ADMIN_TOKEN=' ${target}/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\\r\\n'`,
+    15000);
+  return String(r.stdout || '').trim();
+}
+
+/** 远端 curl 用的鉴权头：从远端 .env 现场取值，命令字符串里不出现令牌。 */
+const remoteAuthFlag = (target) => `-H "Authorization: Bearer $(grep -E '^ADMIN_TOKEN=' ${target}/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\\r\\n')"`;
+
+async function bootstrapRemote(host, server, token = '') {
   const base = `http://${host}:9000`;
+  const auth = token ? { authorization: `Bearer ${token}` } : {};
   const payload = {
     name: server.name, host: server.host, port: server.port || 22,
     username: server.username, password: server.password || '',
@@ -363,17 +378,17 @@ async function bootstrapRemote(host, server) {
   };
   try {
     // 幂等：重复部署时更新同一条记录，避免产生多条相同服务器。
-    const existing = await fetch(`${base}/api/servers`, { signal: AbortSignal.timeout(10000) }).then((r) => r.json());
+    const existing = await fetch(`${base}/api/servers`, { headers: auth, signal: AbortSignal.timeout(10000) }).then((r) => r.json());
     const same = (existing.data && existing.data.items || []).find((s) => s.host === server.host);
     if (same) payload.id = same.id;
 
     const created = await fetch(`${base}/api/servers`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
+      method: 'POST', headers: { 'content-type': 'application/json', ...auth },
       body: JSON.stringify(payload), signal: AbortSignal.timeout(10000),
     }).then((r) => r.json());
     if (!created.ok) throw new Error(created.error);
     const tested = await fetch(`${base}/api/servers/${created.data.id}/test`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
+      method: 'POST', headers: { 'content-type': 'application/json', ...auth },
       body: '{}', signal: AbortSignal.timeout(25000),
     }).then((r) => r.json());
     console.log(`\n▶ 远端平台已登记服务器（${same ? '更新' : '新增'}），容器内 SSH 回连：${tested.ok && tested.data.online ? '成功' : '失败'}`);
@@ -399,6 +414,12 @@ async function cmdDeploy(host, rawTarget = '/data/platform') {
   await runStrict(server,
     `mkdir -p ${target}/data ${target}/workspace && tar -xzf ${remoteArchive} -C ${target} --strip-components=1 && echo "FILES=$(find ${target} -type f | wc -l)" && ls ${target}`,
     60000, '解压到目标目录');
+
+  // 部署包刻意排除了 .env / state.json，这里读远端已有的 ADMIN_TOKEN 作为机器通道。
+  const adminToken = await readAdminToken(server, target);
+  console.log(adminToken
+    ? '✔ 已读取远端 ADMIN_TOKEN（机器通道），部署收尾 API 调用将带令牌，不打印令牌值'
+    : '⚠ 远端 .env 未配置 ADMIN_TOKEN：强制登录模式下部署收尾的体检 / 服务器登记会被 401 拦截');
 
   // 3) 选择运行时
   const runtime = await run(server,
@@ -426,7 +447,7 @@ async function cmdDeploy(host, rawTarget = '/data/platform') {
     throw new Error('远端健康检查未通过，详见上方容器日志');
   }
 
-  await bootstrapRemote(host, server);
+  await bootstrapRemote(host, server, adminToken);
 
   // v0.3.4：部署收尾立刻跑一次深度体检 + 自动处置，把新环境的能力与所选通道
   // 直接打印在部署日志里；这样「换机器部署」不需要登录控制台再排查一遍。
@@ -434,7 +455,7 @@ async function cmdDeploy(host, rawTarget = '/data/platform') {
     console.log('\n▶ 环境体检与自动处置');
     // 用 quiet 避免把整包 JSON 刷进部署日志，下面只打印人可读的摘要。
     const envRaw = await quiet(server,
-      `curl -s --max-time 90 -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:9000/api/environment/heal`,
+      `curl -s --max-time 90 ${adminToken ? remoteAuthFlag(target) : ''} -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:9000/api/environment/heal`,
       120000);
     const env = JSON.parse((envRaw.stdout || '').trim());
     if (env.ok && env.data) {

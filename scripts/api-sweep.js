@@ -14,7 +14,11 @@
  * 用法：
  *   node scripts/api-sweep.js --base http://10.0.0.246:9000
  *   node scripts/api-sweep.js --base http://127.0.0.1:9000 --full
+ *   node scripts/api-sweep.js --base http://10.0.0.246:9000 --token "$DP_TOKEN" --full
  *   node scripts/api-sweep.js --json            # 机器可读报告
+ *
+ * v0.4.0 起平台默认强制登录：远端巡检需带 ADMIN_TOKEN（--token 或 DP_TOKEN 环境变量），
+ * 令牌等价管理员，不影响未登录 401 的验证（那部分由 scripts/smoke-auth.js 覆盖）。
  *
  * --full 会额外跑「创建临时实体 → 查询 → 修改 → 删除」的 CRUD 循环，
  * 所有临时实体都带 __sweep_ 前缀并在结束时清理。
@@ -30,6 +34,8 @@ const arg = (name, fallback) => {
 };
 // --base 给站点根地址；server.js 里的路由本身已带 /api 前缀，这里不能再补一次。
 const BASE = String(arg('--base', 'http://127.0.0.1:9000')).replace(/\/+$/, '');
+// v0.4.0：账号体系默认强制登录，巡检走 ADMIN_TOKEN 机器通道（--token 或 DP_TOKEN 环境变量）。
+const TOKEN = String(arg('--token', process.env.DP_TOKEN || '')).trim();
 const FULL = argv.includes('--full');
 const AS_JSON = argv.includes('--json');
 // Windows 本机上「构建后端 / 本地 AI 程序」探测会尝试启动 wsl.exe；远端 Linux 不会。
@@ -83,7 +89,7 @@ const SKIP = new Set([
 
 /* ------------------------------ 请求工具 ------------------------------ */
 async function call(method, p, body, timeout = TIMEOUT) {
-  const init = { method, headers: {}, signal: AbortSignal.timeout(timeout) };
+  const init = { method, headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}, signal: AbortSignal.timeout(timeout) };
   if (body !== undefined) {
     init.body = JSON.stringify(body);
     init.headers['content-type'] = 'application/json';

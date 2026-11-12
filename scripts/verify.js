@@ -6,12 +6,18 @@
  * 覆盖：健康检查、集成服务连通性、静态资源、SFTP 文件管理、交互式 SSH 终端、容器化构建。
  */
 const BASE = process.argv[2] || process.env.PLATFORM_URL || 'http://10.0.0.246:9000';
+// v0.4.0：强制登录后端到端回归走 ADMIN_TOKEN 机器通道（DP_TOKEN 环境变量）。
+const TOKEN = String(process.env.DP_TOKEN || '').trim();
+const authHeader = () => (TOKEN ? { authorization: `Bearer ${TOKEN}` } : {});
+// 下载链接 / SSE 终端无法带自定义头，用 ?token= 传同一个 ADMIN_TOKEN。
+const withToken = (url) => (TOKEN ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(TOKEN)}` : url);
 
 async function api(path, options = {}) {
   const init = { ...options };
+  init.headers = { ...authHeader(), ...(init.headers || {}) };
   if (init.body !== undefined && typeof init.body !== 'string' && !Buffer.isBuffer(init.body)) {
     init.body = JSON.stringify(init.body);
-    init.headers = { 'content-type': 'application/json', ...(init.headers || {}) };
+    init.headers = { 'content-type': 'application/json', ...init.headers };
   }
   const response = await fetch(`${BASE}/api${path}`, init);
   const payload = await response.json();
@@ -46,13 +52,13 @@ async function verifyFiles(id) {
   const read = await api(`/servers/${id}/files/content?path=${encodeURIComponent(file)}`);
   line('SFTP 读取文本文件', read.content === 'hello 文件管理 ✓', `${read.size} bytes`);
 
-  const upload = await fetch(`${BASE}/api/servers/${id}/files/upload?path=${encodeURIComponent(dirPath)}&name=raw.bin`, {
+  const upload = await fetch(withToken(`${BASE}/api/servers/${id}/files/upload?path=${encodeURIComponent(dirPath)}&name=raw.bin`), {
     method: 'PUT', headers: { 'content-type': 'application/octet-stream' }, body: Buffer.from([1, 2, 3, 4]),
   }).then((r) => r.json());
   line('SFTP 二进制上传', upload.ok, `${upload.data && upload.data.size} bytes`);
 
   await api(`/servers/${id}/files/rename`, { method: 'POST', body: { path: file, name: 'renamed.txt' } });
-  const download = await fetch(`${BASE}/api/servers/${id}/files/download?path=${encodeURIComponent(`${dirPath}/renamed.txt`)}`);
+  const download = await fetch(withToken(`${BASE}/api/servers/${id}/files/download?path=${encodeURIComponent(`${dirPath}/renamed.txt`)}`));
   line('SFTP 下载', download.status === 200 && (await download.text()) === 'hello 文件管理 ✓');
 
   const list = await api(`/servers/${id}/files?path=${encodeURIComponent(dirPath)}`);
@@ -82,10 +88,10 @@ async function verifyEditorFeatures(id) {
   const putText = (name, body) => api(`/servers/${id}/files/content`, {
     method: 'PUT', body: { path: full(name), ...body },
   });
-  const putRaw = (name, buffer) => fetch(`${BASE}/api/servers/${id}/files/upload?path=${encodeURIComponent(dirPath)}&name=${encodeURIComponent(name)}`, {
+  const putRaw = (name, buffer) => fetch(withToken(`${BASE}/api/servers/${id}/files/upload?path=${encodeURIComponent(dirPath)}&name=${encodeURIComponent(name)}`), {
     method: 'PUT', headers: { 'content-type': 'application/octet-stream' }, body: buffer,
   }).then((r) => r.json());
-  const download = (name) => fetch(`${BASE}/api/servers/${id}/files/download?path=${encodeURIComponent(full(name))}`)
+  const download = (name) => fetch(withToken(`${BASE}/api/servers/${id}/files/download?path=${encodeURIComponent(full(name))}`))
     .then((r) => r.arrayBuffer()).then((b) => Buffer.from(b));
 
   await api(`/servers/${id}/files/mkdir`, { method: 'POST', body: { path: root, name: dir } });
@@ -167,7 +173,7 @@ async function verifyTerminal(id) {
   const timer = setTimeout(() => controller.abort(), 15000);
   let found = false;
   try {
-    const response = await fetch(`${BASE}/api/servers/${id}/terminal/stream?sid=${encodeURIComponent(session.sid)}`, {
+    const response = await fetch(withToken(`${BASE}/api/servers/${id}/terminal/stream?sid=${encodeURIComponent(session.sid)}`), {
       signal: controller.signal,
     });
     const reader = response.body.getReader();

@@ -29,6 +29,8 @@ const arg = (name, fallback) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
 };
 const BASE = String(arg('--base', 'http://127.0.0.1:9000')).replace(/\/+$/, '');
+// v0.4.0：强制登录模式下用 ADMIN_TOKEN 机器通道跑全路由审计。
+const TOKEN = String(arg('--token', process.env.DP_TOKEN || '')).trim();
 const AS_JSON = argv.includes('--json');
 const TIMEOUT = Number(arg('--timeout', '15000'));
 const MISSING = '__audit_missing__';
@@ -88,7 +90,7 @@ function fillParams(p, ids = {}) {
 
 /* ------------------------------ 请求工具 ------------------------------ */
 async function call(method, p, opts = {}) {
-  const headers = { ...(opts.headers || {}) };
+  const headers = { ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}), ...(opts.headers || {}) };
   let body;
   if (opts.rawBody !== undefined) {
     body = opts.rawBody;
