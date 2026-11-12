@@ -2470,4 +2470,4 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 
 本机与 246 均为 `0.3.12`；本版未改前端静态资源，缓存版本号仍为 `?v=20261111f`。
 
-**发布**：见本节末尾补记。
+**发布**：`main=71f0a0d`，annotated tag `v0.3.12`，CI success，Release 2026-11-12T08:09:59Z 发布，6 个资产齐全（`devplatform.exe` 90,092,032 B、`SHA256SUMS.txt` 445 B），draft / prerelease 均为 false。
