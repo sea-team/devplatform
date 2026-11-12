@@ -695,8 +695,23 @@ body.dk-compact .card { padding: 14px; }
   width: 44px; height: 44px; border-radius: 12px; background: var(--primary); color: #fff;
   display: flex; align-items: center; justify-content: center; font-weight: 700; letter-spacing: 1px;
 }
-.auth-box { padding: 10px 14px; border-top: 1px solid var(--border); }
-.auth-name { font-size: 13px; font-weight: 600; word-break: break-all; }
+.auth-box { padding: 14px 14px 15px; border-top: 1px solid var(--border); }
+.user-card { display: flex; align-items: center; gap: 11px; padding: 2px 2px 13px; }
+.avatar {
+  width: 42px; height: 42px; flex: 0 0 42px; border-radius: 12px;
+  background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: #fff;
+  display: grid; place-items: center; font-weight: 700; font-size: 17px;
+  box-shadow: 0 6px 14px rgba(37, 99, 235, .22);
+  text-transform: uppercase; user-select: none;
+}
+.user-meta { min-width: 0; flex: 1; }
+.user-name { font-size: 14px; font-weight: 650; line-height: 1.3; word-break: break-all; }
+.user-sub { display: flex; align-items: center; gap: 6px; margin-top: 5px; flex-wrap: wrap; }
+.user-actions { display: flex; flex-direction: column; gap: 7px; padding-top: 4px; border-top: 1px dashed var(--border); margin-top: 2px; }
+.user-actions .btn { width: 100%; justify-content: flex-start; }
+.act-ico { width: 16px; text-align: center; margin-right: 2px; opacity: .85; }
+.btn-logout { color: var(--red); border-color: #fecaca; }
+.btn-logout:hover { background: var(--red-soft); border-color: #fca5a5; }
 .collab-user { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .collab-user:last-child { border-bottom: 0; }
 .collab-user select { margin-left: auto; }

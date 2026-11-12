@@ -5058,8 +5058,13 @@ function renderAuthBox(user) {
   box.hidden = false;
   const name = $('#auth-name');
   const role = $('#auth-role');
-  if (name) name.textContent = currentUser.displayName || currentUser.username;
+  const avatar = $('#auth-avatar');
+  const flag2fa = $('#auth-2fa');
+  const display = currentUser.displayName || currentUser.username || '';
+  if (name) name.textContent = display;
   if (role) role.textContent = currentUser.role === 'admin' ? '管理员' : '普通用户';
+  if (avatar) avatar.textContent = (display.trim()[0] || 'U');
+  if (flag2fa) flag2fa.hidden = !currentUser.totpEnabled;
   const navUsers = $('#nav-users');
   if (navUsers) navUsers.hidden = currentUser.role !== 'admin';
 }

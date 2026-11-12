@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261112d" />
+  <link rel="stylesheet" href="/style.css?v=20261112e" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -82,14 +82,26 @@
         <span id="health-text">连接中…</span>
       </div>
       <div class="auth-box" id="auth-box" hidden>
-        <div class="row gap wrap" style="align-items:center">
-          <span class="auth-name" id="auth-name"></span>
-          <span class="badge gray" id="auth-role"></span>
+        <div class="user-card">
+          <div class="avatar" id="auth-avatar">U</div>
+          <div class="user-meta">
+            <div class="user-name" id="auth-name"></div>
+            <div class="user-sub">
+              <span class="badge gray" id="auth-role"></span>
+              <span class="badge green" id="auth-2fa" hidden>已开启 2FA</span>
+            </div>
+          </div>
         </div>
-        <div class="row gap wrap" style="margin-top:6px">
-          <button class="btn btn-sm" type="button" id="auth-security">账号安全</button>
-          <button class="btn btn-sm" type="button" id="auth-password">修改密码</button>
-          <button class="btn btn-sm" type="button" id="auth-logout">登出</button>
+        <div class="user-actions">
+          <button class="btn btn-sm" type="button" id="auth-security">
+            <span class="act-ico">⛨</span>账号安全
+          </button>
+          <button class="btn btn-sm" type="button" id="auth-password">
+            <span class="act-ico">⚿</span>修改密码
+          </button>
+          <button class="btn btn-sm btn-logout" type="button" id="auth-logout">
+            <span class="act-ico">⏻</span>登出
+          </button>
         </div>
       </div>
     </aside>
@@ -1570,6 +1582,6 @@
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
   <script src="/vendor/qrcode.js"></script>
-  <script src="/app.js?v=20261112d"></script>
+  <script src="/app.js?v=20261112e"></script>
 </body>
 </html>
