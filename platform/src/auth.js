@@ -296,14 +296,20 @@ function createUser(body) {
   if (!/^[a-z0-9_.-]{2,32}$/.test(username)) throw badRequest('账号只能是 2-32 位小写字母 / 数字 / _ . -');
   if (byName(username)) throw new HttpError(409, '账号已存在');
   const role = (body && body.role) === 'admin' ? 'admin' : 'user';
-  const password = validatePassword((body && body.password) || '');
+  const provided = (body && body.password) ? String(body.password) : '';
+  let password = provided;
+  let generatedPassword = false;
+  if (!provided) { password = crypto.randomBytes(12).toString('base64url'); generatedPassword = true; }
+  else validatePassword(provided);
   const user = {
     id: uid('usr'), username, displayName: String((body && body.displayName) || username).slice(0, 60),
     passwordHash: hashPassword(password), role, status: 'active',
     mustChangePassword: false, createdAt: new Date().toISOString(), lastLoginAt: '',
   };
   update((s) => { s.users.push(user); });
-  return publicUser(user);
+  const result = publicUser(user);
+  if (generatedPassword) result.generatedPassword = password;
+  return result;
 }
 
 function updateUser(id, body, actor) {

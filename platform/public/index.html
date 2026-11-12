@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261112b" />
+  <link rel="stylesheet" href="/style.css?v=20261112c" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -1327,12 +1327,17 @@
             <div class="notice">
               权限规则：管理员可查看 / 操作所有数据；创建者（owner）对自己的数据全权；协作者分 <code>read</code>（只读）与 <code>write</code>（可操作、不可删除 / 不可改协作者）。全局配置（.env、代理、环境适配、系统更新等）对普通用户只读。
             </div>
-            <form id="user-form" class="form row gap wrap" style="margin-top:12px;align-items:flex-end">
-              <label>账号<input name="username" required placeholder="小写字母 / 数字 / _ . -" /></label>
-              <label>显示名<input name="displayName" placeholder="可留空" /></label>
-              <label>初始密码（≥8 位）<input name="password" type="password" required /></label>
-              <label>角色<select name="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
-              <button class="btn btn-primary" type="submit">新增账号</button>
+            <form id="user-form" class="form" style="margin-top:14px" autocomplete="off">
+              <div class="user-form-grid">
+                <label>账号<input name="username" required placeholder="小写字母 / 数字 / _ . -" /></label>
+                <label>显示名<input name="displayName" placeholder="可留空" /></label>
+                <label>初始密码<input name="password" type="password" autocomplete="new-password" placeholder="留空自动生成（≥8 位）" /></label>
+                <label>角色<select name="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
+              </div>
+              <div class="form-actions">
+                <button class="btn btn-primary" type="submit">新增账号</button>
+                <span class="muted small">创建后可在列表「重置密码」重新设定；密码留空则由系统自动生成。</span>
+              </div>
             </form>
           </div>
           <div class="card" style="margin-top:14px">
@@ -1527,6 +1532,6 @@
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261112b"></script>
+  <script src="/app.js?v=20261112c"></script>
 </body>
 </html>

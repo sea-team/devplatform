@@ -134,7 +134,10 @@ code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-
 .form label.check:hover { border-color: var(--border-strong); background: #f1f5fc; }
 .form input[type=checkbox]:focus { box-shadow: 0 0 0 3px var(--primary-soft); }
 .form .field-help { color: var(--muted); font-size: 11px; font-weight: 400; margin-top: -2px; }
-.form-actions { display: flex; align-items: center; gap: 10px; padding-top: 2px; }
+.form-actions { display: flex; align-items: center; gap: 12px; padding-top: 2px; }
+/* 账号管理「新增账号」表单：响应式网格，填充满卡片宽度，标签统一左对齐 */
+.user-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; align-items: end; }
+.user-form-grid label { margin: 0; }
 
 /* v0.3.7 · 字段控件统一排版。
    不少卡片里直接写 <label>文字<select>…</select></label>，但并不在 .form 内，
@@ -259,7 +262,7 @@ tr:last-child td { border-bottom: 0; }
 .metric .v { font-size: 16px; font-weight: 680; margin-top: 2px; }
 .bar { height: 5px; background: var(--border); border-radius: 99px; margin-top: 7px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--primary); border-radius: 99px; }
-.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .toast {
   position: fixed; right: 24px; bottom: 24px; padding: 11px 17px; border-radius: 10px;

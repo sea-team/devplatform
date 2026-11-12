@@ -5108,7 +5108,7 @@ async function loadUsers() {
       <td><b>${esc(u.username)}</b><div class="desc muted small">${esc(u.displayName || '')}</div></td>
       <td>${badge(u.role === 'admin' ? '管理员' : '普通用户', u.role === 'admin' ? 'green' : 'gray')}</td>
       <td>${badge(u.status === 'disabled' ? '已禁用' : '正常', u.status === 'disabled' ? 'red' : 'green')}</td>
-      <td class="small">${esc(u.lastLoginAt || '从未登录')}</td>
+      <td class="small">${esc(u.lastLoginAt ? fmtTime(u.lastLoginAt) : '从未登录')}</td>
       <td class="actions">
         <button class="btn btn-sm" type="button" data-user-role="${esc(u.id)}">切换角色</button>
         <button class="btn btn-sm" type="button" data-user-reset="${esc(u.id)}">重置密码</button>
@@ -5147,13 +5147,20 @@ const userFormEl = $('#user-form');
 if (userFormEl) userFormEl.addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = e.target;
+  const username = f.elements.username.value.trim();
+  const password = f.elements.password.value;
   try {
-    await api('/users', { method: 'POST', body: {
-      username: f.elements.username.value, displayName: f.elements.displayName.value,
-      password: f.elements.password.value, role: f.elements.role.value,
+    const r = await api('/users', { method: 'POST', body: {
+      username,
+      displayName: f.elements.displayName.value,
+      password: password || undefined,
+      role: f.elements.role.value,
     } });
     if (f.reset) f.reset();
-    toast('账号已创建');
+    toast(`账号「${r.username || username}」已创建`);
+    if (r.generatedPassword) {
+      prompt('初始密码已自动生成，请复制保存（关闭后无法再次查看）：', r.generatedPassword);
+    }
     await loadUsers();
   } catch (err) { toast(err.message || String(err), true); }
 });
