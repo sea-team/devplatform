@@ -4974,6 +4974,8 @@ let workbenchStarted = false;
 let authMode = 'required';
 let collabTarget = null;
 let forcePasswordChange = false;
+let pendingTotpToken = '';
+let twofaMethod = 'totp';
 
 /** 登录 / 改密走原生 fetch，避免 api() 的 401 自动跳登录造成循环。 */
 async function authFetch(path, options = {}) {
@@ -5001,11 +5003,32 @@ function showLogin(message = '') {
   if (view) view.hidden = false;
   const form = $('#login-form');
   const pass = $('#password-form');
+  const twofa = $('#twofa-form');
   if (form) form.hidden = false;
   if (pass) pass.hidden = true;
+  if (twofa) { twofa.hidden = true; twofaMethod = 'totp'; }
+  pendingTotpToken = '';
   setLoginError('#login-error', message);
   const box = $('#auth-box');
   if (box) box.hidden = true;
+}
+
+function showTwofaForm(totpToken) {
+  pendingTotpToken = totpToken || '';
+  twofaMethod = 'totp';
+  const view = $('#login-view');
+  if (view) view.hidden = false;
+  const form = $('#login-form');
+  const pass = $('#password-form');
+  const twofa = $('#twofa-form');
+  if (form) form.hidden = true;
+  if (pass) pass.hidden = true;
+  if (twofa) twofa.hidden = false;
+  setLoginError('#twofa-error', '');
+  const codeEl = twofa && twofa.elements.code;
+  if (codeEl) { codeEl.placeholder = '6 位数字'; codeEl.value = ''; }
+  const rt = $('#twofa-recovery-toggle');
+  if (rt) rt.textContent = '使用恢复码';
 }
 
 function showPasswordForm(title = '首次登录 · 请修改初始密码') {
@@ -5051,6 +5074,10 @@ if (loginFormEl) loginFormEl.addEventListener('submit', async (e) => {
       method: 'POST',
       body: { username: f.elements.username.value, password: f.elements.password.value },
     });
+    if (data.requiresTwoFactor) {
+      showTwofaForm(data.totpToken);
+      return;
+    }
     renderAuthBox(data.user);
     if (data.mustChangePassword) {
       forcePasswordChange = true;
@@ -5062,6 +5089,41 @@ if (loginFormEl) loginFormEl.addEventListener('submit', async (e) => {
     await startWorkbench();
   } catch (err) { setLoginError('#login-error', err.message || String(err)); }
 });
+
+const twofaFormEl = $('#twofa-form');
+if (twofaFormEl) twofaFormEl.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  setLoginError('#twofa-error', '');
+  try {
+    const data = await authFetch('/auth/2fa', {
+      method: 'POST',
+      body: { totpToken: pendingTotpToken, code: f.elements.code.value, method: twofaMethod },
+    });
+    renderAuthBox(data.user);
+    if (data.mustChangePassword) {
+      forcePasswordChange = true;
+      showPasswordForm();
+      toast('首次登录请先修改初始密码');
+      return;
+    }
+    hideLogin();
+    await startWorkbench();
+  } catch (err) { setLoginError('#twofa-error', err.message || String(err)); }
+});
+
+if ($('#twofa-recovery-toggle')) $('#twofa-recovery-toggle').addEventListener('click', () => {
+  twofaMethod = twofaMethod === 'totp' ? 'recovery' : 'totp';
+  const codeEl = twofaFormEl && twofaFormEl.elements.code;
+  if (codeEl) {
+    codeEl.placeholder = twofaMethod === 'recovery' ? '输入恢复码，如 XXXXX-XXXXX' : '6 位数字';
+    codeEl.value = '';
+  }
+  const rt = $('#twofa-recovery-toggle');
+  if (rt) rt.textContent = twofaMethod === 'recovery' ? '改用动态码' : '使用恢复码';
+});
+
+if ($('#twofa-back')) $('#twofa-back').addEventListener('click', () => showLogin('已返回登录'));
 
 const passwordFormEl = $('#password-form');
 if (passwordFormEl) passwordFormEl.addEventListener('submit', async (e) => {
@@ -5098,6 +5160,82 @@ if ($('#auth-logout')) $('#auth-logout').addEventListener('click', async () => {
   if (typeof location !== 'undefined') location.reload();
 });
 
+/* --------------------------- 账号安全 · 二次验证 --------------------------- */
+if ($('#auth-security')) $('#auth-security').addEventListener('click', () => openSecurityModal());
+$$('[data-security-close]').forEach((b) => b.addEventListener('click', () => { const m = $('#security-modal'); if (m) m.hidden = true; }));
+
+async function openSecurityModal() {
+  const modal = $('#security-modal');
+  if (modal) modal.hidden = false;
+  const statusEl = $('#security-status');
+  const setupEl = $('#security-setup');
+  const actionsEl = $('#security-actions');
+  if (setupEl) setupEl.hidden = true;
+  if (actionsEl) actionsEl.innerHTML = '';
+  if (statusEl) statusEl.textContent = '加载中…';
+  try {
+    const data = await api('/auth/2fa');
+    if (statusEl) {
+      statusEl.innerHTML = data.enabled
+        ? `当前状态：${badge('已启用', 'green')} 二次验证已开启，登录时需额外输入动态码。剩余恢复码 ${data.recoveryCount} 个。`
+        : `当前状态：${badge('未启用', 'gray')} 二次验证默认关闭，启用后登录将要求动态码。`;
+    }
+    if (actionsEl) {
+      if (data.enabled) {
+        actionsEl.innerHTML = '<button class="btn btn-sm btn-danger" type="button" id="security-disable">禁用二次验证</button>';
+        const dbtn = $('#security-disable');
+        if (dbtn) dbtn.addEventListener('click', async () => {
+          if (!confirm('确定禁用二次验证吗？禁用后登录将不再要求动态码。')) return;
+          try { await api('/auth/2fa/disable', { method: 'POST' }); toast('已禁用二次验证'); await openSecurityModal(); }
+          catch (e) { toast(e.message || String(e), true); }
+        });
+      } else {
+        actionsEl.innerHTML = '<button class="btn btn-sm btn-primary" type="button" id="security-enable">启用二次验证</button>';
+        const ebtn = $('#security-enable');
+        if (ebtn) ebtn.addEventListener('click', startSecuritySetup);
+      }
+    }
+  } catch (e) { if (statusEl) statusEl.textContent = '加载失败：' + (e.message || String(e)); }
+}
+
+async function startSecuritySetup() {
+  const statusEl = $('#security-status');
+  const setupEl = $('#security-setup');
+  const actionsEl = $('#security-actions');
+  if (statusEl) statusEl.textContent = '正在生成密钥…';
+  try {
+    const data = await api('/auth/2fa/setup', { method: 'POST' });
+    if (setupEl) setupEl.hidden = false;
+    if (actionsEl) actionsEl.innerHTML = '';
+    const secretEl = $('#security-secret');
+    if (secretEl) secretEl.value = data.secret;
+    const qrEl = $('#security-qr');
+    if (qrEl) {
+      qrEl.innerHTML = '';
+      try {
+        const qr = qrcode(0, 'M');
+        qr.addData(data.otpauthUri);
+        qr.make();
+        qrEl.innerHTML = qr.createSvgTag(4, 1);
+      } catch { qrEl.innerHTML = '<div class="hint">二维码渲染失败，请使用上方密钥手动添加。</div>'; }
+    }
+    const recEl = $('#security-recovery');
+    if (recEl) recEl.textContent = (data.recoveryCodes || []).join('\n');
+    if (statusEl) statusEl.innerHTML = '请先扫描二维码 / 记录密钥，并保存恢复码，再输入动态码启用。';
+  } catch (e) { if (statusEl) statusEl.textContent = '生成失败：' + (e.message || String(e)); }
+}
+
+if ($('#security-confirm')) $('#security-confirm').addEventListener('click', async () => {
+  const codeEl = $('#security-code');
+  const code = codeEl ? codeEl.value.trim() : '';
+  if (!code) { toast('请输入动态码', true); return; }
+  try {
+    await api('/auth/2fa/confirm', { method: 'POST', body: { code } });
+    toast('二次验证已启用');
+    await openSecurityModal();
+  } catch (e) { toast(e.message || String(e), true); }
+});
+
 /* ------------------------------- 账号管理 -------------------------------- */
 async function loadUsers() {
   const box = $('#users-list');
@@ -5108,22 +5246,14 @@ async function loadUsers() {
       <td><b>${esc(u.username)}</b><div class="desc muted small">${esc(u.displayName || '')}</div></td>
       <td>${badge(u.role === 'admin' ? '管理员' : '普通用户', u.role === 'admin' ? 'green' : 'gray')}</td>
       <td>${badge(u.status === 'disabled' ? '已禁用' : '正常', u.status === 'disabled' ? 'red' : 'green')}</td>
+      <td>${badge(u.totpEnabled ? '已启用' : '未启用', u.totpEnabled ? 'green' : 'gray')}</td>
       <td class="small">${esc(u.lastLoginAt ? fmtTime(u.lastLoginAt) : '从未登录')}</td>
       <td class="actions">
-        <button class="btn btn-sm" type="button" data-user-role="${esc(u.id)}">切换角色</button>
         <button class="btn btn-sm" type="button" data-user-reset="${esc(u.id)}">重置密码</button>
         <button class="btn btn-sm" type="button" data-user-status="${esc(u.id)}">${u.status === 'disabled' ? '启用' : '禁用'}</button>
       </td>
     </tr>`);
-    box.innerHTML = table(['账号', '角色', '状态', '最近登录', '操作'], rows);
-    box.querySelectorAll('[data-user-role]').forEach((b) => b.addEventListener('click', async () => {
-      const u = (data.items || []).find((x) => x.id === b.dataset.userRole);
-      if (!u) return;
-      try {
-        await api(`/users/${u.id}`, { method: 'PUT', body: { role: u.role === 'admin' ? 'user' : 'admin' } });
-        await loadUsers(); toast('角色已更新');
-      } catch (e) { toast(e.message || String(e), true); }
-    }));
+    box.innerHTML = table(['账号', '角色', '状态', '二次验证', '最近登录', '操作'], rows);
     box.querySelectorAll('[data-user-reset]').forEach((b) => b.addEventListener('click', async () => {
       const password = prompt('输入新密码（至少 8 位，留空则自动生成）', '') || '';
       try {
@@ -5154,7 +5284,6 @@ if (userFormEl) userFormEl.addEventListener('submit', async (e) => {
       username,
       displayName: f.elements.displayName.value,
       password: password || undefined,
-      role: f.elements.role.value,
     } });
     if (f.reset) f.reset();
     toast(`账号「${r.username || username}」已创建`);

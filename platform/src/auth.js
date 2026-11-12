@@ -21,7 +21,7 @@ const MAX_ATTEMPTS = 5;
 const LOCK_MS = 60 * 1000;
 const attempts = new Map();
 
-const PUBLIC_PATHS = ['/api/health', '/api/auth/login', '/api/auth/status'];
+const PUBLIC_PATHS = ['/api/health', '/api/auth/login', '/api/auth/status', '/api/auth/2fa'];
 const CLI_PATHS = ['/api/auth/reset-password', '/api/system/reload'];
 const TOKEN_USER = Object.freeze({ id: '__admin_token__', username: 'admin(token)', role: 'admin', via: 'token' });
 const CLI_USER = Object.freeze({ id: '__cli__', username: 'cli', role: 'admin', via: 'cli' });
@@ -56,6 +56,99 @@ function validatePassword(password) {
   return pw;
 }
 
+/* --------------------------- 二次验证（TOTP，零依赖） --------------------------- */
+// 默认不启用；启用后登录需「密码 + 动态码 / 恢复码」。动态码为标准 TOTP（SHA1, 6 位, 30 秒）。
+const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+function base32Encode(buf) {
+  let bits = 0, value = 0, out = '';
+  for (let i = 0; i < buf.length; i++) {
+    value = (value << 8) | buf[i];
+    bits += 8;
+    while (bits >= 5) { out += B32[(value >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if (bits > 0) out += B32[(value << (5 - bits)) & 31];
+  return out;
+}
+
+function base32Decode(str) {
+  const s = String(str || '').toUpperCase().replace(/=+$/, '').replace(/\s/g, '');
+  let bits = 0, value = 0;
+  const out = [];
+  for (let i = 0; i < s.length; i++) {
+    const idx = B32.indexOf(s[i]);
+    if (idx === -1) throw badRequest('非法的 TOTP 密钥');
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) { out.push((value >>> (bits - 8)) & 0xff); bits -= 8; }
+  }
+  return Buffer.from(out);
+}
+
+function totp(secretBytes, opts = {}) {
+  const step = opts.step || 30;
+  const digits = opts.digits || 6;
+  const t = Math.floor((opts.time || Date.now()) / 1000 / step);
+  const buf = Buffer.alloc(8);
+  buf.writeUInt32BE(Math.floor(t / 0x100000000), 0);
+  buf.writeUInt32BE(t >>> 0, 4);
+  const hmac = crypto.createHmac('sha1', secretBytes).update(buf).digest();
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  const code = ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16)
+    | ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff);
+  return String(code % (10 ** digits)).padStart(digits, '0');
+}
+
+function verifyTotp(secretBytes, code, opts = {}) {
+  code = String(code || '').replace(/\s/g, '');
+  if (!/^\d{4,8}$/.test(code)) return false;
+  const window = opts.window == null ? 1 : opts.window;
+  const step = opts.step || 30;
+  const now = opts.time || Date.now();
+  for (let w = -window; w <= window; w++) {
+    if (totp(secretBytes, { step, time: now + w * step * 1000 }) === code) return true;
+  }
+  return false;
+}
+
+function genRecoveryCodes(n = 8) {
+  const codes = [];
+  for (let i = 0; i < n; i++) {
+    const raw = crypto.randomBytes(5).toString('hex').toUpperCase();
+    codes.push(`${raw.slice(0, 5)}-${raw.slice(5)}`);
+  }
+  return codes;
+}
+
+function hashRecovery(code) {
+  return crypto.createHash('sha256').update(String(code || '').toUpperCase().replace(/\s/g, '')).digest('hex');
+}
+
+function otpauthUri(username, secret) {
+  const label = encodeURIComponent(`DevPlatform:${username}`);
+  const issuer = encodeURIComponent('DevPlatform');
+  return `otpauth://totp/${label}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30`;
+}
+
+// 登录态二维验证挑战：密码正确但 2FA 启用时，先发一个短期 totpToken，校验动态码后才落地会话。
+const pending2fa = new Map();
+
+function create2faChallenge(userId) {
+  const now = Date.now();
+  for (const [k, v] of pending2fa) if (v.expiresAt <= now) pending2fa.delete(k);
+  const token = crypto.randomBytes(24).toString('hex');
+  pending2fa.set(token, { userId, expiresAt: now + 5 * 60 * 1000, attempts: 0 });
+  return token;
+}
+
+function peek2faChallenge(token) {
+  const rec = token ? pending2fa.get(token) : null;
+  if (!rec || rec.expiresAt <= Date.now()) { if (rec) pending2fa.delete(token); return null; }
+  return rec;
+}
+
+function drop2faChallenge(token) { if (token) pending2fa.delete(token); }
+
 const users = () => (Array.isArray(state().users) ? state().users : []);
 const byName = (name) => users().find((u) => u.username === String(name || '').toLowerCase());
 const byId = (id) => users().find((u) => u.id === id);
@@ -73,6 +166,8 @@ function publicUser(u) {
     id: u.id, username: u.username, displayName: u.displayName || u.username,
     role: u.role, status: u.status || 'active',
     mustChangePassword: Boolean(u.mustChangePassword),
+    totpEnabled: Boolean(u.totpEnabled),
+    isInitialAdmin: Boolean(u.isInitialAdmin),
     createdAt: u.createdAt || '', lastLoginAt: u.lastLoginAt || '',
   };
 }
@@ -106,7 +201,7 @@ function initialize() {
   const admin = {
     id: uid('usr'), username: 'admin', displayName: '系统管理员',
     passwordHash: hashPassword(password), role: 'admin', status: 'active',
-    mustChangePassword: true, createdAt: new Date().toISOString(), lastLoginAt: '',
+    isInitialAdmin: true, mustChangePassword: true, createdAt: new Date().toISOString(), lastLoginAt: '',
   };
   s.users.push(admin);
   for (const key of permissions.COLLECTIONS) {
@@ -242,6 +337,48 @@ function login(req, res, body) {
     throw new HttpError(401, '账号或密码错误');
   }
   attempts.delete(key);
+  // 启用二次验证：先返回挑战令牌，校验动态码后才落地会话（见 verify2fa）。
+  if (user.totpEnabled) {
+    const totpToken = create2faChallenge(user.id);
+    return { requiresTwoFactor: true, totpToken, methods: ['totp', 'recovery'] };
+  }
+  const token = createSession(user.id, req);
+  update((s) => {
+    const u = (s.users || []).find((x) => x.id === user.id);
+    if (u) u.lastLoginAt = new Date().toISOString();
+  });
+  res.setHeader('Set-Cookie', cookieHeader(token, req));
+  return { user: publicUser(user), mustChangePassword: Boolean(user.mustChangePassword) };
+}
+
+/** 登录第二步：校验 TOTP 动态码或一次性恢复码，校验通过才创建会话。 */
+function verify2fa(req, res, body) {
+  const totpToken = (body && body.totpToken) || '';
+  const rec = peek2faChallenge(totpToken);
+  if (!rec) throw new HttpError(401, '验证已过期，请重新登录');
+  rec.attempts += 1;
+  if (rec.attempts > 5) { drop2faChallenge(totpToken); throw new HttpError(429, '尝试次数过多，请重新登录'); }
+  const user = byId(rec.userId);
+  if (!user || user.status === 'disabled') { drop2faChallenge(totpToken); throw new HttpError(401, '账号不可用'); }
+  const method = (body && body.method) || 'totp';
+  const code = String((body && body.code) || '').trim();
+  let ok = false;
+  if (method === 'recovery') {
+    const hash = hashRecovery(code);
+    const idx = (user.totpRecovery || []).findIndex((h) => h === hash);
+    if (idx >= 0) {
+      ok = true;
+      const removeAt = idx;
+      update((s) => {
+        const u = (s.users || []).find((x) => x.id === user.id);
+        if (u && Array.isArray(u.totpRecovery)) u.totpRecovery.splice(removeAt, 1);
+      });
+    }
+  } else if (user.totpSecret) {
+    ok = verifyTotp(base32Decode(user.totpSecret), code);
+  }
+  if (!ok) throw new HttpError(401, '验证码错误');
+  drop2faChallenge(totpToken);
   const token = createSession(user.id, req);
   update((s) => {
     const u = (s.users || []).find((x) => x.id === user.id);
@@ -291,11 +428,52 @@ function resetPassword(username, newPassword) {
 
 function listUsers() { return users().map(publicUser); }
 
+/* ----------------------------- 二次验证自服务 ----------------------------- */
+/** 发起启用：生成密钥与恢复码（此时 totpEnabled 仍为 false，需 confirm2fa 校验后才生效）。 */
+function setup2fa(user) {
+  const current = byId(user.id);
+  if (!current) throw notFound('账号不存在');
+  const secret = base32Encode(crypto.randomBytes(20));
+  const recovery = genRecoveryCodes(8);
+  update((s) => {
+    const u = (s.users || []).find((x) => x.id === user.id);
+    if (u) { u.totpSecret = secret; u.totpRecovery = recovery.map(hashRecovery); u.totpEnabled = false; }
+  });
+  return { otpauthUri: otpauthUri(current.username, secret), secret, recoveryCodes: recovery };
+}
+
+/** 确认启用：校验一个动态码，正确后把 totpEnabled 置为 true。 */
+function confirm2fa(user, body) {
+  const u = byId(user.id);
+  if (!u || !u.totpSecret) throw badRequest('请先发起二次验证设置');
+  const code = String((body && body.code) || '').trim();
+  if (!verifyTotp(base32Decode(u.totpSecret), code)) throw new HttpError(401, '验证码错误，请重试');
+  update((s) => { const x = (s.users || []).find((y) => y.id === user.id); if (x) x.totpEnabled = true; });
+  revokeSessionsOf(user.id);
+  return { ok: true };
+}
+
+function disable2fa(user) {
+  update((s) => {
+    const x = (s.users || []).find((y) => y.id === user.id);
+    if (x) { x.totpEnabled = false; x.totpSecret = ''; x.totpRecovery = []; }
+  });
+  revokeSessionsOf(user.id);
+  return { ok: true };
+}
+
+function twoFactorStatus(user) {
+  const u = byId(user.id);
+  if (!u) throw notFound('账号不存在');
+  return { enabled: Boolean(u.totpEnabled), recoveryCount: Array.isArray(u.totpRecovery) ? u.totpRecovery.length : 0 };
+}
+
 function createUser(body) {
   const username = String((body && body.username) || '').trim().toLowerCase();
   if (!/^[a-z0-9_.-]{2,32}$/.test(username)) throw badRequest('账号只能是 2-32 位小写字母 / 数字 / _ . -');
   if (byName(username)) throw new HttpError(409, '账号已存在');
-  const role = (body && body.role) === 'admin' ? 'admin' : 'user';
+  // 角色固定为普通用户：仅初始管理员可拥有管理员权限，新账号一律无法被提升为管理员。
+  const role = 'user';
   const provided = (body && body.password) ? String(body.password) : '';
   let password = provided;
   let generatedPassword = false;
@@ -317,16 +495,13 @@ function updateUser(id, body, actor) {
   if (!user) throw notFound('账号不存在');
   const patch = {};
   if (body && body.displayName !== undefined) patch.displayName = String(body.displayName).slice(0, 60);
+  // 角色不可变更：仅初始管理员为管理员，普通账号无法被提升，初始管理员也无法被降级。
   if (body && body.role !== undefined) {
-    const role = body.role === 'admin' ? 'admin' : 'user';
-    if (role !== user.role && user.id === actor.id) throw badRequest('不能修改自己的角色');
-    if (role !== 'admin' && user.role === 'admin' && activeAdmins().length <= 1) {
-      throw badRequest('不能降级最后一个管理员');
-    }
-    patch.role = role;
+    throw badRequest('账号角色不可变更（仅初始管理员为管理员）');
   }
   if (body && body.status !== undefined) {
     const status = body.status === 'disabled' ? 'disabled' : 'active';
+    if (user.isInitialAdmin) throw badRequest('初始管理员不可禁用或降级');
     if (status === 'disabled' && user.id === actor.id) throw badRequest('不能禁用自己');
     if (status === 'disabled' && user.role === 'admin' && activeAdmins().length <= 1) {
       throw badRequest('不能禁用最后一个管理员');
@@ -361,6 +536,7 @@ module.exports = {
   mode, initialize, identity, authorize, isCliRequest,
   hashPassword, verifyPassword, validatePassword,
   login, logout, changePassword, resetPassword, status,
+  verify2fa, setup2fa, confirm2fa, disable2fa, twoFactorStatus,
   listUsers, createUser, updateUser, deleteUser, publicUser,
   byId, byName, users, cookieValue, clearCookieHeader,
 };

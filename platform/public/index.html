@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261112c" />
+  <link rel="stylesheet" href="/style.css?v=20261112d" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -33,6 +33,18 @@
       <div class="row gap">
         <button class="btn btn-primary" type="submit">保存新密码</button>
         <button class="btn" type="button" id="password-cancel">返回登录</button>
+      </div>
+    </form>
+    <form id="twofa-form" class="login-card" hidden>
+      <div class="login-brand">DP</div>
+      <h2>二次验证</h2>
+      <p class="muted">该账号已启用二次验证，请输入身份验证器（Google Authenticator / 1Password / 微软验证器等）中的 6 位动态码以完成登录。</p>
+      <label>动态验证码<input name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="6 位数字" /></label>
+      <div id="twofa-error" class="notice error" hidden></div>
+      <button class="btn btn-primary" type="submit">验证并登录</button>
+      <div class="row gap" style="margin-top:10px">
+        <button class="btn btn-sm" type="button" id="twofa-recovery-toggle">使用恢复码</button>
+        <button class="btn btn-sm" type="button" id="twofa-back">返回登录</button>
       </div>
     </form>
   </div>
@@ -75,6 +87,7 @@
           <span class="badge gray" id="auth-role"></span>
         </div>
         <div class="row gap wrap" style="margin-top:6px">
+          <button class="btn btn-sm" type="button" id="auth-security">账号安全</button>
           <button class="btn btn-sm" type="button" id="auth-password">修改密码</button>
           <button class="btn btn-sm" type="button" id="auth-logout">登出</button>
         </div>
@@ -1332,11 +1345,10 @@
                 <label>账号<input name="username" required placeholder="小写字母 / 数字 / _ . -" /></label>
                 <label>显示名<input name="displayName" placeholder="可留空" /></label>
                 <label>初始密码<input name="password" type="password" autocomplete="new-password" placeholder="留空自动生成（≥8 位）" /></label>
-                <label>角色<select name="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
               </div>
               <div class="form-actions">
                 <button class="btn btn-primary" type="submit">新增账号</button>
-                <span class="muted small">创建后可在列表「重置密码」重新设定；密码留空则由系统自动生成。</span>
+                <span class="muted small">新账号固定为「普通用户」，仅初始管理员拥有管理员权限；密码留空则由系统自动生成。</span>
               </div>
             </form>
           </div>
@@ -1509,6 +1521,31 @@
       </div>
     </div>
   </div>
+  <!-- 账号安全 · 二次验证（所有已登录用户自服务） -->
+  <div class="modal" id="security-modal" hidden aria-modal="true" role="dialog" aria-labelledby="security-title">
+    <div class="modal-mask" data-security-close></div>
+    <div class="modal-panel modal-narrow">
+      <div class="modal-head">
+        <div><h2 id="security-title">账号安全 · 二次验证</h2><span class="muted">为你的账号增加动态码保护（默认不启用）</span></div>
+        <button class="btn btn-ghost btn-sm" type="button" data-security-close>✕ 关闭</button>
+      </div>
+      <div class="modal-body">
+        <div id="security-status" class="hint">加载中…</div>
+        <div id="security-setup" hidden>
+          <div class="notice">用身份验证器扫描下方二维码，或手动输入密钥，再填入 App 显示的 6 位动态码完成启用。</div>
+          <div id="security-qr" class="security-qr"></div>
+          <label>密钥（手动输入）<input id="security-secret" readonly class="mono" /></label>
+          <label>动态码<input id="security-code" inputmode="numeric" placeholder="6 位" /></label>
+          <div class="row gap">
+            <button class="btn btn-primary btn-sm" type="button" id="security-confirm">启用二次验证</button>
+          </div>
+          <div class="hint" style="margin-top:12px">请妥善保存以下<b>一次性恢复码</b>（每个仅可用一次，用后自动作废）；丢失验证器时可凭它登录：</div>
+          <pre id="security-recovery" class="recovery-codes"></pre>
+        </div>
+        <div class="row gap" id="security-actions" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </div>
   <!-- 协作者管理弹窗 -->
   <div class="modal" id="collab-modal" hidden aria-modal="true" role="dialog" aria-labelledby="collab-title">
     <div class="modal-mask" data-collab-close></div>
@@ -1532,6 +1569,7 @@
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
-  <script src="/app.js?v=20261112c"></script>
+  <script src="/vendor/qrcode.js"></script>
+  <script src="/app.js?v=20261112d"></script>
 </body>
 </html>

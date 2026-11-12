@@ -235,6 +235,12 @@ tr:last-child td { border-bottom: 0; }
 .badge.blue { background: var(--primary-soft); color: var(--primary); }
 .badge.gray { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
 
+/* 账号安全 · 二次验证 */
+.mono { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); letter-spacing: 0.5px; }
+.security-qr { display: flex; justify-content: center; margin: 12px 0; padding: 10px; background: #fff; border: 1px solid var(--border); border-radius: 8px; }
+.security-qr svg { width: 176px; height: 176px; }
+.recovery-codes { white-space: pre; font-family: var(--mono, ui-monospace, Menlo, Consolas, monospace); font-size: 13px; line-height: 1.7; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 6px 0 0; }
+
 .list { display: flex; flex-direction: column; }
 .list-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--border); }
 .list-item:last-child { border-bottom: 0; }

@@ -112,6 +112,13 @@ app.post('/api/auth/reset-password', wrap(async (req, res) => {
   if (via !== 'cli' && !permissions.isAdmin(req.user)) throw new HttpError(403, '无权重置账号密码');
   ok(res, auth.resetPassword(req.body && req.body.username, req.body && req.body.password));
 }));
+// 登录第二步：校验 TOTP / 恢复码（公开接口，凭 totpToken 完成挑战）。
+app.post('/api/auth/2fa', wrap(async (req, res) => ok(res, auth.verify2fa(req, res, req.body))));
+// 二次验证自服务（均需已登录会话）：
+app.get('/api/auth/2fa', wrap(async (req, res) => ok(res, auth.twoFactorStatus(req.user))));
+app.post('/api/auth/2fa/setup', wrap(async (req, res) => ok(res, auth.setup2fa(req.user))));
+app.post('/api/auth/2fa/confirm', wrap(async (req, res) => ok(res, auth.confirm2fa(req.user, req.body))));
+app.post('/api/auth/2fa/disable', wrap(async (req, res) => ok(res, auth.disable2fa(req.user))));
 
 app.get('/api/users', wrap(async (req, res) => { requireAdmin(req); ok(res, { items: auth.listUsers() }); }));
 app.post('/api/users', wrap(async (req, res) => { requireAdmin(req); ok(res, auth.createUser(req.body)); }));
