@@ -235,15 +235,28 @@ function imageCandidates(image, prefix) {
 /**
  * 兜底推断：只认明确的短语，其余一律保持 500，避免把真实的代码异常
  * 误判成「用户输入错误」而掩盖问题。显式 status / HttpError 始终优先。
+ *
+ * v0.3.12：源码里有 130+ 处业务校验与上游失败用普通 Error 抛出，过去这些消息
+ * 没被任何规则命中，用户在页面上填错一个字段就会看到 HTTP 500。这里补一层
+ * 「业务语义」短语表，按 403 / 409 / 502 / 400 归类；完全陌生的异常仍是 500。
  */
 function inferStatus(error) {
   const msg = String((error && error.message) || error || '');
+  // 请求体层面的客户端错误：mini.js 也会带显式 status，这里做二次兜底。
+  if (/请求体过大/.test(msg)) return 413;
   if (/目录已存在|同名容器已存在|实例名称已存在|同名 Git 源已存在/i.test(msg)) return 409;
-  if (/不存在|未找到|未知环境档案|未知档案|No such (container|image|volume|network|object)/i.test(msg)) return 404;
+  if (/不存在|未找到|找不到|未知环境档案|未知档案|No such (container|image|volume|network|object)/i.test(msg)) return 404;
   if (/缺少|请填写|未配置|不能为空|不可为空|需要二次确认|请二次确认|避免误伤|不是平台创建的|请选择或填写|不可删除|由 \.env 配置|至少需要保留|不支持的代理协议|不支持的操作|名称不合法|文件名不合法|路径中不允许|路径越界|路径必须以|取值不合法|上传内容为空|无法识别项目类型|未知扩展清单|镜像标识不合法|服务地址必须|必须是 http\(s\):\/\/|参数不合法/.test(msg)) return 400;
-  if (/OpenList \/api\/|OpenList 登录|OpenList .*返回 code=|Docker API |无法连接 Docker|connect ENOENT|本地 AI 程序|HTTP 4\d\d:|HTTP 5\d\d:|fetch failed|ECONNREFUSED|ETIMEDOUT|ECONNRESET|登录失败|record not found|返回了非预期数据|不是合法 JSON/i.test(msg)) return 502;
+  // 「不是合法 JSON」曾把 mini.js 的「请求体不是合法 JSON」误判成 502；改为只匹配上游返回内容。
+  if (/OpenList \/api\/|OpenList 登录|OpenList .*返回 code=|Docker API |无法连接 Docker|connect ENOENT|本地 AI 程序|HTTP 4\d\d:|HTTP 5\d\d:|fetch failed|ECONNREFUSED|ETIMEDOUT|ECONNRESET|登录失败|record not found|返回了非预期数据|AI 服务返回内容不是合法 JSON/i.test(msg)) return 502;
   // 网络层不可达（代理/隧道探测、DNS、连接超时）同属上游故障，不是程序异常。
   if (/直连超时|直连失败|代理隧道|代理连通失败|隧道超时|连接超时|连接失败|请求超时|目标不可达|网络不可达|timeout|timed out|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|ESOCKETTIMEDOUT|ECONNABORTED|socket hang up|connect (?:ETIMEDOUT|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH)/i.test(msg)) return 502;
+
+  /* ---------------- 业务语义兜底（v0.3.12） ---------------- */
+  if (/未授权写操作|命令不在只读白名单内|当前未设置 ADMIN_TOKEN|只允许执行内置只读诊断命令|内置档案不可覆盖|禁止删除系统路径/i.test(msg)) return 403;
+  if (/文件已存在|端口 \d+ .*已占用|已被.*占用|id 与已有清单重复|当前已经是|表单字段重复/i.test(msg)) return 409;
+  if (/docker load 失败|备份命令失败|恢复命令失败|远程.*失败|写入远程环境文件失败|宿主机 git clone 失败|git clone 失败|AI 服务返回 HTTP|AI 服务响应格式异常|下载失败：HTTP|拉取镜像失败|容器启动失败|升级失败|Docker 未返回|新版本容器启动后|OpenList 未返回|构建后端.*不可用|服务器.*Docker 不可用|本机未检测到 Docker|SSH 宿主机.*也没有 Git|目标服务器 Docker 不可用/i.test(msg)) return 502;
+  if (/不合法|不是合法|非法|无效|不支持|必须|需要|请执行|请选择|请先|请改用|请确认|请使用|请换|不允许|只允许|只有|禁止|不能|不可|未设置|未指定|未知|已被|已禁用|已中止|已丢失|重复|过长|为空|格式不对|未定义|不在|没有要|没有 Git|没有容器|没有可用|无法表示|无法备份|无法恢复|保存已中止|层级过深/i.test(msg)) return 400;
   return 500;
 }
 

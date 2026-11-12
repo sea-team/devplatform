@@ -52,19 +52,32 @@ function readBody(req, { limit = 2 * 1024 * 1024, raw = false } = {}) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    let tooLarge = false;
+    // 解析失败属于客户端错误，必须带显式 status：否则会被兜底推断误判成上游故障 / 500。
+    const clientError = (message, status) => {
+      const err = new Error(message);
+      err.status = status;
+      return err;
+    };
     req.on('data', (chunk) => {
+      if (tooLarge) return; // 继续把请求流读完，避免 destroy 把 socket 重置、客户端收不到 413
       size += chunk.length;
-      if (size > limit) { reject(new Error('请求体过大')); req.destroy(); return; }
+      if (size > limit) {
+        tooLarge = true;
+        reject(clientError('请求体过大', 413));
+        return;
+      }
       chunks.push(chunk);
     });
     req.on('end', () => {
+      if (tooLarge) return; // 已按 413 拒绝，不再走解析
       const buffer = Buffer.concat(chunks);
       if (raw) return resolve(buffer);
       const contentType = String(req.headers['content-type'] || '').toLowerCase();
       if (!buffer.length) return resolve({});
       if (contentType.includes('application/json')) {
         try { return resolve(JSON.parse(buffer.toString('utf8'))); }
-        catch { return reject(new Error('请求体不是合法 JSON')); }
+        catch { return reject(clientError('请求体不是合法 JSON', 400)); }
       }
       resolve(buffer.toString('utf8'));
     });

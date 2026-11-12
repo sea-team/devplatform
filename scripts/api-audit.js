@@ -138,11 +138,17 @@ function record(label, method, p, r, expect = {}) {
       add('UNEXPECTED_STATUS', `期望 HTTP ${expect.maxStatus} 以内，实际 ${r.status}`);
     }
   }
+  if (expect.exactStatus && r.status !== expect.exactStatus) {
+    add('UNEXPECTED_STATUS', `期望 HTTP ${expect.exactStatus}，实际 ${r.status}`);
+  }
   if (expect.minStatus && Number(r.status) < expect.minStatus) {
     add('UNEXPECTED_OK', `期望被拒绝（>= ${expect.minStatus}），实际 ${r.status} ${r.json && r.json.ok === true ? 'ok:true' : ''}`);
   }
   if (expect.noOk && r.json && r.json.ok === true) {
     add('UNEXPECTED_OK', '危险 / 越界请求被当成成功执行');
+  }
+  if (r.status === 200 && r.json && r.json.ok !== true) {
+    add('BAD_OK', 'HTTP 200 但响应 ok 不是 true');
   }
   return r;
 }
@@ -174,7 +180,7 @@ async function sweepAll(ids) {
     const p = fillParams(route.path, route.method === 'GET' ? ids : {});
     const body = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(route.method) ? {} : undefined;
     // raw 上传接口绝不能带 JSON body：否则会被当成真实文件内容写进去。
-    const isRawUpload = /files\/upload$|storage\/upload$/.test(route.path);
+    const isRawUpload = /files\/upload$|storage\/upload$|images\/load$/.test(route.path);
     const r = await call(route.method, p, body === undefined || isRawUpload ? {} : { body });
     record('route ' + key, route.method, p, r);
   }
@@ -193,9 +199,9 @@ async function skippedProbes() {
     ['POST', '/api/extensions/instances/' + MISSING + '/upgrade', { body: {} }, { minStatus: 400 }],
     ['POST', '/api/docker/containers/' + MISSING + '/action', { body: {} }, { minStatus: 400 }],
     ['POST', '/api/docker/containers/' + MISSING + '/exec', { body: {} }, { minStatus: 400 }],
-    ['POST', '/api/docker/images/load', { body: {} }, { minStatus: 400 }],
+    ['POST', '/api/docker/images/load', {}, { minStatus: 400, maxStatus: 499, exactStatus: 400 }],
     ['POST', '/api/docker/images/load-path', { body: {} }, { minStatus: 400 }],
-    ['POST', '/api/servers/' + MISSING + '/exec', { body: { command: 'echo __audit__' } }, { minStatus: 400 }],
+    ['POST', '/api/servers/' + MISSING + '/exec', { body: { command: 'echo __audit__' } }, { minStatus: 400, maxStatus: 499 }],
     ['POST', '/api/servers/' + MISSING + '/terminal/open', { body: {} }, { minStatus: 400 }],
     ['POST', '/api/servers/' + MISSING + '/terminal/close', { body: {} }, { minStatus: 400 }],
     ['PUT', '/api/openlist/files/content', { body: {} }, { minStatus: 400 }],
@@ -228,12 +234,12 @@ async function boundary() {
     ['POST', '/api/repos/git', { body: { repo: '../etc', command: 'status' } }, { minStatus: 400, noOk: true }, 'Git 仓库越界'],
     // 写操作只打不存在的 server，避免真的在远端创建文件。
     ['POST', '/api/servers/' + MISSING + '/files/create', { body: { path: '/tmp', name: 'x; rm -rf /' } }, { minStatus: 400 }, 'SFTP 文件名注入(不落盘)'],
-    ['POST', '/api/proxy/test', { rawBody: '{bad json', headers: { 'content-type': 'application/json' } }, { minStatus: 400, maxStatus: 499, noOk: true }, '畸形 JSON body'],
-    ['POST', '/api/git-sources', { rawBody: '{bad json', headers: { 'content-type': 'application/json' } }, { minStatus: 400, maxStatus: 499, noOk: true }, '畸形 JSON body(2)'],
+    ['POST', '/api/proxy/test', { rawBody: '{bad json', headers: { 'content-type': 'application/json' } }, { exactStatus: 400, noOk: true }, '畸形 JSON body'],
+    ['POST', '/api/git-sources', { rawBody: '{bad json', headers: { 'content-type': 'application/json' } }, { exactStatus: 400, noOk: true }, '畸形 JSON body(2)'],
     ['POST', '/api/openlist/files/mkdir', { rawBody: 'hello', headers: { 'content-type': 'text/plain' } }, { minStatus: 400, maxStatus: 499, noOk: true }, '非 JSON body'],
     ['POST', '/api/openlist/files/mkdir', { body: [1, 2, 3] }, { minStatus: 400, maxStatus: 499, noOk: true }, '数组 body'],
     ['POST', '/api/openlist/files/mkdir', { body: 12345 }, { minStatus: 400, maxStatus: 499, noOk: true }, '数字 body'],
-    ['POST', '/api/proxy/test', { body: { url: 'x'.repeat(2200000) } }, { minStatus: 400, maxStatus: 499, noOk: true }, '超大 JSON body'],
+    ['POST', '/api/proxy/test', { body: { url: 'x'.repeat(2200000) } }, { exactStatus: 413, noOk: true }, '超大 JSON body'],
   ];
   for (const [method, p, opts, expect, label] of cases) {
     const r = await call(method, p, opts);

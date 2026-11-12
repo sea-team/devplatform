@@ -52,6 +52,16 @@ function testCore() {
     ['代理隧道建立失败（connect ETIMEDOUT）', 502],
     ['The operation was aborted due to timeout', 502],
     ['connect ENOTFOUND github.com', 502],
+    // v0.3.12：请求体解析 / 业务校验 / 上游失败不再是 500
+    ['请求体不是合法 JSON', 400], ['请求体过大', 413],
+    ['当前未设置 ADMIN_TOKEN，仅允许只读诊断命令', 403],
+    ['命令不在只读白名单内', 403], ['未授权写操作', 403],
+    ['端口 3000 已被同一目标上的另一个扩展实例占用', 409],
+    ['docker load 失败：unexpected EOF', 502],
+    ['AI 服务返回内容不是合法 JSON', 502],
+    ['AI 服务自定义 Headers 不是合法 JSON', 400],
+    ['路径含非法字符', 400], ['请选择镜像 tar 文件', 400],
+    ['找不到对应的恢复模板', 404],
     ['Unexpected token in JSON', 500], // 真·代码异常必须仍是 500
   ];
   for (const [msg, want] of cases) {

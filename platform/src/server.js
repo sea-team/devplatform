@@ -1231,7 +1231,13 @@ app.get('/api/docker/images/export', wrap(async (req, res) => {
 
 // 小镜像 tar 直接上传（mini.js raw 上限 100MB）；大镜像请用 /load-path 指向已有文件。
 app.post('/api/docker/images/load', wrap(async (req, res) => {
-  ok(res, await dockerPanel.loadImage(dockerTarget(req), { buffer: req.body }));
+  // raw 路由会把任何请求体当二进制接收：若不校验长度，2 字节的 `{}` 也会被
+  // 当成 tar 送给 Docker，最终以上游错误的形式返回 500。先在边界上挡掉。
+  const buf = req.body;
+  if (!Buffer.isBuffer(buf) || buf.length < 1024) {
+    throw badRequest('请选择有效的镜像 tar 文件（内容为空或不完整）');
+  }
+  ok(res, await dockerPanel.loadImage(dockerTarget(req), { buffer: buf }));
 }), { raw: true });
 
 app.post('/api/docker/images/load-path', wrap(async (req, res) => {
