@@ -2771,3 +2771,9 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 | 深度审计 | `api-audit`：197 条路由 / **313 次请求**，0 问题、0 个 500、0 网络异常，脱敏扫描无凭据泄漏 |
 
 > 本轮只改源码与文档，未打 tag、未发 GitHub Release。浏览器需硬刷新（或重新登录）以拉取 `?v=20261113f`。
+
+### 43.6 加固：重置密码接口不再接受空参数（2026-11-13 补）
+
+**现象**：部署后跑 `api-sweep --full` / `api-audit` 回归，管理员密码被无声换掉，按 `initial-admin.txt` 里的密码无法登录。原因是两套巡检对写路由统一发 `{}`，而 `POST /api/auth/reset-password` 把「未传 password」解释成「自动生成随机密码」；随机值只出现在那次响应里，无人记录。远端 `state.json` 的修改时间可直接定位触发时刻。部署包本身排除 `state.json` / `.env`，**部署不会改密码**。
+
+**修复**：① 两套巡检把账号类写接口（重置密码、改密、2FA 设置/关闭、用户增改删）加入跳过清单；② `server.js` 对空 body 一律返回 400，自动生成随机密码必须显式带 `username` 或 `generate=true`（命令行 `reset-admin-password.js` 始终带账号，行为不变）；③ `auth.js` 写入 `passwordChangedAt / passwordChangedVia` 并打印不含明文的审计日志，`GET /api/users` 可查；④ `api-audit` 增加「空参数被拒绝」安全探测，`smoke-auth` 增加 3 项回归（39 → 42 项），前端自检增加 1 项（87 → 88 项）。

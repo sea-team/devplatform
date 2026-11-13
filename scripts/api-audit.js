@@ -54,6 +54,17 @@ const NO_CALL = new Set([
   'POST /api/ai/local/test',
   'PUT /api/env-config',
   'GET /api/servers/:id/terminal/stream',
+  // 2026-11-13 事故复盘：账号类写接口即使空 body 也会改真实数据。
+  // POST /api/auth/reset-password 空 body 会把 admin 密码无声改成随机值；
+  // setup2fa 会写入密钥、deleteUser 会禁用账号。巡检一律不调用。
+  'POST /api/auth/reset-password',
+  'POST /api/auth/password',
+  'POST /api/auth/2fa/setup',
+  'POST /api/auth/2fa/confirm',
+  'POST /api/auth/2fa/disable',
+  'POST /api/users',
+  'PUT /api/users/:id',
+  'DELETE /api/users/:id',
 ]);
 
 const QUERY = {
@@ -191,6 +202,8 @@ async function sweepAll(ids) {
 /* ------------- 2. 巡检跳过的副作用接口（安全参数触发校验） ------------- */
 async function skippedProbes() {
   const probes = [
+    // 2026-11-13 加固回归：空 body 必须被拒绝，绝不触发「自动生成随机密码」。
+    ['POST', '/api/auth/reset-password', { body: {} }, { exactStatus: 400, noOk: true }, '重置密码空参数被拒绝'],
     ['POST', '/api/deploy', { body: {} }, { minStatus: 400 }],
     ['POST', '/api/ide/password', { body: {} }, {}],
     ['POST', '/api/repos/git', { body: { repo: MISSING, command: 'status' } }, { minStatus: 400 }],

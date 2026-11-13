@@ -169,7 +169,16 @@ function publicUser(u) {
     totpEnabled: Boolean(u.totpEnabled),
     isInitialAdmin: Boolean(u.isInitialAdmin),
     createdAt: u.createdAt || '', lastLoginAt: u.lastLoginAt || '',
+    // 密码变更留痕（2026-11-13）：只记时间与触发通道，绝不返回哈希或明文。
+    passwordChangedAt: u.passwordChangedAt || '', passwordChangedVia: u.passwordChangedVia || '',
   };
+}
+
+/** 统一写密码变更审计字段并打一条不含明文的结构化日志，便于事后定位「谁改了密码」。 */
+function auditPasswordChange(user, via) {
+  const at = new Date().toISOString();
+  console.log(`[auth] password changed: user=${user && user.username} via=${via} at=${at}`);
+  return { passwordChangedAt: at, passwordChangedVia: String(via || 'unknown') };
 }
 
 /**
@@ -403,14 +412,17 @@ function changePassword(user, body) {
   const next = validatePassword((body && body.newPassword) || '');
   update((s) => {
     const u = (s.users || []).find((x) => x.id === current.id);
-    if (u) { u.passwordHash = hashPassword(next); u.mustChangePassword = false; }
+    if (u) {
+      u.passwordHash = hashPassword(next); u.mustChangePassword = false;
+      Object.assign(u, auditPasswordChange(current, 'self'));
+    }
   });
   revokeSessionsOf(current.id);
   return { ok: true, message: '密码已修改，请重新登录' };
 }
 
 /** CLI / 管理员重置密码：吊销该账号所有会话；重置后无需再强制改密。 */
-function resetPassword(username, newPassword) {
+function resetPassword(username, newPassword, via = 'local') {
   const target = username ? byName(username) : activeAdmins()[0];
   if (!target) throw notFound('未找到要重置的账号');
   const password = newPassword ? validatePassword(newPassword) : crypto.randomBytes(12).toString('base64url');
@@ -420,6 +432,7 @@ function resetPassword(username, newPassword) {
       u.passwordHash = hashPassword(password);
       u.mustChangePassword = false;
       u.status = 'active';
+      Object.assign(u, auditPasswordChange(target, via));
     }
     s.sessions = (s.sessions || []).filter((x) => x.userId !== target.id);
   });
@@ -508,7 +521,10 @@ function updateUser(id, body, actor) {
     }
     patch.status = status;
   }
-  if (body && body.password) patch.passwordHash = hashPassword(validatePassword(body.password));
+  if (body && body.password) {
+    patch.passwordHash = hashPassword(validatePassword(body.password));
+    Object.assign(patch, auditPasswordChange(user, 'admin'));
+  }
   update((s) => {
     const u = (s.users || []).find((x) => x.id === id);
     if (u) Object.assign(u, patch);

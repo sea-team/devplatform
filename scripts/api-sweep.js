@@ -85,6 +85,18 @@ const SKIP = new Set([
   'PUT /api/openlist/files/content',
   'PUT /api/openlist/files/upload',
   'PUT /api/servers/:id/files/upload',
+  // 2026-11-13 事故复盘：账号类写接口即使空 body 也会改真实数据。
+  // 尤其 POST /api/auth/reset-password：空 body 会被后端解释成「自动生成随机密码」，
+  // 直接把 admin 的 passwordHash 换掉，导致每次部署后跑回归巡检就无法登录。
+  // 这类接口一律只登记、不调用；需要验证时用专用脚本 + 显式参数。
+  'POST /api/auth/reset-password',
+  'POST /api/auth/password',
+  'POST /api/auth/2fa/setup',
+  'POST /api/auth/2fa/confirm',
+  'POST /api/auth/2fa/disable',
+  'POST /api/users',
+  'PUT /api/users/:id',
+  'DELETE /api/users/:id',
 ]);
 
 /* ------------------------------ 请求工具 ------------------------------ */

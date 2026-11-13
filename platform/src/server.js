@@ -115,7 +115,14 @@ app.post('/api/auth/password', wrap(async (req, res) => {
 app.post('/api/auth/reset-password', wrap(async (req, res) => {
   const via = req.identity && req.identity.via;
   if (via !== 'cli' && !permissions.isAdmin(req.user)) throw new HttpError(403, '无权重置账号密码');
-  ok(res, auth.resetPassword(req.body && req.body.username, req.body && req.body.password));
+  const b = req.body && typeof req.body === 'object' ? req.body : {};
+  // 2026-11-13 事故复盘：巡检脚本对写路由统一发 {}，本接口曾把它解释成
+  // 「自动生成随机密码」，无声改掉 admin 的哈希导致无法登录。
+  // 现在自动生成必须显式表达意图（带 username 或 generate=true），空 body 一律拒绝。
+  if (!b.password && !b.username && b.generate !== true) {
+    throw badRequest('请指定要重置的账号与新密码；自动生成随机密码需带 username 或 generate=true');
+  }
+  ok(res, auth.resetPassword(b.username, b.password, via || 'unknown'));
 }));
 // 登录第二步：校验 TOTP / 恢复码（公开接口，凭 totpToken 完成挑战）。
 app.post('/api/auth/2fa', wrap(async (req, res) => ok(res, auth.verify2fa(req, res, req.body))));

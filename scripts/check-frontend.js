@@ -339,6 +339,14 @@ note(!html.includes('id="view-collab"') && !app.includes('loadCollabResources')
   && permSrc.includes('proxy\\/overrides'),
 '资源协作页已移除；协作者按单个对象配置，删除 / 禁用时清理悬空引用');
 
+// 6) 2026-11-13 事故复盘：巡检不得再无声改掉管理员密码。
+const sweepSrc = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', 'api-sweep.js'), 'utf8');
+const auditSrc = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', 'api-audit.js'), 'utf8');
+note(serverSrc.includes('b.generate !== true') && authSrc.includes('auditPasswordChange')
+  && authSrc.includes('passwordChangedAt') && sweepSrc.includes("'POST /api/auth/reset-password'")
+  && auditSrc.includes("'POST /api/auth/reset-password'") && auditSrc.includes('重置密码空参数被拒绝'),
+'重置密码空 body 被拒绝、密码变更可追溯，两套巡检均跳过账号类写接口');
+
 const scripts = [...html.matchAll(/<script src="\/vendor\/([^"]+)"/g)].map((m) => m[1]);
 const cmIndex = scripts.indexOf('codemirror.js');
 const modesIndex = scripts.indexOf('cm-modes.js');

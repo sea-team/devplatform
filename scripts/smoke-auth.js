@@ -172,6 +172,15 @@ async function main() {
     '重置后的密码可直接登录');
   const resetNoCli = await call('/api/auth/reset-password', { method: 'POST', cookie: alice, body: { username: 'bob' } });
   check(resetNoCli.status === 403, '非管理员、非本机 CLI 不能重置密码');
+  // 2026-11-13 回归：巡检曾对写路由统一发 {}，被本接口解释成「自动生成随机密码」，
+  // 无声改掉管理员哈希导致部署后无法登录。空 body 必须拒绝，且不得改动任何密码。
+  const resetEmpty = await call('/api/auth/reset-password', { method: 'POST', cli: true, body: {} });
+  check(resetEmpty.status === 400, '空 body 重置密码被拒绝，不会无声改掉密码');
+  check((await call('/api/auth/login', { method: 'POST', body: { username: 'bob', password: reset.json.data.password } })).status === 200,
+    '空 body 被拒后账号密码保持不变');
+  const usersMeta = await call('/api/users', { cookie: admin });
+  check((usersMeta.json.data.items || []).some((u) => u.username === 'bob' && u.passwordChangedAt),
+    '密码变更时间已写入账号，可事后追溯');
 
   // 重置密码会吊销该账号旧会话，重新登录后再验证登出。
   const bobAgain = await call('/api/auth/login', { method: 'POST', body: { username: 'bob', password: reset.json.data.password } });
