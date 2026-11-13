@@ -5052,7 +5052,7 @@ function hideLogin() {
 
 function renderAuthBox(user) {
   currentUser = user || null;
-  const box = $('#auth-box');
+  const box = $('#auth-wrap');
   if (!box) return;
   if (!currentUser) { box.hidden = true; return; }
   box.hidden = false;
@@ -5166,20 +5166,20 @@ if ($('#auth-logout')) $('#auth-logout').addEventListener('click', async () => {
   if (typeof location !== 'undefined') location.reload();
 });
 
-/* 账号 pill 展开 / 收起（与版本徽标同款交互） */
-(function setupAuthPill() {
-  const pill = $('#auth-pill');
+/* 顶栏账号图标：点击展开 / 收起菜单（与版本徽标同款交互） */
+(function setupAuthMenu() {
+  const btn = $('#auth-btn');
   const menu = $('#auth-menu');
-  if (!pill || !menu) return;
+  if (!btn || !menu) return;
   const setMenu = (open) => {
     const show = open === undefined ? menu.hidden : open;
     menu.hidden = !show;
-    pill.setAttribute('aria-expanded', String(show));
+    btn.setAttribute('aria-expanded', String(show));
   };
-  pill.addEventListener('click', (e) => { e.stopPropagation(); setMenu(); });
+  btn.addEventListener('click', (e) => { e.stopPropagation(); setMenu(); });
   document.addEventListener('click', (e) => {
     if (menu.hidden) return;
-    if (menu.contains(e.target) || pill.contains(e.target)) return;
+    if (menu.contains(e.target) || btn.contains(e.target)) return;
     setMenu(false);
   });
   ['#auth-security', '#auth-password', '#auth-logout'].forEach((sel) => {

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261113a" />
+  <link rel="stylesheet" href="/style.css?v=20261113b" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -59,25 +59,6 @@
         </div>
       </div>
 
-      <div class="auth-box" id="auth-box" hidden>
-        <button class="auth-pill" id="auth-pill" type="button" aria-haspopup="true" aria-expanded="false">
-          <span class="avatar" id="auth-avatar">U</span>
-          <span class="user-meta">
-            <span class="user-name" id="auth-name"></span>
-            <span class="user-sub">
-              <span class="badge gray" id="auth-role"></span>
-              <span class="badge green" id="auth-2fa" hidden>2FA</span>
-            </span>
-          </span>
-          <span class="caret">▾</span>
-        </button>
-        <div class="auth-menu" id="auth-menu" hidden>
-          <button type="button" id="auth-security"><span class="act-ico">⛨</span>账号安全</button>
-          <button type="button" id="auth-password"><span class="act-ico">⚿</span>修改密码</button>
-          <button type="button" id="auth-logout" class="auth-logout"><span class="act-ico">⏻</span>登出</button>
-        </div>
-      </div>
-
       <nav class="nav" id="nav">
         <button class="nav-item active" data-view="overview"><span class="ico">◈</span>总览</button>
         <button class="nav-item" data-view="repos"><span class="ico">⑂</span>Git 仓库</button>
@@ -112,6 +93,24 @@
         <div class="tabbar-tools">
           <span class="pill live pill-mini" id="demo-pill">正常模式</span>
           <button class="tab-tool sys-version" id="sys-btn" title="版本与热更新" aria-label="版本与热更新">版本</button>
+          <div class="auth-wrap" id="auth-wrap" hidden>
+            <button class="tab-tool" id="auth-btn" title="账号" aria-label="账号" aria-haspopup="true" aria-expanded="false">👤</button>
+            <div class="auth-menu" id="auth-menu" hidden>
+              <div class="auth-head">
+                <span class="avatar" id="auth-avatar">U</span>
+                <div class="auth-head-meta">
+                  <span class="user-name" id="auth-name"></span>
+                  <span class="user-sub">
+                    <span class="badge gray" id="auth-role"></span>
+                    <span class="badge green" id="auth-2fa" hidden>2FA</span>
+                  </span>
+                </div>
+              </div>
+              <button type="button" id="auth-security"><span class="act-ico">⛨</span>账号安全</button>
+              <button type="button" id="auth-password"><span class="act-ico">⚿</span>修改密码</button>
+              <button type="button" id="auth-logout" class="auth-logout"><span class="act-ico">⏻</span>登出</button>
+            </div>
+          </div>
           <button class="tab-tool" id="tab-info" title="当前标签说明" aria-label="查看当前标签说明">ⓘ</button>
           <button class="tab-tool" id="refresh-btn" title="刷新当前页" aria-label="刷新当前页">⟳</button>
           <button class="tab-tool" id="tab-new" title="新建文件管理器 / 终端">＋</button>
@@ -1579,6 +1578,6 @@
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
   <script src="/vendor/qrcode.js"></script>
-  <script src="/app.js?v=20261113a"></script>
+  <script src="/app.js?v=20261113b"></script>
 </body>
 </html>
