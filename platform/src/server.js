@@ -31,6 +31,7 @@ const workspaceGit = require('./workspaceGit');
 const fileTypes = require('./fileTypes');
 const auth = require('./auth');
 const permissions = require('./permissions');
+const aiSessions = require('./aiSessions');
 
 // 面板里保存过的 OpenList 连接优先于 .env（不改文件、重启后仍然生效）。
 openlist.applyConfig();
@@ -54,6 +55,10 @@ const visible = (req, items) => permissions.visible(req.user, items);
  */
 function filterResponse(req, payload) {
   const user = req.user;
+  // AI 会话（含消息与工具调用轨迹）由 aiSessions 按 ownerId 逐入口校验，
+  // 轨迹里常带 build_/srv_ 等资源 id，若走通用裁剪会把合法的轨迹内容误删。
+  const pathname = String((req.url || '').split('?')[0] || '');
+  if (/^\/api\/ai\/sessions(?:\/|$)/.test(pathname)) return payload;
   if (!payload || !payload.ok || !payload.data || permissions.isAdmin(user)) return payload;
   const keep = (item) => {
     if (!item || typeof item !== 'object' || !item.id) return true;
@@ -778,6 +783,15 @@ app.get('/api/builds/:id/log', wrap(async (req, res) => {
   ok(res, { id: build.id, status: build.status, logs: build.logs });
 }));
 
+// 删除构建记录（v0.4.3）。权限由 guard() 按 delete 判定：仅 owner / 管理员，
+// 协作者不可删。运行中的记录删除后异步回写会因找不到目标而自然终止，不会复活。
+app.delete('/api/builds/:id', wrap(async (req, res) => {
+  const build = state().builds.find((b) => b.id === req.params.id);
+  if (!build) return fail(res, '构建记录不存在', 404);
+  update((s) => { s.builds = (s.builds || []).filter((b) => b.id !== req.params.id); });
+  ok(res, { deleted: req.params.id });
+}));
+
 app.post('/api/deploy', wrap(async (req, res) => {
   requireBody(req.body, ['buildId', 'serverId']);
   ok(res, await deployBuild(req.body));
@@ -1105,6 +1119,27 @@ app.post('/api/ai/ops', wrap(async (req, res) => {
 }));
 
 app.get('/api/ai/tools', (req, res) => ok(res, { readCommands: READ_COMMANDS }));
+
+/* --------------------- AI 运维对话会话（v0.4.3） --------------------- */
+// 会话按 ownerId 隔离；附件（图片 / 文本）随消息一起落库，可恢复继续对话。
+// 注意：会话不在 OWNED_COLLECTIONS 中，不参与资源协作，也不被 filterResponse 过滤，
+// 归属校验统一由 aiSessions 模块内部完成。
+app.get('/api/ai/sessions', wrap(async (req, res) => ok(res, { items: aiSessions.list(req.user) })));
+
+app.post('/api/ai/sessions', wrap(async (req, res) => ok(res, aiSessions.create(req.user, req.body || {}))));
+
+app.get('/api/ai/sessions/:id', wrap(async (req, res) => ok(res, aiSessions.detail(req.user, req.params.id))));
+
+app.put('/api/ai/sessions/:id', wrap(async (req, res) => ok(res, aiSessions.modify(req.user, req.params.id, req.body || {}))));
+
+app.delete('/api/ai/sessions/:id', wrap(async (req, res) => ok(res, aiSessions.remove(req.user, req.params.id))));
+
+app.post('/api/ai/sessions/:id/clear', wrap(async (req, res) => ok(res, aiSessions.clearMessages(req.user, req.params.id))));
+
+// 单条消息含 base64 图片，放宽到 20MB；更小的硬上限在 aiSessions.normalizeAttachments 里。
+app.post('/api/ai/sessions/:id/messages', wrap(async (req, res) => {
+  ok(res, await aiSessions.send(req.user, req.params.id, req.body || {}));
+}), { bodyLimit: 20 * 1024 * 1024 });
 
 /* ----------------------- 扩展 / 数据库（manifest v1） ----------------------- */
 // 三类运行形态统一由这一组接口管理：

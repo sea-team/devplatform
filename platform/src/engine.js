@@ -343,24 +343,81 @@ async function executeTool(name, args, allowWrite) {
   }
 }
 
-async function opsAgent({ providerId, prompt, allowWrite = false }) {
+/* ---------------------- 对话附件 → 模型输入（v0.4.3） ---------------------- */
+// 附件统一结构：{ name, mime, size, kind: 'image' | 'text', data }
+//   image → data 为 dataURL（data:image/...;base64,xxx），按 OpenAI vision 格式送入；
+//   text  → data 为文件文本内容，拼进提示词。
+// 本地 CLI / 不支持 vision 的模型自动降级为纯文本，不中断对话。
+const MAX_ATTACHMENT_TEXT = 60000;
+const MAX_HISTORY_TURNS = 20;
+
+function attachmentList(attachments) {
+  const list = Array.isArray(attachments) ? attachments : [];
+  return list.filter((a) => a && a.name).map((a) => ({
+    name: String(a.name).slice(0, 200),
+    mime: String(a.mime || '').slice(0, 120),
+    size: Number(a.size) || 0,
+    kind: a.kind === 'image' ? 'image' : 'text',
+    data: String(a.data || ''),
+  }));
+}
+
+function buildPrompt(prompt, attachments) {
+  const parts = [];
+  if (attachments.length) {
+    const names = attachments.map((a) => (a.kind === 'image' ? `[图片] ${a.name}` : `[文件] ${a.name}`)).join('、');
+    parts.push(`（本次附带附件：${names}）\n`);
+  }
+  parts.push(String(prompt || ''));
+  for (const a of attachments) {
+    if (a.kind === 'text' && a.data) {
+      parts.push(`\n\n=== 附件文件：${a.name} ===\n${a.data.slice(0, MAX_ATTACHMENT_TEXT)}`);
+    }
+  }
+  return parts.join('');
+}
+
+/** 需要图片时返回 OpenAI vision 的 content 数组，否则返回纯文本字符串。 */
+function buildUserContent(provider, prompt, attachments, withImages) {
+  const text = buildPrompt(prompt, attachments);
+  if (provider.kind === 'cli' || !withImages) return text;
+  const images = attachments.filter((a) => a.kind === 'image' && /^data:image\//i.test(a.data));
+  if (!images.length) return text;
+  return [
+    { type: 'text', text },
+    ...images.map((a) => ({ type: 'image_url', image_url: { url: a.data } })),
+  ];
+}
+
+function historyTurns(history) {
+  return (Array.isArray(history) ? history : [])
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content)
+    .slice(-MAX_HISTORY_TURNS)
+    .map((m) => ({ role: m.role, content: String(m.content).slice(0, 8000) }));
+}
+
+async function opsAgent({ providerId, prompt, allowWrite = false, history = [], attachments = [] }) {
   const provider = state().aiProviders.find((p) => p.id === providerId)
     || state().aiProviders.find((p) => p.enabled !== false);
   if (!provider) throw new Error('请先在「AI 服务」中配置一个模型服务');
 
+  const files = attachmentList(attachments);
+  const turns = historyTurns(history);
+  const withImages = provider.kind !== 'cli' && files.some((a) => a.kind === 'image');
   const system = [
     provider.kind === 'cli'
       ? '你是服务器运维助手。平台已提前采集好实时上下文并附在问题后面，请直接基于这些数据分析，不要假设可以自己调用工具。'
       : '你是服务器运维助手，可以调用工具查看服务器状态、构建日志和只读诊断命令。',
     '回答用简体中文，结论先行，给出可执行的建议。',
+    '这是一段连续对话，请结合上文理解用户所指的「它 / 刚才 / 继续」等表述。',
     allowWrite ? '用户已授权写操作，必要时可执行部署。' : '当前为只读模式，禁止任何修改类操作。',
     `可用服务器：${JSON.stringify(state().servers.map((s) => ({ id: s.id, name: s.name, host: s.host })))}`,
   ].join('\n');
 
   const trace = [];
 
-  // 本地 CLI（codex / claude / WSL）没有 function calling 能力：
-  // 由平台先执行只读工具采集上下文，再把上下文拼进一次提问里。
+  // 本地 CLI（codex / claude / WSL）没有 function calling 能力，也不接收二进制图片：
+  // 由平台先执行只读工具采集上下文，再把上下文 + 历史 + 附件文本拼进一次提问里。
   if (provider.kind === 'cli') {
     const context = [];
     for (const server of state().servers) {
@@ -385,9 +442,15 @@ async function opsAgent({ providerId, prompt, allowWrite = false }) {
     }
     if (!context.length) context.push('平台当前没有配置服务器，也没有构建记录。');
 
+    const historyText = turns.length
+      ? `\n\n=== 历史对话 ===\n${turns.map((t) => `[${t.role === 'assistant' ? '助手' : '用户'}]\n${t.content}`).join('\n\n')}`
+      : '';
+    const imageNote = files.some((a) => a.kind === 'image')
+      ? '\n\n（用户附带了图片，但当前本地 CLI 服务不支持图像输入，已自动降级为文字说明，请勿臆测图片内容。）'
+      : '';
     const response = await aiChat(provider, [
       { role: 'system', content: system },
-      { role: 'user', content: `${prompt}\n\n=== 平台实时上下文（由平台采集） ===\n${context.join('\n\n')}` },
+      { role: 'user', content: `${buildPrompt(prompt, files)}${imageNote}${historyText}\n\n=== 平台实时上下文（由平台采集） ===\n${context.join('\n\n')}` },
     ]);
     return {
       answer: response.choices?.[0]?.message?.content || '',
@@ -395,19 +458,41 @@ async function opsAgent({ providerId, prompt, allowWrite = false }) {
       provider: provider.name,
       model: `${provider.command === 'custom' ? (provider.customCommand || 'custom') : (provider.command || 'cli')} (${provider.runner === 'wsl' ? `WSL:${provider.distro || 'default'}` : '宿主机'})`,
       mode: 'context-injection',
+      attachmentMode: files.some((a) => a.kind === 'image') ? 'text-fallback' : (files.length ? 'text' : 'none'),
     };
   }
 
-  const messages = [{ role: 'system', content: system }, { role: 'user', content: prompt }];
+  const messages = [
+    { role: 'system', content: system },
+    ...turns,
+    { role: 'user', content: buildUserContent(provider, prompt, files, withImages) },
+  ];
   const tools = opsTools(allowWrite);
+  let visionFallback = false;
 
   for (let round = 0; round < 5; round += 1) {
-    const response = await aiChat(provider, messages, tools);
+    let response;
+    try {
+      response = await aiChat(provider, messages, tools);
+    } catch (e) {
+      // 部分模型 / 中转不支持 vision：首轮失败时自动去掉图片、改为纯文本重试。
+      if (round === 0 && withImages && !visionFallback) {
+        visionFallback = true;
+        messages[messages.length - 1] = { role: 'user', content: buildPrompt(prompt, files) };
+        response = await aiChat(provider, messages, tools);
+      } else {
+        throw e;
+      }
+    }
     const message = response.choices && response.choices[0] && response.choices[0].message;
     if (!message) throw new Error('AI 服务响应格式异常');
     messages.push(message);
     if (!message.tool_calls || !message.tool_calls.length) {
-      return { answer: message.content || '', trace, provider: provider.name, model: provider.model };
+      return {
+        answer: typeof message.content === 'string' ? message.content : '',
+        trace, provider: provider.name, model: provider.model,
+        attachmentMode: visionFallback ? 'text-fallback' : (withImages ? 'vision' : (files.length ? 'text' : 'none')),
+      };
     }
     for (const call of message.tool_calls) {
       let args = {};
@@ -422,7 +507,11 @@ async function opsAgent({ providerId, prompt, allowWrite = false }) {
       messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(content).slice(0, 20000) });
     }
   }
-  return { answer: '已达到工具调用轮次上限，请缩小问题范围后重试。', trace, provider: provider.name, model: provider.model };
+  return {
+    answer: '已达到工具调用轮次上限，请缩小问题范围后重试。',
+    trace, provider: provider.name, model: provider.model,
+    attachmentMode: visionFallback ? 'text-fallback' : (withImages ? 'vision' : (files.length ? 'text' : 'none')),
+  };
 }
 
 module.exports = {

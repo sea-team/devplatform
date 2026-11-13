@@ -30,8 +30,10 @@ const VIEW_META = {
   proxy: ['代理配置', '全局 / 分组 / Git Host 规则 / 单项覆盖，四级优先级解析与连通性测试'],
   environment: ['环境适配', '自动识别环境、体检、切换档案与自动处置，换机器无需改代码'],
   envcfg: ['环境配置', '查看与管理 .env：白名单写入、脱敏、待重启提示与诊断联动的配置指引'],
-  ai: ['AI 服务配置', 'API 服务、宿主机 / WSL 本地 AI 程序与代理'],
-  ops: ['AI 运维', '让 AI 查询状态、分析日志并给出建议'],
+  ai: ['配置 AI 服务', 'API 服务、宿主机 / WSL 本地 AI 程序与代理'],
+  'ai-list': ['已配置服务', '查看、编辑、删除已保存的 AI 服务'],
+  'ai-test': ['连通性测试', '向已保存的服务发起真实请求验证可用性'],
+  ops: ['AI 运维', '多轮对话式运维助手，支持文件 / 图片与会话留存'],
   users: ['账号管理', '管理员新增账号、调整角色、禁用与重置密码'],
   collab: ['资源协作', '按 Gitea 仓库协作者语义管理资源授权（read / write）'],
 };
@@ -42,7 +44,7 @@ const MODULE_ICONS = {
   servers: '▣', 'server-new': '＋', extensions: '▦', gitsrc: '⑃',
   docker: '⬡', 'docker-containers': '▣', 'docker-images': '◫', 'docker-volumes': '⛁',
   'docker-networks': '⌘', 'docker-compose': '▦',
-  proxy: '⇄', environment: '⌬', envcfg: '⚙', ai: '✦', ops: '◎',
+  proxy: '⇄', environment: '⌬', envcfg: '⚙', ai: '✦', 'ai-list': '☷', 'ai-test': '⇆', ops: '◎',
   users: '♙', collab: '⇆',
 };
 // 子页面归属：侧边栏主项保持高亮，标签栏仍显示各自的子页标题。
@@ -50,6 +52,7 @@ const NAV_GROUP = {
   'repo-new': 'repos', 'repo-clone': 'repos',
   'storage-conn': 'storage', 'storage-mounts': 'storage', 'storage-drivers': 'storage',
   'build-start': 'builds', deploys: 'builds', 'server-new': 'servers',
+  'ai-list': 'ai', 'ai-test': 'ai',
   'docker-containers': 'docker', 'docker-images': 'docker', 'docker-volumes': 'docker',
   'docker-networks': 'docker', 'docker-compose': 'docker',
 };
@@ -1838,9 +1841,25 @@ async function loadBuilds() {
           ${badge(b.status === 'success' ? '成功' : b.status === 'failed' ? '失败' : b.status === 'running' ? '构建中' : b.status,
             b.status === 'success' ? 'green' : b.status === 'failed' ? 'red' : b.status === 'running' ? 'blue' : 'gray')}
           <button class="btn btn-sm" data-log="${esc(b.id)}">日志</button>
+          <button class="btn btn-sm btn-danger" data-build-del="${esc(b.id)}">删除</button>
         </div>
       </div>`).join('') : '<div class="empty">还没有构建任务，先在上方启动一次</div>';
     $$('[data-log]').forEach((b) => b.addEventListener('click', () => watchLog(b.dataset.log)));
+    $$('[data-build-del]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm('确认删除这条构建记录？（仅删除记录与日志，不影响已部署的产物）')) return;
+      try {
+        const id = b.dataset.buildDel;
+        await api(`/builds/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        toast('构建记录已删除');
+        if (typeof logTimer !== 'undefined' && logTimer) { clearInterval(logTimer); logTimer = null; }
+        if (typeof selectedBuildId !== 'undefined' && selectedBuildId === id) {
+          selectedBuildId = '';
+          const logBox = $('#build-log'); if (logBox) logBox.textContent = '—';
+          const target = $('#log-target'); if (target) target.textContent = '选择一条构建记录';
+        }
+        loadBuilds();
+      } catch (e) { toast(e.message, true); }
+    }));
 
     $('#deploy-list').innerHTML = table(['时间', '服务器', '目标目录', '状态', '结果'], (deploys.items || []).map((d) => `
       <tr><td class="muted">${esc(fmtTime(d.createdAt))}</td><td>${esc(d.serverName || d.serverId)}</td>
@@ -2703,11 +2722,27 @@ function providerSummary(p) {
   return `${esc(p.baseURL)} · ${esc(p.model)} · Key ${esc(p.apiKey || '未设置')}${p.proxy ? ' · 代理 ' + esc(p.proxy) : ''}`;
 }
 
+/** 把已配置服务填进所有页面的服务商下拉（连通性测试 / AI 运维会话）。 */
+function fillProviderSelects(items) {
+  const options = items.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} · ${p.kind === 'cli' ? '本地 ' + esc(p.command) : esc(p.model)}</option>`).join('')
+    || '<option value="">请先配置服务</option>';
+  ['#chat-provider', '#ops-provider'].forEach((sel) => {
+    const el = $(sel);
+    if (!el) return;
+    const keep = el.value;
+    el.innerHTML = options;
+    if (keep && items.some((p) => p.id === keep)) el.value = keep;
+  });
+}
+
 async function loadAI() {
   try {
     const d = await api('/ai/providers');
     const items = d.items || [];
-    $('#provider-list').innerHTML = items.length ? items.map((p) => `
+    fillProviderSelects(items);
+    const box = $('#provider-list');
+    if (!box) return;
+    box.innerHTML = items.length ? items.map((p) => `
       <div class="list-item">
         <div><div class="title">${esc(p.name)} ${p.kind === 'cli' ? badge('本地 CLI', 'blue') : badge('API', 'gray')} ${p.enabled === false ? badge('已停用', 'gray') : badge('启用', 'green')}</div>
           <div class="desc">${providerSummary(p)}</div></div>
@@ -2716,12 +2751,9 @@ async function loadAI() {
           <button class="btn btn-sm" data-ai-proxy="${esc(p.id)}">代理</button>
           <button class="btn btn-sm btn-danger" data-delprovider="${esc(p.id)}">删除</button>
         </div>
-      </div>`).join('') : '<div class="empty">还没有配置 AI 服务</div>';
-    const options = items.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} · ${p.kind === 'cli' ? '本地 ' + esc(p.command) : esc(p.model)}</option>`).join('');
-    $('#chat-provider').innerHTML = options || '<option value="">请先配置服务</option>';
-    $('#ops-provider').innerHTML = options || '<option value="">请先配置服务</option>';
+      </div>`).join('') : '<div class="empty">还没有配置 AI 服务，请在「配置 AI 服务」页添加</div>';
 
-    $$('[data-edit]').forEach((b) => b.addEventListener('click', async () => {
+    box.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', async () => {
       try {
         const all = await api('/ai/providers');
         const p = (all.items || []).find((x) => x.id === b.dataset.edit);
@@ -2744,30 +2776,317 @@ async function loadAI() {
           }
           $('#cli-distro').value = p.distro || '';
         }
+        switchView('ai');                    // 表单已拆到独立子页，编辑时自动跳过去
         toast(`正在编辑 ${p.name}`);
       } catch (e) { toast(e.message, true); }
     }));
-    $$('[data-ai-proxy]').forEach((b) => b.addEventListener('click', () => gotoProxyOverride('ai', b.dataset.aiProxy)));
-    $$('[data-delprovider]').forEach((b) => b.addEventListener('click', async () => {
+    box.querySelectorAll('[data-ai-proxy]').forEach((b) => b.addEventListener('click', () => gotoProxyOverride('ai', b.dataset.aiProxy)));
+    box.querySelectorAll('[data-delprovider]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm('确认删除这个 AI 服务配置？')) return;
       try { await api(`/ai/providers/${b.dataset.delprovider}`, { method: 'DELETE' }); toast('已删除'); loadAI(); }
       catch (e) { toast(e.message, true); }
     }));
-  } catch (e) { $('#provider-list').innerHTML = errorBlock(e.message); }
+  } catch (e) { if ($('#provider-list')) $('#provider-list').innerHTML = errorBlock(e.message); }
 }
 
-/* -------------------------------- AI 运维 -------------------------------- */
+/* ------------------------ AI 运维 · 对话模式（v0.4.3） ------------------------ */
+// 会话由后端持久化（state.aiSessions），按账号隔离；消息里保留附件与工具调用轨迹，
+// 刷新 / 换设备后可恢复继续对话。图片走 vision，文本文件读内容；不支持时后端自动降级。
+const opsState = { sessions: [], currentId: '', attachments: [], sending: false, bound: false };
+
+function opsStatus(text) { const el = $('#ops-status'); if (el) el.textContent = text || ''; }
+
+/* 附件读取：图片转 dataURL、文本转纯文本；过大文件直接拒绝。 */
+function readOpsAttachment(file) {
+  return new Promise((resolve, reject) => {
+    const name = file.name || 'file';
+    const mime = file.type || '';
+    const isImage = /^image\//.test(mime) || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
+    if (file.size > 3 * 1024 * 1024) return reject(new Error(`「${name}」超过 3MB，请压缩后再附加`));
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`读取「${name}」失败`));
+    if (isImage) {
+      reader.onload = () => compressOpsImage(String(reader.result), mime)
+        .then((data) => resolve({ name, mime: mime || 'image/png', size: file.size, kind: 'image', data }))
+        .catch(reject);
+      reader.readAsDataURL(file);
+    } else {
+      reader.onload = () => resolve({
+        name, mime: mime || 'text/plain', size: file.size, kind: 'text',
+        data: String(reader.result || '').slice(0, 200000),
+      });
+      reader.readAsText(file);
+    }
+  });
+}
+
+/* 图片等比压缩到最长边 1600px、JPEG 0.82，避免 base64 撑爆请求体与 state.json。 */
+function compressOpsImage(dataUrl, mime) {
+  return new Promise((resolve) => {
+    if (/svg/i.test(mime)) return resolve(dataUrl);   // SVG 直接透传
+    const img = new Image();
+    img.onerror = () => resolve(dataUrl);
+    img.onload = () => {
+      try {
+        const max = 1600;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        const out = canvas.toDataURL('image/jpeg', 0.82);
+        resolve(out.length < dataUrl.length ? out : dataUrl);
+      } catch { resolve(dataUrl); }
+    };
+    img.src = dataUrl;
+  });
+}
+
+function renderOpsAttachments() {
+  const box = $('#ops-attachments');
+  if (!box) return;
+  box.hidden = !opsState.attachments.length;
+  box.innerHTML = opsState.attachments.map((a, i) => `
+    <div class="ops-attach-item">
+      ${a.kind === 'image' && /^data:image\//.test(a.data)
+        ? `<img src="${esc(a.data)}" alt="${esc(a.name)}" class="ops-attach-thumb" />`
+        : '<span class="ops-attach-ico">▤</span>'}
+      <span class="ops-attach-name" title="${esc(a.name)}">${esc(a.name)}</span>
+      <button class="btn btn-ghost btn-sm" type="button" data-ops-attach-del="${i}" title="移除">✕</button>
+    </div>`).join('');
+  box.querySelectorAll('[data-ops-attach-del]').forEach((b) => b.addEventListener('click', () => {
+    opsState.attachments.splice(Number(b.dataset.opsAttachDel), 1);
+    renderOpsAttachments();
+  }));
+}
+
+function opsMessageHtml(m) {
+  const mine = m.role === 'user';
+  const attachments = (m.attachments || []).map((a) => {
+    if (a.kind === 'image' && a.data && /^data:image\//.test(a.data)) {
+      return `<a href="${esc(a.data)}" target="_blank" rel="noopener" class="ops-msg-image"><img src="${esc(a.data)}" alt="${esc(a.name)}" /></a>`;
+    }
+    return `<div class="ops-msg-file"><span>▤</span><span>${esc(a.name)}</span><span class="muted small">${esc(fmtSize(a.size || 0))}</span></div>`;
+  }).join('');
+
+  let trace = '';
+  if (m.role === 'assistant' && Array.isArray(m.trace) && m.trace.length) {
+    trace = `<details class="ops-trace"><summary>工具调用轨迹 · ${m.trace.length} 步</summary>
+      <pre class="log">${esc(JSON.stringify(m.trace, null, 2))}</pre></details>`;
+  }
+  const meta = m.role === 'assistant'
+    ? `<div class="ops-msg-meta muted small">${esc(fmtTime(m.at))}${m.provider ? ' · ' + esc(m.provider) : ''}${m.model ? ' · ' + esc(m.model) : ''}${m.attachmentMode === 'text-fallback' ? ' · 图片已降级为文字' : ''}${m.mode === 'context-injection' ? ' · 上下文注入模式' : ''}</div>`
+    : `<div class="ops-msg-meta muted small">${esc(fmtTime(m.at))}</div>`;
+  const body = m.error
+    ? `<div class="ops-msg-error">失败：${esc(m.error)}</div>`
+    : `<div class="ops-msg-text">${esc(m.content || '(空)')}</div>`;
+  return `<div class="ops-msg ${mine ? 'mine' : 'ai'}">
+    <div class="ops-msg-avatar">${mine ? '我' : 'AI'}</div>
+    <div class="ops-msg-body">
+      ${attachments ? `<div class="ops-msg-attachments">${attachments}</div>` : ''}
+      ${body}${trace}${meta}
+    </div>
+  </div>`;
+}
+
+function renderOpsMessages(messages, scroll = true) {
+  const box = $('#ops-messages');
+  if (!box) return;
+  box.innerHTML = messages && messages.length
+    ? messages.map(opsMessageHtml).join('')
+    : '<div class="empty">还没有消息，输入问题或附加日志 / 截图开始分析</div>';
+  if (scroll) box.scrollTop = box.scrollHeight;
+}
+
+function renderOpsSessions() {
+  const box = $('#ops-session-list');
+  if (!box) return;
+  box.innerHTML = opsState.sessions.length ? opsState.sessions.map((s) => `
+    <div class="ops-session ${s.id === opsState.currentId ? 'active' : ''}" data-ops-session="${esc(s.id)}">
+      <div class="ops-session-title">${esc(s.title || '新会话')}</div>
+      <div class="ops-session-meta muted small">${esc(fmtTime(s.updatedAt))} · ${s.messageCount || 0} 条</div>
+    </div>`).join('') : '<div class="empty">还没有会话，点「＋ 新建」开始</div>';
+  box.querySelectorAll('[data-ops-session]').forEach((b) => b.addEventListener('click', () => openOpsSession(b.dataset.opsSession)));
+}
+
+async function loadOpsSessions(preferId = '') {
+  try {
+    const d = await api('/ai/sessions');
+    opsState.sessions = d.items || [];
+    const wanted = preferId || opsState.currentId;
+    if (wanted && opsState.sessions.some((s) => s.id === wanted)) {
+      if (wanted === opsState.currentId) { renderOpsSessions(); return; }
+      return openOpsSession(wanted);
+    }
+    if (opsState.sessions.length) return openOpsSession(opsState.sessions[0].id);
+    opsState.currentId = '';
+    renderOpsSessions();
+    renderOpsMessages([]);
+    const t = $('#ops-chat-title'); if (t) t.textContent = 'AI 运维';
+    const sub = $('#ops-chat-sub'); if (sub) sub.textContent = '点「＋ 新建」开始一段新对话';
+  } catch (e) { toast(e.message, true); }
+}
+
+async function openOpsSession(id) {
+  try {
+    const s = await api(`/ai/sessions/${encodeURIComponent(id)}`);
+    opsState.currentId = s.id;
+    opsState.attachments = [];
+    renderOpsAttachments();
+    const t = $('#ops-chat-title'); if (t) t.textContent = s.title || '新会话';
+    const sub = $('#ops-chat-sub'); if (sub) sub.textContent = s.messageCount ? `${s.messageCount} 条消息 · 会话已留存，可继续对话` : '新会话';
+    const prov = $('#ops-provider'); if (prov && s.providerId) prov.value = s.providerId;
+    const w = $('#ops-write'); if (w) w.checked = Boolean(s.allowWrite);
+    renderOpsSessions();
+    renderOpsMessages(s.messages);
+  } catch (e) { toast(e.message, true); }
+}
+
+async function createOpsSession() {
+  try {
+    const s = await api('/ai/sessions', { method: 'POST', body: {
+      providerId: ($('#ops-provider') || {}).value || '',
+      allowWrite: Boolean(($('#ops-write') || {}).checked),
+    } });
+    await loadOpsSessions(s.id);
+    toast('已新建会话');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function deleteOpsSession() {
+  if (!opsState.currentId) return;
+  if (!confirm('确认删除当前会话？其中的消息与附件将无法恢复。')) return;
+  try {
+    await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}`, { method: 'DELETE' });
+    opsState.currentId = '';
+    toast('会话已删除');
+    await loadOpsSessions();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function clearOpsSession() {
+  if (!opsState.currentId) return;
+  if (!confirm('确认清空当前会话的全部消息？（会话本身保留）')) return;
+  try {
+    const s = await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}/clear`, { method: 'POST' });
+    renderOpsMessages(s.messages);
+    const sub = $('#ops-chat-sub'); if (sub) sub.textContent = '消息已清空，可继续对话';
+    await loadOpsSessions(opsState.currentId);
+    toast('已清空消息');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function renameOpsSession() {
+  if (!opsState.currentId) return;
+  const title = prompt('会话标题', ($('#ops-chat-title') || {}).textContent || '新会话');
+  if (!title || !title.trim()) return;
+  try {
+    await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}`, { method: 'PUT', body: { title: title.trim() } });
+    const t = $('#ops-chat-title'); if (t) t.textContent = title.trim();
+    await loadOpsSessions(opsState.currentId);
+    toast('已重命名');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function sendOpsMessage() {
+  if (opsState.sending) return;
+  const input = $('#ops-prompt');
+  const content = (input ? input.value : '').trim();
+  const attachments = opsState.attachments.slice();
+  if (!content && !attachments.length) { toast('请输入内容或附加文件', true); return; }
+  if (!opsState.currentId) {
+    try {
+      const s = await api('/ai/sessions', { method: 'POST', body: {
+        providerId: ($('#ops-provider') || {}).value || '',
+        allowWrite: Boolean(($('#ops-write') || {}).checked),
+      } });
+      opsState.currentId = s.id;
+    } catch (e) { toast(e.message, true); return; }
+  }
+
+  opsState.sending = true;
+  const sendBtn = $('#ops-send');
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '分析中…'; }
+  if (input) input.value = '';
+  opsState.attachments = [];
+  renderOpsAttachments();
+  const box = $('#ops-messages');
+  if (box) {
+    if (box.querySelector('.empty')) box.innerHTML = '';
+    box.insertAdjacentHTML('beforeend', opsMessageHtml({ role: 'user', content, attachments, at: new Date().toISOString() }));
+    box.insertAdjacentHTML('beforeend', '<div class="ops-msg ai" id="ops-pending"><div class="ops-msg-avatar">AI</div><div class="ops-msg-body"><div class="ops-msg-text ops-typing">正在分析平台状态与日志…</div></div></div>');
+    box.scrollTop = box.scrollHeight;
+  }
+  opsStatus('AI 正在调用工具分析，可能需要几十秒');
+
+  try {
+    const d = await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}/messages`, {
+      method: 'POST',
+      body: {
+        content, attachments,
+        providerId: ($('#ops-provider') || {}).value || '',
+        allowWrite: Boolean(($('#ops-write') || {}).checked),
+      },
+    });
+    const pending = $('#ops-pending');
+    if (pending) {
+      pending.outerHTML = opsMessageHtml(d.assistantMessage);
+    } else if (box) {
+      box.insertAdjacentHTML('beforeend', opsMessageHtml(d.assistantMessage));
+    }
+    if (box) box.scrollTop = box.scrollHeight;
+    if (d.assistantMessage && d.assistantMessage.error) toast(d.assistantMessage.error, true);
+    if (d.assistantMessage && d.assistantMessage.attachmentMode === 'text-fallback') {
+      toast('当前服务不支持图像识别，图片已降级为文字说明');
+    }
+    const sub = $('#ops-chat-sub'); if (sub) sub.textContent = '会话已留存，可继续追问或稍后恢复';
+    await loadOpsSessions(opsState.currentId);
+    opsStatus('');
+  } catch (e) {
+    const pending = $('#ops-pending');
+    if (pending) pending.outerHTML = opsMessageHtml({ role: 'assistant', content: '', error: e.message, at: new Date().toISOString() });
+    toast(e.message, true);
+    opsStatus('发送失败');
+  } finally {
+    opsState.sending = false;
+    if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = '发送'; }
+  }
+}
 
 async function loadOps() {
   try {
-    const d = await api('/ai/tools');
-    if (!$('#ops-hint')) {
-      const hint = document.createElement('div');
-      hint.id = 'ops-hint';
-      hint.className = 'hint';
-      hint.textContent = `只读命令白名单：${d.readCommands.join(' · ')}`;
-      $('#ops-form').appendChild(hint);
-    }
+    const [tools, providers] = await Promise.all([api('/ai/tools'), api('/ai/providers')]);
+    const hint = $('#ops-hint');
+    if (hint) hint.textContent = `只读：${(tools.readCommands || []).join(' · ')}`;
+    fillProviderSelects(providers.items || []);
   } catch (e) { toast(e.message, true); }
+  await loadOpsSessions();
+
+  if (opsState.bound) return;
+  opsState.bound = true;
+  $('#ops-form').addEventListener('submit', (e) => { e.preventDefault(); sendOpsMessage(); });
+  const promptEl = $('#ops-prompt');
+  if (promptEl) promptEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendOpsMessage(); }
+  });
+  $('#ops-new').addEventListener('click', createOpsSession);
+  $('#ops-delete').addEventListener('click', deleteOpsSession);
+  $('#ops-clear').addEventListener('click', clearOpsSession);
+  $('#ops-rename').addEventListener('click', renameOpsSession);
+  $('#ops-file').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    if (opsState.attachments.length + files.length > 6) { toast('每条消息最多 6 个附件', true); e.target.value = ''; return; }
+    for (const file of files) {
+      try { opsState.attachments.push(await readOpsAttachment(file)); }
+      catch (err) { toast(err.message, true); }
+    }
+    e.target.value = '';
+    renderOpsAttachments();
+  });
 }
 
 /* ----------------------------- 扩展 / 数据库 ----------------------------- */
@@ -3337,7 +3656,8 @@ const loaders = {
   'docker-volumes': loadDocker, 'docker-networks': loadDocker, 'docker-compose': loadDocker,
   proxy: loadProxy,
   dbgate: loadExtExtras, backups: loadExtExtras,
-  ai: loadAI, ops: loadOps, environment: loadEnvironment, envcfg: loadEnvConfig,
+  ai: loadAI, 'ai-list': loadAI, 'ai-test': loadAI, ops: loadOps,
+  environment: loadEnvironment, envcfg: loadEnvConfig,
   users: loadUsers, collab: loadCollabResources,
 };
 
@@ -4616,7 +4936,9 @@ $('#provider-form').addEventListener('submit', async (e) => {
     toast('AI 服务已保存');
     e.target.reset();
     setProviderKind('api');
-    loadAI();
+    $('#provider-test-result').hidden = true;
+    await loadAI();
+    switchView('ai-list');                 // 保存后跳到「已配置服务」看到结果
   } catch (err) { toast(err.message, true); }
 });
 $('#provider-reset').addEventListener('click', () => {
@@ -4644,21 +4966,8 @@ $('#chat-form').addEventListener('submit', async (e) => {
   } catch (err) { $('#chat-result').textContent = `失败：${err.message}`; toast(err.message, true); }
 });
 
-$('#ops-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  $('#ops-answer').textContent = 'AI 分析中…';
-  $('#ops-trace').textContent = '—';
-  try {
-    const d = await api('/ai/ops', {
-      method: 'POST',
-      body: { providerId: $('#ops-provider').value, prompt: $('#ops-prompt').value, allowWrite: $('#ops-write').checked },
-    });
-    $('#ops-answer').textContent = d.answer || '（无文本结论）';
-    $('#ops-trace').textContent = d.trace && d.trace.length
-      ? JSON.stringify(d.trace, null, 2) : '（未调用任何工具）';
-    if (d.mode === 'context-injection') toast('本地 CLI 模式：已由平台采集上下文后提问');
-  } catch (err) { $('#ops-answer').textContent = `失败：${err.message}`; toast(err.message, true); }
-});
+/* AI 运维对话的 submit / 新建 / 删除 / 附件等交互统一在 loadOps() 中绑定。
+   旧的单轮 #ops-answer / #ops-trace 界面已移除。 */
 
 /* ------------------- v0.3.6 · Docker 分区交互增强 ------------------- */
 const DK_TPL = {
@@ -5009,7 +5318,7 @@ function showLogin(message = '') {
   if (twofa) { twofa.hidden = true; twofaMethod = 'totp'; }
   pendingTotpToken = '';
   setLoginError('#login-error', message);
-  const box = $('#auth-box');
+  const box = $('#auth-wrap');
   if (box) box.hidden = true;
 }
 
@@ -5041,7 +5350,7 @@ function showPasswordForm(title = '首次登录 · 请修改初始密码') {
   const heading = $('#password-title');
   if (heading) heading.textContent = title;
   setLoginError('#password-error', '');
-  const box = $('#auth-box');
+  const box = $('#auth-wrap');
   if (box) box.hidden = true;
 }
 

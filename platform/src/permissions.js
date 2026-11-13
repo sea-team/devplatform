@@ -21,6 +21,13 @@ const { state, update, HttpError, badRequest, notFound, OWNED_COLLECTIONS } = re
 /** 可归属的顶层集合：与 core.js 的自动归属列表保持同源。 */
 const COLLECTIONS = OWNED_COLLECTIONS;
 
+/**
+ * 可在「资源协作」页授权协作者的集合。
+ * 构建记录 / 部署记录属于一次性流水产物，不适合按仓库语义协作，故从协作列表剔除；
+ * 但它们仍保留在 COLLECTIONS 中，owner 归属、可见性与删除权限照常生效。
+ */
+const COLLAB_COLLECTIONS = COLLECTIONS.filter((t) => t !== 'builds' && t !== 'deploys');
+
 const TYPE_LABELS = {
   servers: '服务器', gitSources: 'Git 源', aiProviders: 'AI 服务',
   builds: '构建记录', deploys: '部署记录', extensions: '扩展 / 数据库实例',
@@ -119,6 +126,10 @@ function guard(req, pathname) {
   if (!user) return false;
   if (user.via === 'cli') return true;             // CLI 白名单路径在 auth.authorize 里二次限制
   if (isAdmin(user)) return true;
+  // AI 对话会话的归属由 aiSessions 模块逐入口校验（不在归属集合内）。
+  // body 里的 providerId 只是「选用哪个服务」，不能按 write 该服务商资源来判定，
+  // 否则只被授予 read 协作的账号将无法使用共享 AI 服务。
+  if (/^\/api\/ai\/sessions(?:\/|$)/.test(String(pathname || ''))) return true;
   const method = String(req.method || 'GET').toUpperCase();
   const action = method === 'GET' || method === 'HEAD' ? 'read'
     : method === 'DELETE' ? 'delete' : 'write';
@@ -131,7 +142,7 @@ function guard(req, pathname) {
 }
 
 function resourceByType(user, type, id, action = 'read') {
-  if (!COLLECTIONS.includes(type)) throw badRequest(`不支持的资源类型：${type}`);
+  if (!COLLAB_COLLECTIONS.includes(type)) throw badRequest(`不支持的协作资源类型：${type}`);
   const item = (state()[type] || []).find((x) => x && x.id === id);
   if (!item) throw notFound('资源不存在');
   assertCan(user, item, action);
@@ -177,10 +188,10 @@ function setCollaborators(user, type, id, list) {
   return collaboratorsView(user, type, id);
 }
 
-/** 供账号管理页使用：列出某用户可见的全部资源（含它作为协作者的）。 */
+/** 供资源协作页使用：列出某用户可见的全部可协作资源（含它作为协作者的）。 */
 function resourcesFor(user) {
   const rows = [];
-  for (const type of COLLECTIONS) {
+  for (const type of COLLAB_COLLECTIONS) {
     for (const item of visible(user, state()[type] || [])) {
       rows.push({
         type, id: item.id, label: TYPE_LABELS[type] || type,
@@ -196,7 +207,7 @@ function resourcesFor(user) {
 }
 
 module.exports = {
-  COLLECTIONS, TYPE_LABELS, isAdmin, can, assertCan, visible, assignOwner,
+  COLLECTIONS, COLLAB_COLLECTIONS, TYPE_LABELS, isAdmin, can, assertCan, visible, assignOwner,
   findResourceById, guard, isGlobalConfigPath, collaboratorsView,
   setCollaborators, resourcesFor, collaboratorsOf,
 };

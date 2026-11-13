@@ -811,3 +811,99 @@ tr.file-row.is-file .file-name b { font-weight: 550; }
   .term-wrap { height: 48vh; }
   .term-actions { margin-left: 0; }
 }
+
+/* --------------------- v0.4.3 · AI 运维对话模式 --------------------- */
+/* 左会话列表 + 右对话区，两栏各自独立滚动，输入区固定在对话区底部 */
+#view-ops .ops-layout {
+  display: grid; grid-template-columns: 244px minmax(0, 1fr); gap: 14px;
+  height: calc(100vh - var(--tabbar-h) - 92px); min-height: 460px;
+}
+#view-ops .ops-side, #view-ops .ops-main { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+#view-ops .ops-side { padding: 14px; }
+#view-ops .ops-main { padding: 0; }
+
+#view-ops .ops-sessions { flex: 1; min-height: 0; overflow-y: auto; margin-top: 10px; }
+.ops-session {
+  padding: 9px 10px; border: 1px solid transparent; border-radius: 9px;
+  cursor: pointer; margin-bottom: 4px; transition: .15s;
+}
+.ops-session:hover { background: var(--surface-2); }
+.ops-session.active { background: var(--primary-soft); border-color: var(--primary); }
+.ops-session-title { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ops-session-meta { font-size: 11px; margin-top: 2px; }
+
+#view-ops .ops-head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 15px; border-bottom: 1px solid var(--border); flex: 0 0 auto;
+}
+#view-ops .ops-head-title { min-width: 0; flex: 1 1 180px; }
+#view-ops .ops-head-title h2 { margin: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#view-ops .ops-head-tools { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+#view-ops .ops-head-tools select { max-width: 190px; padding: 4px 7px; font-size: 12px; }
+#view-ops .ops-head-tools .check { font-size: 12px; white-space: nowrap; }
+
+#view-ops .ops-messages {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  padding: 16px 18px; background: var(--surface-2);
+}
+.ops-msg { display: flex; gap: 10px; margin-bottom: 16px; align-items: flex-start; }
+.ops-msg.mine { flex-direction: row-reverse; }
+.ops-msg-avatar {
+  width: 30px; height: 30px; flex: 0 0 30px; border-radius: 9px;
+  display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff;
+  background: linear-gradient(135deg, #64748b, #334155); user-select: none;
+}
+.ops-msg.ai .ops-msg-avatar { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+.ops-msg-body {
+  max-width: min(78%, 760px); min-width: 0; padding: 10px 13px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+}
+.ops-msg.mine .ops-msg-body { background: var(--primary-soft); border-color: #dbeafe; }
+.ops-msg-text { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.72; }
+.ops-msg-error { color: var(--red); font-size: 13px; white-space: pre-wrap; }
+.ops-msg-meta { margin-top: 7px; font-size: 11px; line-height: 1.4; }
+.ops-typing { color: var(--muted); }
+.ops-typing::after { content: '…'; animation: ops-dots 1.2s infinite; }
+@keyframes ops-dots { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+
+.ops-msg-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.ops-msg-image { display: block; line-height: 0; }
+.ops-msg-image img { max-width: 220px; max-height: 180px; border-radius: 8px; border: 1px solid var(--border); object-fit: cover; }
+.ops-msg-file {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2);
+  font-size: 12px; max-width: 240px;
+}
+.ops-msg-file > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.ops-trace { margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 7px; }
+.ops-trace summary { cursor: pointer; font-size: 11.5px; color: var(--primary); font-weight: 600; }
+.ops-trace .log { margin: 8px 0 0; max-height: 260px; font-size: 11px; }
+
+#view-ops .ops-compose { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 10px 14px 12px; background: var(--surface); }
+#view-ops .ops-compose textarea {
+  width: 100%; border: 1px solid var(--border); border-radius: 9px;
+  padding: 9px 11px; resize: vertical; min-height: 56px; max-height: 180px;
+  font-size: 13px; line-height: 1.6; outline: none;
+}
+#view-ops .ops-compose textarea:focus { border-color: var(--primary); }
+.ops-compose-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.ops-compose-bar .muted { font-size: 11px; }
+.ops-spacer { flex: 1 1 auto; }
+
+.ops-attach { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 8px; }
+.ops-attach-item {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 4px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); max-width: 210px;
+}
+.ops-attach-thumb { width: 28px; height: 28px; border-radius: 5px; object-fit: cover; }
+.ops-attach-ico { width: 28px; height: 28px; display: grid; place-items: center; color: var(--muted); }
+.ops-attach-name { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ops-attach-item .btn { padding: 1px 5px; font-size: 11px; }
+
+@media (max-width: 900px) {
+  #view-ops .ops-layout { grid-template-columns: 1fr; height: auto; }
+  #view-ops .ops-side { max-height: 180px; }
+  #view-ops .ops-messages { height: 46vh; }
+}

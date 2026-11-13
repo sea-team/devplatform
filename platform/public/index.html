@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261113c" />
+  <link rel="stylesheet" href="/style.css?v=20261113d" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -1017,8 +1017,14 @@
           </div>
         </section>
 
-        <!-- AI 服务 -->
+        <!-- AI 服务配置：三个独立子页（与「构建 · 部署」同款 subnav） -->
         <section class="page" id="view-ai">
+          <div class="subnav">
+            <span class="subnav-label">AI 服务</span>
+            <button class="subnav-btn active" data-open-view="ai">配置 AI 服务</button>
+            <button class="subnav-btn" data-open-view="ai-list">已配置服务</button>
+            <button class="subnav-btn" data-open-view="ai-test">连通性测试</button>
+          </div>
           <div class="card">
             <div class="card-head"><h2>配置 AI 服务</h2><span class="muted">API 服务 / 宿主机本地程序 / WSL 程序，统一支持代理</span></div>
             <div class="seg" id="kind-seg">
@@ -1070,16 +1076,37 @@
               <pre class="log short" id="provider-test-result" hidden>—</pre>
             </form>
           </div>
-          <div class="card">
-            <div class="card-head"><h2>已配置服务</h2></div>
-            <div id="provider-list" class="list"></div>
+          <div class="notice">保存后可在「已配置服务」里编辑或删除；「连通性测试」用于对已保存的服务发起一次真实请求。</div>
+        </section>
+
+        <!-- AI 服务 · 已配置服务（独立页） -->
+        <section class="page" id="view-ai-list">
+          <div class="subnav">
+            <span class="subnav-label">AI 服务</span>
+            <button class="subnav-btn" data-open-view="ai">配置 AI 服务</button>
+            <button class="subnav-btn active" data-open-view="ai-list">已配置服务</button>
+            <button class="subnav-btn" data-open-view="ai-test">连通性测试</button>
           </div>
           <div class="card">
-            <div class="card-head"><h2>连通性测试</h2></div>
+            <div class="card-head"><h2>已配置服务</h2><button class="btn btn-ghost btn-sm" data-reload="ai-list">刷新</button></div>
+            <div id="provider-list" class="list"></div>
+          </div>
+        </section>
+
+        <!-- AI 服务 · 连通性测试（独立页） -->
+        <section class="page" id="view-ai-test">
+          <div class="subnav">
+            <span class="subnav-label">AI 服务</span>
+            <button class="subnav-btn" data-open-view="ai">配置 AI 服务</button>
+            <button class="subnav-btn" data-open-view="ai-list">已配置服务</button>
+            <button class="subnav-btn active" data-open-view="ai-test">连通性测试</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>连通性测试</h2><span class="muted">向已保存的服务发起一次真实请求，验证 Key / 代理 / 模型是否可用</span></div>
             <form id="chat-form" class="form">
               <label>选择服务<select id="chat-provider"></select></label>
               <label>测试提示词<input id="chat-prompt" value="用一句话介绍你自己" /></label>
-              <button class="btn" type="submit">发送测试请求</button>
+              <div class="form-actions"><button class="btn btn-primary" type="submit">发送测试请求</button></div>
               <pre class="log short" id="chat-result">—</pre>
             </form>
           </div>
@@ -1174,27 +1201,50 @@
           </div>
         </section>
 
-        <!-- AI 运维 -->
+        <!-- AI 运维 · 对话模式（会话留存 / 文件图片输入 / 工具调用轨迹） -->
         <section class="page" id="view-ops">
-          <div class="card">
-            <div class="card-head"><h2>AI 服务器运维</h2><span class="muted">默认只读：状态查询、日志、白名单诊断命令</span></div>
-            <form id="ops-form" class="form">
-              <label>问题 / 指令<textarea id="ops-prompt" rows="3" placeholder="检查所有服务器负载，找出最近失败的构建并分析原因"></textarea></label>
-              <div class="row">
-                <select id="ops-provider"></select>
-                <label class="check"><input type="checkbox" id="ops-write" /> 授权写操作（允许触发部署）</label>
-                <button class="btn btn-primary" type="submit">执行分析</button>
+          <div class="ops-layout">
+            <!-- 左：会话列表 -->
+            <div class="card ops-side">
+              <div class="card-head">
+                <h2>会话</h2>
+                <button class="btn btn-primary btn-sm" type="button" id="ops-new">＋ 新建</button>
               </div>
-            </form>
-          </div>
-          <div class="grid-2">
-            <div class="card">
-              <div class="card-head"><h2>AI 结论</h2></div>
-              <div class="answer" id="ops-answer">—</div>
+              <div class="hint">会话自动保存，可随时恢复继续，或手动删除。</div>
+              <div id="ops-session-list" class="ops-sessions"></div>
             </div>
-            <div class="card">
-              <div class="card-head"><h2>工具调用轨迹</h2></div>
-              <pre class="log" id="ops-trace">—</pre>
+
+            <!-- 右：对话主区 -->
+            <div class="card ops-main">
+              <div class="ops-head">
+                <div class="ops-head-title">
+                  <h2 id="ops-chat-title">AI 运维</h2>
+                  <span class="muted small" id="ops-chat-sub">选择一个会话，或新建会话开始对话</span>
+                </div>
+                <div class="ops-head-tools">
+                  <select id="ops-provider" title="AI 服务"></select>
+                  <label class="check" title="允许 AI 触发部署"><input type="checkbox" id="ops-write" /> 写授权</label>
+                  <button class="btn btn-sm" type="button" id="ops-rename" title="重命名会话">重命名</button>
+                  <button class="btn btn-sm" type="button" id="ops-clear" title="清空当前会话消息">清空</button>
+                  <button class="btn btn-sm btn-danger" type="button" id="ops-delete" title="删除当前会话">删除</button>
+                </div>
+              </div>
+
+              <div id="ops-messages" class="ops-messages">
+                <div class="empty">还没有消息，输入问题或附加日志 / 截图开始分析</div>
+              </div>
+
+              <form id="ops-form" class="ops-compose">
+                <div id="ops-attachments" class="ops-attach" hidden></div>
+                <textarea id="ops-prompt" rows="2" placeholder="检查所有服务器负载，找出最近失败的构建并分析原因…（Ctrl/⌘ + Enter 发送）"></textarea>
+                <div class="ops-compose-bar">
+                  <label class="file-btn btn-sm" title="附加图片或文本文件">📎 附加文件 / 图片<input type="file" id="ops-file" multiple accept="image/*,.txt,.log,.json,.yaml,.yml,.md,.xml,.csv,.js,.ts,.py,.sh,.conf,.ini,.env,.sql,.html,.css" /></label>
+                  <span class="muted small" id="ops-hint">默认只读：状态查询、日志、白名单诊断命令</span>
+                  <span class="ops-spacer"></span>
+                  <span class="muted small" id="ops-status"></span>
+                  <button class="btn btn-primary" type="submit" id="ops-send">发送</button>
+                </div>
+              </form>
             </div>
           </div>
         </section>
@@ -1578,6 +1628,6 @@
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
   <script src="/vendor/qrcode.js"></script>
-  <script src="/app.js?v=20261113c"></script>
+  <script src="/app.js?v=20261113d"></script>
 </body>
 </html>

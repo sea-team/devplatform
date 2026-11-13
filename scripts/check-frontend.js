@@ -19,6 +19,10 @@ const envcfg = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 
 const authSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'auth.js'), 'utf8');
 const permSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'permissions.js'), 'utf8');
 const serverSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'server.js'), 'utf8');
+const coreSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'core.js'), 'utf8');
+const engineSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'engine.js'), 'utf8');
+const sessionsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'aiSessions.js'), 'utf8');
+const miniSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'mini.js'), 'utf8');
 const errors = [];
 const note = (ok, label, extra = '') => {
   console.log(`${ok ? '✔' : '✖'} ${label}${extra ? ` · ${extra}` : ''}`);
@@ -28,20 +32,21 @@ const note = (ok, label, extra = '') => {
 /* --------------------------- 1. 静态一致性 --------------------------- */
 const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
 const refs = [...new Set([...app.matchAll(/\$\('#([A-Za-z0-9_-]+)'\)/g)].map((m) => m[1]))];
-// ops-hint 由 loadOps 运行时创建，属于预期例外。
-const missing = refs.filter((id) => !ids.has(id) && id !== 'ops-hint');
+// 这些 id 由 JS 运行时动态注入（附件预览 / 会话 pending 气泡 / 2FA 弹窗按钮 / 登录提示）。
+const RUNTIME_IDS = new Set(['ops-hint', 'ops-pending', 'security-disable', 'security-enable']);
+const missing = refs.filter((id) => !ids.has(id) && !RUNTIME_IDS.has(id));
 note(missing.length === 0, 'app.js 引用的静态 id 均存在', missing.length ? `缺失：${missing.join(', ')}` : `${refs.length} 个引用`);
 
 const sections = [...html.matchAll(/class="page" id="view-([a-z0-9-]+)"/g)].map((m) => m[1]);
 const SUBPAGES = ['repo-new', 'repo-clone', 'storage-conn', 'storage-mounts', 'storage-drivers',
   'build-start', 'deploys', 'server-new', 'docker-containers', 'docker-images',
-  'docker-volumes', 'docker-networks', 'docker-compose'];
-// v0.4.0：新增「账号管理」「资源协作」两个主模块页，总数 28 → 30。
-note(sections.length === 30 && sections.includes('gitsrc') && sections.includes('docker')
+  'docker-volumes', 'docker-networks', 'docker-compose', 'ai-list', 'ai-test'];
+// v0.4.3：AI 服务配置拆成 3 个独立页，总数 30 → 32。
+note(sections.length === 32 && sections.includes('gitsrc') && sections.includes('docker')
   && sections.includes('proxy') && sections.includes('environment') && sections.includes('envcfg')
   && sections.includes('ide-config') && sections.includes('users') && sections.includes('collab')
   && SUBPAGES.every((v) => sections.includes(v)),
-'30 个独立页面（17 主模块 + 13 个子功能页）均已转为可标签化的 .page', sections.join(', '));
+'32 个独立页面（17 主模块 + 15 个子功能页）均已转为可标签化的 .page', sections.join(', '));
 note(['/git-sources', '/docker/overview', '/extensions/backups', '/extensions/dbgate', '/builds/backends']
   .every((p) => app.includes(p)) && app.includes('function loadGitSources') && app.includes('function loadDocker'),
 'Git 源 / Docker 管理 / 备份 / DbGate / 构建后端接口已全部接线');
@@ -89,7 +94,7 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
-note(html.includes('?v=20261112b'), '静态资源版本已升到 20261112b');
+note(html.includes('?v=20261113d'), '静态资源版本已升到 20261113d');
 
 // v0.3.10：IDE 登录凭据、总览运行主机卡片、仓库文件 / 终端 / Git 操作。
 note(html.includes('id="ide-cred"') && html.includes('id="ide-cred-reveal"')
@@ -164,7 +169,7 @@ note(envcfg.includes('AUTH_DISABLED') && envcfg.includes('authEnabled')
 
 // v0.4.0：账号体系（登录、owner 隔离、协作者、全局配置只读）。
 note(html.includes('id="login-view"') && html.includes('id="login-form"')
-  && html.includes('id="password-form"') && html.includes('id="auth-box"')
+  && html.includes('id="password-form"') && html.includes('id="auth-wrap"')
   && app.includes('async function startWorkbench') && app.includes("fetch('/api/auth/status')")
   && app.includes("authFetch('/auth/login'") && css.includes('.login-view[hidden]'),
 '未登录遮罩、首次改密、登录状态检查与工作台延迟启动链路齐全');
@@ -241,6 +246,51 @@ note(html.includes('id="storage-degraded"') && app.includes('function renderStor
 note(app.includes("status === 502 ? '上游服务不可用'") && app.includes('err.status = status')
   && app.includes('err.hint = json.hint') && app.includes('json.error'),
 'api() 按 400 / 404 / 502 / 500 分类错误并保留 hint，不再统一显示 500');
+
+/* ---------------------- v0.4.3 四项改造自检 ---------------------- */
+// 1) AI 服务配置拆成三个独立页 + subnav。
+note(['id="view-ai"', 'id="view-ai-list"', 'id="view-ai-test"'].every((s) => html.includes(s))
+  && ['data-open-view="ai"', 'data-open-view="ai-list"', 'data-open-view="ai-test"']
+    .every((s) => html.includes(s))
+  && app.includes("'ai-list': loadAI") && app.includes("'ai-test': loadAI")
+  && app.includes("'ai-list': 'ai'") && app.includes('function fillProviderSelects')
+  && app.includes("switchView('ai-list')"),
+'AI 服务配置拆成「配置 / 已配置服务 / 连通性测试」三个独立子页并共享 subnav');
+
+// 2) AI 运维对话模式：会话留存 + 文件图片 + 工具轨迹。
+note(['id="ops-session-list"', 'id="ops-messages"', 'id="ops-attachments"', 'id="ops-file"',
+  'id="ops-new"', 'id="ops-delete"', 'id="ops-clear"', 'id="ops-rename"']
+  .every((s) => html.includes(s))
+  && ['function loadOpsSessions', 'function openOpsSession', 'function sendOpsMessage',
+    'function readOpsAttachment', 'function compressOpsImage', 'function opsMessageHtml',
+    "api('/ai/sessions'", '/ai/sessions/${encodeURIComponent'].every((s) => app.includes(s)),
+'AI 运维对话 UI：会话列表 / 消息气泡 / 附件预览 / 新建删除清空重命名均已接线');
+note(app.includes('ops-trace') && app.includes('工具调用轨迹')
+  && sessionsSrc.includes('trace: Array.isArray(result.trace)')
+  && coreSrc.includes('aiSessions: []')
+  && sessionsSrc.includes('ownerId: user.id')
+  && serverSrc.includes("app.delete('/api/ai/sessions/:id'")
+  && serverSrc.includes("app.post('/api/ai/sessions/:id/clear'"),
+'会话按 ownerId 隔离持久化、保留工具调用轨迹、支持删除与清空');
+note(['image_url', 'function buildUserContent', 'function buildPrompt', 'function historyTurns',
+  'visionFallback', 'text-fallback'].every((s) => engineSrc.includes(s))
+  && miniSrc.includes('route.options.bodyLimit')
+  && serverSrc.includes('bodyLimit: 20 * 1024 * 1024')
+  && sessionsSrc.includes('MAX_ATTACHMENT_CHARS'),
+'图片走 vision / 文本入上下文 / 不支持时自动降级，请求体上限按路由放宽');
+
+// 3) 资源协作不再出现构建 / 部署记录，但归属与删除权限仍保留。
+note(permSrc.includes('COLLAB_COLLECTIONS') && permSrc.includes("t !== 'builds' && t !== 'deploys'")
+  && permSrc.includes('for (const type of COLLAB_COLLECTIONS)')
+  && permSrc.includes('if (!COLLAB_COLLECTIONS.includes(type))')
+  && coreSrc.includes("'aiProviders', 'builds', 'deploys'"),
+'资源协作排除构建 / 部署记录，但二者仍保留在归属集合内（删除权限有效）');
+
+// 4) 构建记录删除。
+note(serverSrc.includes("app.delete('/api/builds/:id'")
+  && app.includes('data-build-del') && app.includes("/builds/${encodeURIComponent")
+  && app.includes("method: 'DELETE'"),
+'构建部署页构建记录支持删除（后端 DELETE + 前端按钮与确认）');
 
 const scripts = [...html.matchAll(/<script src="\/vendor\/([^"]+)"/g)].map((m) => m[1]);
 const cmIndex = scripts.indexOf('codemirror.js');

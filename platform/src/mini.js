@@ -171,7 +171,9 @@ function createApp({ adminToken = '', staticDir = '', errorStatus = null, authGa
         req.body = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)
           ? await readBody(req, {
               raw: route.options.raw,
-              limit: route.options.raw ? 100 * 1024 * 1024 : 2 * 1024 * 1024,
+              // 会话消息可能带 base64 图片/文本附件，允许单路由放宽上限。
+              limit: Number(route.options.bodyLimit)
+                || (route.options.raw ? 100 * 1024 * 1024 : 2 * 1024 * 1024),
             })
           : {};
         if (authGate && req.identity && !authGate.isPublic(pathname) && !authGate.authorize(req, pathname, route)) {

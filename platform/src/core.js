@@ -106,6 +106,8 @@ function defaultState() {
     // 账号体系（v0.4.0）：首次启动由 auth.initialize() 创建初始管理员并迁移历史资源归属。
     users: [],
     sessions: [],
+    // AI 运维对话会话（v0.4.3）：按 ownerId 隔离，独立于登录会话 sessions。
+    aiSessions: [],
     servers: [],
     aiProviders: [],
     builds: [],
@@ -157,6 +159,7 @@ function loadState() {
       // 账号数组不能被旧文件里的非数组值污染；旧 state.json 缺字段时按空数组处理。
       users: Array.isArray(parsed.users) ? parsed.users : [],
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
+      aiSessions: Array.isArray(parsed.aiSessions) ? parsed.aiSessions : [],
       // 嵌套对象要逐层补齐，避免旧 state.json 缺字段导致策略读取为 undefined。
       environment: { ...base.environment, ...(parsed.environment || {}) },
     };
