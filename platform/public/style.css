@@ -368,7 +368,7 @@ tr:last-child td { border-bottom: 0; }
 .tab:hover .tab-close, .tab.active .tab-close { opacity: 1; }
 .tab-close:hover { background: #e2e8f1; color: var(--red); }
 .tabbar-tools { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; position: relative; }
-.tab-tool { width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; }
+.tab-tool { width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
 .tab-tool:hover, .tab-tool.on { color: var(--primary); border-color: var(--primary); background: var(--primary-soft); }
 .tab-menu {
   position: absolute; right: 0; top: 34px; width: 178px; padding: 5px; z-index: 40;
