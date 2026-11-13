@@ -133,6 +133,19 @@ function guard(req, pathname) {
   const method = String(req.method || 'GET').toUpperCase();
   const action = method === 'GET' || method === 'HEAD' ? 'read'
     : method === 'DELETE' ? 'delete' : 'write';
+  // 单项代理覆盖（v0.4.4）：入口已下沉到对象新增 / 编辑表单，不再当站点级配置处理。
+  // 命中归属集合的对象按「可写」判定（owner / write 协作者 / 管理员）；仓库、容器等
+  // 外部对象不在归属集合里，覆盖只影响该对象本身，已登录用户即可配置。
+  if (action !== 'read' && /^\/api\/proxy\/overrides(?:\/|$)/.test(String(pathname || ''))) {
+    const body = req.body && !Buffer.isBuffer(req.body) && typeof req.body === 'object' ? req.body : {};
+    const rawPath = String(pathname || '').split('/').slice(5).join('/');
+    let fromPath = rawPath;
+    try { fromPath = decodeURIComponent(rawPath); } catch { /* 非法编码时按原文 */ }
+    const targetId = String((req.query && req.query.id) || body.id || fromPath || '');
+    if (!targetId) return false;
+    const found = findResourceById(targetId);
+    return found ? can(user, found.item, 'write') : true;
+  }
   if (action !== 'read' && isGlobalConfigPath(pathname)) return false;
   for (const id of collectIds(req, pathname)) {
     const found = findResourceById(id);
@@ -151,7 +164,8 @@ function resourceByType(user, type, id, action = 'read') {
 
 function collaboratorsView(user, type, id) {
   const { item } = resourceByType(user, type, id);
-  const users = (state().users || []).map((u) => ({
+  // 已禁用账号不再出现在可选协作者里：账号禁用时 core.update() 会清掉旧引用。
+  const users = (state().users || []).filter((u) => u && u.status !== 'disabled').map((u) => ({
     id: u.id, username: u.username, displayName: u.displayName || u.username, role: u.role,
   }));
   return {
@@ -171,7 +185,7 @@ function collaboratorsView(user, type, id) {
 function setCollaborators(user, type, id, list) {
   const { item } = resourceByType(user, type, id, 'manage');
   if (!Array.isArray(list)) throw badRequest('协作者列表格式不正确');
-  const known = new Set((state().users || []).map((u) => u.id));
+  const known = new Set((state().users || []).filter((u) => u && u.status !== 'disabled').map((u) => u.id));
   const normalized = [];
   for (const entry of list) {
     const userId = String((entry && entry.userId) || '');

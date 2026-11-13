@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261113d" />
+  <link rel="stylesheet" href="/style.css?v=20261113f" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -76,7 +76,6 @@
         <button class="nav-item" data-view="ai"><span class="ico">✦</span>AI 服务配置</button>
         <button class="nav-item" data-view="ops"><span class="ico">◎</span>AI 运维</button>
         <button class="nav-item" data-view="users" id="nav-users"><span class="ico">♙</span>账号管理</button>
-        <button class="nav-item" data-view="collab"><span class="ico">⇆</span>资源协作</button>
       </nav>
       <div class="sidebar-foot">
         <span class="dot" id="health-dot"></span>
@@ -174,10 +173,19 @@
             <button class="subnav-btn active" data-open-view="repos">仓库列表</button>
             <button class="subnav-btn" data-open-view="repo-new">新建仓库</button>
             <button class="subnav-btn" data-open-view="repo-clone">克隆到工作区</button>
+            <button class="subnav-btn" data-open-view="git-runtime">Git 运行时</button>
             <button class="subnav-btn" data-open-view="gitsrc">外部 Git 源</button>
           </div>
           <div class="card">
-            <div class="card-head"><h2>仓库列表</h2><button class="btn btn-ghost btn-sm" data-reload="repos">刷新</button></div>
+            <div class="card-head">
+              <h2>仓库列表</h2>
+              <div class="row gap wrap" style="align-items:center">
+                <span class="muted small" id="repo-hidden-count"></span>
+                <select id="repo-hidden-select" hidden></select>
+                <button class="btn btn-sm" type="button" id="repo-restore" hidden>恢复</button>
+                <button class="btn btn-ghost btn-sm" data-reload="repos">刷新</button>
+              </div>
+            </div>
             <div class="hint" id="repo-source-hint">聚合平台自带 Gitea 与所有已登记的外部 Git 源</div>
             <div id="repo-list" class="table-wrap"></div>
           </div>
@@ -190,6 +198,7 @@
             <button class="subnav-btn" data-open-view="repos">仓库列表</button>
             <button class="subnav-btn active" data-open-view="repo-new">新建仓库</button>
             <button class="subnav-btn" data-open-view="repo-clone">克隆到工作区</button>
+            <button class="subnav-btn" data-open-view="git-runtime">Git 运行时</button>
             <button class="subnav-btn" data-open-view="gitsrc">外部 Git 源</button>
           </div>
           <div class="card">
@@ -207,16 +216,17 @@
           </div>
         </section>
 
-        <!-- 克隆到工作区（独立页） -->
-        <section class="page" id="view-repo-clone">
+        <!-- Git 运行时（v0.4.4：从「克隆到工作区」拆成独立子页） -->
+        <section class="page" id="view-git-runtime">
           <div class="subnav">
             <span class="subnav-label">Git 仓库</span>
             <button class="subnav-btn" data-open-view="repos">仓库列表</button>
             <button class="subnav-btn" data-open-view="repo-new">新建仓库</button>
-            <button class="subnav-btn active" data-open-view="repo-clone">克隆到工作区</button>
+            <button class="subnav-btn" data-open-view="repo-clone">克隆到工作区</button>
+            <button class="subnav-btn active" data-open-view="git-runtime">Git 运行时</button>
             <button class="subnav-btn" data-open-view="gitsrc">外部 Git 源</button>
           </div>
-          <div class="card" style="margin-bottom:14px">
+          <div class="card">
             <div class="card-head"><h2>Git 运行时</h2><span class="muted">克隆依赖 Git；执行通道由「环境适配」自动选择</span><button class="btn btn-sm" type="button" data-open-view="environment">环境适配 / 自动处置</button></div>
             <div id="git-runtime-status" class="hint">正在检测当前运行环境的 Git…</div>
             <div id="git-runtime-env" class="hint" style="margin-top:6px">正在读取环境档案…</div>
@@ -233,6 +243,19 @@
                 <button class="btn btn-sm" type="button" id="git-runtime-refresh">仅重新检测</button>
               </div>
             </form>
+            <div class="notice" style="margin-top:12px">容器内没有 Git 时，平台会自动改用已登记的 SSH 宿主机执行克隆；也可在此手工指定 Git 路径。更多环境信息见「环境适配 / 自动处置」。</div>
+          </div>
+        </section>
+
+        <!-- 克隆到工作区（独立页） -->
+        <section class="page" id="view-repo-clone">
+          <div class="subnav">
+            <span class="subnav-label">Git 仓库</span>
+            <button class="subnav-btn" data-open-view="repos">仓库列表</button>
+            <button class="subnav-btn" data-open-view="repo-new">新建仓库</button>
+            <button class="subnav-btn active" data-open-view="repo-clone">克隆到工作区</button>
+            <button class="subnav-btn" data-open-view="git-runtime">Git 运行时</button>
+            <button class="subnav-btn" data-open-view="gitsrc">外部 Git 源</button>
           </div>
           <div class="card">
             <div class="card-head"><h2>克隆到工作区</h2><span class="muted">克隆后可直接用在线 IDE 打开</span></div>
@@ -280,6 +303,7 @@
             <button class="subnav-btn" data-open-view="repos">仓库列表</button>
             <button class="subnav-btn" data-open-view="repo-new">新建仓库</button>
             <button class="subnav-btn" data-open-view="repo-clone">克隆到工作区</button>
+            <button class="subnav-btn" data-open-view="git-runtime">Git 运行时</button>
             <button class="subnav-btn active" data-open-view="gitsrc">外部 Git 源</button>
           </div>
           <div class="card">
@@ -846,7 +870,14 @@
           </div>
           <div class="grid-2">
             <div class="card">
-              <div class="card-head"><h2>构建记录</h2><button class="btn btn-ghost btn-sm" data-reload="builds">刷新</button></div>
+              <div class="card-head">
+                <h2>构建记录</h2>
+                <div class="row gap wrap" style="align-items:center">
+                  <label class="check"><input type="checkbox" id="build-select-all" /> 全选</label>
+                  <button class="btn btn-sm btn-danger" type="button" id="build-del-selected" disabled>删除选中</button>
+                  <button class="btn btn-ghost btn-sm" data-reload="builds">刷新</button>
+                </div>
+              </div>
               <div class="hint">点一条记录查看实时日志；构建环境按「远程 Docker → 本机 Docker → WSL2 → 本地工具链」自动降级。</div>
               <div id="build-list" class="list"></div>
             </div>
@@ -959,6 +990,7 @@
                 <b>代理填写说明</b>：支持 <code>http://user:pass@host:port</code>、<code>https://…</code>、<code>socks5://…</code>（SSH 走隧道）。<b>留空</b>表示继承下一级；填 <code>direct</code> 表示明确直连，会清除子进程代理变量。内网 IP 建议在「代理配置 → 全局 NO_PROXY」里排除。<br />
                 私钥带口令时务必填写「私钥密码」，否则 SSH 会报解密失败。接口不会回传凭据明文，表单里显示 <code>******</code> 时保留原值即可。
               </div>
+              <div class="collab-inline" id="collab-inline-servers" hidden></div>
               <div class="form-actions"><button class="btn btn-primary" type="submit">保存服务器</button></div>
             </form>
           </div>
@@ -1070,9 +1102,11 @@
 
               <div class="form-actions">
                 <button class="btn btn-primary" type="submit">保存配置</button>
+                <button class="btn" type="button" id="provider-cancel">取消 / 返回列表</button>
                 <button class="btn btn-ghost" type="button" id="provider-reset">清空表单</button>
                 <button class="btn" type="button" id="provider-test">测试当前配置</button>
               </div>
+              <div class="collab-inline" id="collab-inline-aiProviders" hidden></div>
               <pre class="log short" id="provider-test-result" hidden>—</pre>
             </form>
           </div>
@@ -1149,31 +1183,11 @@
           </div>
 
           <div class="card">
-            <div class="card-head"><h2>单项代理覆盖</h2><span class="muted">仓库 / 容器 / 服务器 / AI 服务，优先级最高</span></div>
+            <div class="card-head"><h2>单项代理覆盖清单</h2><span class="muted">在各对象的编辑 / 添加处配置，这里只做汇总与清理</span></div>
             <div class="notice">
-              <b>这一栏怎么填</b><br />
-              ① <b>作用域</b>：选要为哪一类对象单独指定代理；② <b>对象</b>：从下拉里选具体仓库 / 容器 / 服务器 / AI 服务（下拉没有时可在「对象标识」里手填 id）；③ <b>代理地址</b>：填这条对象专属的代理。<br />
-              <b>可填的值</b>：<code>http://127.0.0.1:7890</code>、<code>http://user:pass@proxy.example.com:8080</code>、<code>https://…</code>、<code>socks5://127.0.0.1:1080</code>（仅 SSH 隧道与本地 CLI 生效）、<code>direct</code>（明确直连，清除子进程继承的代理变量）。<b>留空并点「保存覆盖」= 删除这条覆盖</b>，让对象回到下一级规则。<br />
-              <b>优先级</b>：单个仓库代理 &gt; Git Host 匹配规则 &gt; Git 分组代理 &gt; 全局代理；单个容器 &gt; Docker 分组 &gt; 全局；单个服务器 &gt; 服务器分组 &gt; 全局；单个 AI 服务 &gt; AI 服务分组 &gt; 全局。<b>命中即停止</b>。<br />
-              <b>示例</b>：让 <code>github.com</code> 走 <code>http://127.0.0.1:7890</code>、公司内网 Gitea 直连 → 在「Git Host 匹配规则」加 <code>*.gitea.internal → direct</code>；只让某个私有仓库走代理 → 在这里选该仓库并填代理地址。URL 中的账号密码只写 <code>state.json</code>（600 权限），界面一律显示 <code>******</code>。
+              v0.4.4 起，单项代理覆盖<b>不在本页填写</b>：请在对应对象上点「代理」（仓库 / 容器 / 服务器 / AI 服务），或在对象的编辑表单里直接填代理地址，配置随对象一起保存。本页只汇总已生效的覆盖，可在这里删除。<br />
+              <b>优先级</b>：单项覆盖 &gt; Git Host 匹配规则 &gt; 分组代理 &gt; 全局代理，命中即停止；<code>direct</code> 表示明确直连。URL 中的账号密码只写 <code>state.json</code>（600 权限），界面一律显示 <code>******</code>。
             </div>
-            <form id="proxy-override-form" class="form">
-              <div class="grid-3">
-                <label>作用域<select name="scope" id="proxy-override-scope">
-                  <option value="git">单个仓库 / Git 源</option>
-                  <option value="docker">单个容器 / 扩展实例</option>
-                  <option value="server">单个服务器</option>
-                  <option value="ai">单个 AI 服务</option>
-                </select></label>
-                <label>对象<select name="id" id="proxy-override-id"></select></label>
-                <label>代理地址<input name="url" placeholder="http://127.0.0.1:7890 / socks5://... / direct / 留空删除" /></label>
-              </div>
-              <label>或手动填写对象标识<input name="customId" id="proxy-override-custom" placeholder="仓库 id / 容器名 / 服务器 id / AI 服务 id，可从各列表的「代理」按钮自动带入" /></label>
-              <div class="form-actions">
-                <button class="btn btn-primary btn-sm" type="submit">保存覆盖</button>
-                <button class="btn btn-ghost btn-sm" type="button" id="proxy-entities-reload">刷新对象列表</button>
-              </div>
-            </form>
             <div id="proxy-overrides" class="table-wrap" style="margin-top:12px"></div>
           </div>
 
@@ -1223,6 +1237,19 @@
                 </div>
                 <div class="ops-head-tools">
                   <select id="ops-provider" title="AI 服务"></select>
+                  <div class="ops-scope-wrap">
+                    <button class="btn btn-sm" type="button" id="ops-server-btn" title="选择本次会话要诊断 / 巡检的服务器">🖥 服务器：全部</button>
+                    <div class="ops-scope-panel" id="ops-server-panel" hidden>
+                      <div class="ops-scope-head">
+                        <strong>诊断 / 巡检范围</strong>
+                        <button class="btn btn-ghost btn-sm" type="button" id="ops-scope-all">全部</button>
+                        <button class="btn btn-ghost btn-sm" type="button" id="ops-scope-none">清空</button>
+                      </div>
+                      <div id="ops-server-list" class="ops-scope-list"></div>
+                      <div class="hint">全部 / 多台 / 单台均可；一台都不选时 AI 只分析构建记录。</div>
+                      <div class="form-actions"><button class="btn btn-primary btn-sm" type="button" id="ops-scope-apply">应用范围</button></div>
+                    </div>
+                  </div>
                   <label class="check" title="允许 AI 触发部署"><input type="checkbox" id="ops-write" /> 写授权</label>
                   <button class="btn btn-sm" type="button" id="ops-rename" title="重命名会话">重命名</button>
                   <button class="btn btn-sm" type="button" id="ops-clear" title="清空当前会话消息">清空</button>
@@ -1236,7 +1263,10 @@
 
               <form id="ops-form" class="ops-compose">
                 <div id="ops-attachments" class="ops-attach" hidden></div>
-                <textarea id="ops-prompt" rows="2" placeholder="检查所有服务器负载，找出最近失败的构建并分析原因…（Ctrl/⌘ + Enter 发送）"></textarea>
+                <div class="ops-input-wrap">
+                  <textarea id="ops-prompt" rows="2" placeholder="检查所有服务器负载，找出最近失败的构建并分析原因…（Ctrl/⌘ + Enter 发送）"></textarea>
+                  <div class="ops-ghost" id="ops-ghost" hidden aria-hidden="true"></div>
+                </div>
                 <div class="ops-compose-bar">
                   <label class="file-btn btn-sm" title="附加图片或文本文件">📎 附加文件 / 图片<input type="file" id="ops-file" multiple accept="image/*,.txt,.log,.json,.yaml,.yml,.md,.xml,.csv,.js,.ts,.py,.sh,.conf,.ini,.env,.sql,.html,.css" /></label>
                   <span class="muted small" id="ops-hint">默认只读：状态查询、日志、白名单诊断命令</span>
@@ -1416,17 +1446,6 @@
           </div>
         </section>
 
-        <!-- 资源协作：统一给所有可归属资源设置协作者（Gitea 仓库协作者语义） -->
-        <section class="page" id="view-collab">
-          <div class="card">
-            <div class="card-head"><h2>资源协作</h2><span class="muted">列出当前账号可见的所有资源，点「协作者」管理授权</span></div>
-            <div class="notice">
-              只有资源的创建者或管理员能增删协作者；<code>read</code> 只能查看，<code>write</code> 可查看与操作但不能删除资源。派生资源（服务器文件 / 终端、Docker 容器、存储文件等）继承父资源权限。
-            </div>
-            <div class="row gap" style="margin-top:12px"><button class="btn btn-sm" type="button" id="collab-reload">刷新资源列表</button></div>
-            <div id="collab-resources" class="table-wrap" style="margin-top:12px"></div>
-          </div>
-        </section>
       </div>
     </main>
   </div>
@@ -1621,6 +1640,82 @@
       </div>
     </div>
   </div>
+  <!-- 仓库平台侧编辑（v0.4.4：只改平台内展示信息与代理覆盖，不动远端仓库） -->
+  <div class="modal" id="repo-edit-modal" hidden aria-modal="true" role="dialog" aria-labelledby="repoedit-title">
+    <div class="modal-mask" data-repoedit-close></div>
+    <div class="modal-panel modal-narrow">
+      <div class="modal-head">
+        <div><h2 id="repoedit-title">编辑仓库</h2><span class="muted" id="repoedit-sub">—</span></div>
+        <button class="btn btn-ghost btn-sm" type="button" data-repoedit-close>✕ 关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="notice">这里只修改<b>平台内</b>的展示信息、备注与单项代理覆盖，<b>不会改动远端仓库</b>；保存后立即在列表生效。</div>
+        <form id="repoedit-form" class="form" style="margin-top:12px">
+          <input type="hidden" name="id" id="repoedit-id" />
+          <label>显示名称<input name="name" /></label>
+          <label>描述<input name="description" /></label>
+          <label>备注（仅平台可见）<input name="note" placeholder="可选" /></label>
+          <label>单项代理覆盖<input name="proxy" placeholder="http://127.0.0.1:7890 / direct / 留空清除覆盖" /></label>
+          <div class="form-actions"><button class="btn btn-primary" type="submit">保存</button></div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <!-- 单个对象的代理覆盖（v0.4.4：由对象行「代理」按钮打开，不再在代理页填写） -->
+  <div class="modal" id="object-proxy-modal" hidden aria-modal="true" role="dialog" aria-labelledby="objproxy-title">
+    <div class="modal-mask" data-objproxy-close></div>
+    <div class="modal-panel modal-narrow">
+      <div class="modal-head">
+        <div><h2 id="objproxy-title">单项代理覆盖</h2><span class="muted" id="objproxy-label">—</span></div>
+        <button class="btn btn-ghost btn-sm" type="button" data-objproxy-close>✕ 关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="notice">只对该对象生效，优先级高于 Git Host 规则 / 分组 / 全局代理。可填 <code>http://…</code>、<code>socks5://…</code>、<code>direct</code>；<b>留空保存 = 删除覆盖</b>。已有地址出于安全不回显，填新值即覆盖。</div>
+        <form id="objproxy-form" class="form" style="margin-top:12px">
+          <label>代理地址<input name="url" placeholder="http://127.0.0.1:7890 / direct / 留空删除" /></label>
+          <label>备注（可选）<input name="note" placeholder="例如：仅该仓库走内网代理" /></label>
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit">保存覆盖</button>
+            <button class="btn btn-danger" type="button" id="objproxy-remove">删除覆盖</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <!-- 平台统一确认弹窗（v0.4.4）：替代浏览器原生 confirm，所有危险操作共用 -->
+  <div class="modal" id="confirm-modal" hidden aria-modal="true" role="dialog" aria-labelledby="confirm-title">
+    <div class="modal-mask" data-confirm-close></div>
+    <div class="modal-panel confirm-panel">
+      <div class="modal-head">
+        <h2 id="confirm-title">请确认</h2>
+        <button class="btn btn-ghost btn-sm" type="button" data-confirm-close>✕ 关闭</button>
+      </div>
+      <div class="modal-body"><p id="confirm-body"></p></div>
+      <div class="modal-actions">
+        <button class="btn" type="button" id="confirm-cancel">取消</button>
+        <button class="btn btn-danger" type="button" id="confirm-ok">确认</button>
+      </div>
+    </div>
+  </div>
+  <!-- 平台统一输入 / 信息弹窗（v0.4.4）：替代浏览器原生 prompt()，与确认弹窗同款视觉 -->
+  <div class="modal" id="prompt-modal" hidden aria-modal="true" role="dialog" aria-labelledby="prompt-title">
+    <div class="modal-mask" data-prompt-close></div>
+    <div class="modal-panel confirm-panel">
+      <div class="modal-head">
+        <h2 id="prompt-title">请输入</h2>
+        <button class="btn btn-ghost btn-sm" type="button" data-prompt-close>✕ 关闭</button>
+      </div>
+      <div class="modal-body">
+        <p id="prompt-body" class="muted small"></p>
+        <label class="prompt-field">输入内容<input id="prompt-input" type="text" autocomplete="off" spellcheck="false" /></label>
+        <p id="prompt-error" class="small" style="color:var(--danger,#d64545);margin-top:6px" hidden></p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" type="button" id="prompt-cancel">取消</button>
+        <button class="btn btn-primary" type="button" id="prompt-ok">确定</button>
+      </div>
+    </div>
+  </div>
   <div id="toast" class="toast"></div>
   <script src="/vendor/xterm.min.js"></script>
   <script src="/vendor/addon-fit.min.js"></script>
@@ -1628,6 +1723,6 @@
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
   <script src="/vendor/qrcode.js"></script>
-  <script src="/app.js?v=20261113d"></script>
+  <script src="/app.js?v=20261113f"></script>
 </body>
 </html>

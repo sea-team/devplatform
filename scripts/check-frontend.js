@@ -38,15 +38,15 @@ const missing = refs.filter((id) => !ids.has(id) && !RUNTIME_IDS.has(id));
 note(missing.length === 0, 'app.js 引用的静态 id 均存在', missing.length ? `缺失：${missing.join(', ')}` : `${refs.length} 个引用`);
 
 const sections = [...html.matchAll(/class="page" id="view-([a-z0-9-]+)"/g)].map((m) => m[1]);
-const SUBPAGES = ['repo-new', 'repo-clone', 'storage-conn', 'storage-mounts', 'storage-drivers',
+const SUBPAGES = ['repo-new', 'repo-clone', 'git-runtime', 'storage-conn', 'storage-mounts', 'storage-drivers',
   'build-start', 'deploys', 'server-new', 'docker-containers', 'docker-images',
   'docker-volumes', 'docker-networks', 'docker-compose', 'ai-list', 'ai-test'];
-// v0.4.3：AI 服务配置拆成 3 个独立页，总数 30 → 32。
+// v0.4.4：Git 运行时从克隆页拆出独立子页，资源协作页下线，总数仍为 32。
 note(sections.length === 32 && sections.includes('gitsrc') && sections.includes('docker')
   && sections.includes('proxy') && sections.includes('environment') && sections.includes('envcfg')
-  && sections.includes('ide-config') && sections.includes('users') && sections.includes('collab')
-  && SUBPAGES.every((v) => sections.includes(v)),
-'32 个独立页面（17 主模块 + 15 个子功能页）均已转为可标签化的 .page', sections.join(', '));
+  && sections.includes('ide-config') && sections.includes('users') && sections.includes('git-runtime')
+  && !sections.includes('collab') && SUBPAGES.every((v) => sections.includes(v)),
+'32 个独立页面（含 Git 运行时子页；资源协作页已下线）均已转为可标签化的 .page', sections.join(', '));
 note(['/git-sources', '/docker/overview', '/extensions/backups', '/extensions/dbgate', '/builds/backends']
   .every((p) => app.includes(p)) && app.includes('function loadGitSources') && app.includes('function loadDocker'),
 'Git 源 / Docker 管理 / 备份 / DbGate / 构建后端接口已全部接线');
@@ -61,13 +61,15 @@ note(['/openlist/status', '/openlist/storages', '/openlist/drivers', '/openlist/
 note(['id="openlist-config-form"', 'id="ol-driver"', 'id="storage-select-all"', 'data-ol-action="move"', 'id="openlist-frame"']
   .every((s) => html.includes(s)), 'OpenList 管理界面控件齐全');
 note(['data-proxy-repo', 'data-dk-op="proxy"', 'data-server-proxy', 'data-ai-proxy']
-  .every((s) => app.includes(s)) && app.includes('function gotoProxyOverride'),
-  '四类对象均可一键跳到代理页预填单项覆盖');
+  .every((s) => app.includes(s)) && app.includes('function gotoProxyOverride')
+  && app.includes('function openObjectProxy') && html.includes('id="object-proxy-modal"')
+  && !html.includes('id="proxy-override-form"'),
+'四类对象均在自身行上打开单项代理覆盖弹窗（代理页不再提供配置表单）');
 
-// v0.3.2：单项代理说明、Git 账号密码、多 OpenList 连接、页面拆分。
-note(html.includes('这一栏怎么填') && html.includes('留空并点「保存覆盖」')
-  && html.includes('socks5://127.0.0.1:1080') && html.includes('单个仓库代理 &gt; Git Host'),
-'单项代理覆盖已补齐格式 / 优先级 / 示例 / 留空与 direct 语义说明');
+// v0.4.4：代理页只保留覆盖清单与说明，配置入口下沉到对象。
+note(html.includes('单项代理覆盖清单') && html.includes('不在本页填写')
+  && html.includes('id="proxy-overrides"') && app.includes('function saveObjectProxy'),
+'代理页只汇总 / 清理单项覆盖，填写入口已下沉到对应对象');
 note(html.includes('id="gitsrc-auth-type"') && html.includes('id="gitsrc-password-fields"')
   && html.includes('id="clone-auth-mode"') && html.includes('id="clone-inline-fields"')
   && app.includes("body.authType === 'password'") && app.includes('syncCloneAuthFields'),
@@ -94,7 +96,7 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
-note(html.includes('?v=20261113d'), '静态资源版本已升到 20261113d');
+note(html.includes('?v=20261113f'), '静态资源版本已升到 20261113f');
 
 // v0.3.10：IDE 登录凭据、总览运行主机卡片、仓库文件 / 终端 / Git 操作。
 note(html.includes('id="ide-cred"') && html.includes('id="ide-cred-reveal"')
@@ -173,11 +175,12 @@ note(html.includes('id="login-view"') && html.includes('id="login-form"')
   && app.includes('async function startWorkbench') && app.includes("fetch('/api/auth/status')")
   && app.includes("authFetch('/auth/login'") && css.includes('.login-view[hidden]'),
 '未登录遮罩、首次改密、登录状态检查与工作台延迟启动链路齐全');
-note(html.includes('id="view-users"') && html.includes('id="view-collab"')
-  && html.includes('id="collab-modal"') && app.includes('users: loadUsers')
-  && app.includes('collab: loadCollabResources') && app.includes("api('/collaborators'")
-  && app.includes("api('/resources'"),
-'账号管理页、资源协作页与协作者弹窗均已接线');
+note(html.includes('id="view-users"') && html.includes('id="collab-modal"')
+  && html.includes('id="collab-inline-servers"') && html.includes('id="collab-inline-aiProviders"')
+  && app.includes('users: loadUsers') && app.includes('function renderCollabInline')
+  && app.includes('function saveCollabInline') && app.includes('data-collab-open=')
+  && app.includes("api('/collaborators'") && !app.includes('loadCollabResources'),
+'账号管理页 + 对象表单内嵌协作者 + 单对象弹窗均已接线（资源协作页已下线）');
 note(authSrc.includes('scryptSync') && authSrc.includes('initial-admin.txt')
   && authSrc.includes('dp_session') && permSrc.includes('function guard')
   && permSrc.includes('collaborators') && serverSrc.includes('filterResponse')
@@ -291,6 +294,50 @@ note(serverSrc.includes("app.delete('/api/builds/:id'")
   && app.includes('data-build-del') && app.includes("/builds/${encodeURIComponent")
   && app.includes("method: 'DELETE'"),
 '构建部署页构建记录支持删除（后端 DELETE + 前端按钮与确认）');
+
+/* --------------------------- v0.4.4 本轮改造 --------------------------- */
+// 1) 统一确认 / 输入弹窗：全站不再有原生 confirm / prompt / alert 调用。
+const appCode = app.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
+note(html.includes('id="confirm-modal"') && html.includes('id="confirm-ok"')
+  && html.includes('id="prompt-modal"') && html.includes('id="prompt-input"')
+  && css.includes('.modal-panel.confirm-panel') && css.includes('.prompt-field')
+  && app.includes('function confirmDialog') && app.includes('function promptDialog')
+  && app.includes('await confirmDialog({') && (app.match(/await promptDialog\(/g) || []).length >= 11
+  && !/\b(confirm|prompt|alert)\(/.test(appCode),
+'平台统一确认 / 输入弹窗已接线，原生 confirm / prompt / alert 全部替换');
+
+// 2) AI：编辑取消 / 输入框 Tab 建议 / 会话服务器范围（诊断 · 巡检 · 运维）。
+note(html.includes('id="provider-cancel"') && html.includes('id="ops-ghost"')
+  && html.includes('id="ops-server-panel"') && html.includes('id="ops-scope-apply"')
+  && app.includes('function acceptOpsSuggestion') && app.includes('function renderOpsGhost')
+  && app.includes('function applyOpsScope') && app.includes('serverScope')
+  && engineSrc.includes('extractSuggestion') && engineSrc.includes('scopedServers')
+  && sessionsSrc.includes('normalizeScope'),
+'AI 服务编辑取消 / 输入框 Tab 填入建议 / 会话服务器范围（全部·多台·单台）已接线');
+
+// 3) 构建记录批量删除、驱动清单空态不再误报平台账号权限。
+note(serverSrc.includes("app.delete('/api/builds'") && html.includes('id="build-select-all"')
+  && html.includes('id="build-del-selected"') && app.includes('data-build-check')
+  && app.includes("api('/builds', { method: 'DELETE'"),
+'构建记录支持全选 / 批量删除（后端批量接口 + 前端复选框）');
+note(!app.includes('未读取到驱动清单（需要管理员权限 Token）')
+  && app.includes('与当前登录的平台账号是否为管理员无关')
+  && serverSrc.includes('diagnostic'),
+'驱动清单空态按上游原因分类，不再误报平台账号权限不足');
+
+// 4) Git 运行时拆页 + 仓库平台侧编辑 / 移除 / 恢复。
+note(html.includes('id="view-git-runtime"') && app.includes("'git-runtime': loadRepos")
+  && html.includes('id="repo-edit-modal"') && app.includes("api('/repos/meta'")
+  && app.includes("api('/repos/remove'") && serverSrc.includes("app.put('/api/repos/meta'")
+  && serverSrc.includes("app.post('/api/repos/remove'") && serverSrc.includes("app.post('/api/repos/restore'"),
+'Git 运行时独立子页 + 仓库平台侧编辑 / 移除 / 恢复（远端仓库不受影响）');
+
+// 5) 资源协作页下线，协作者下沉到对象表单；删除对象 / 禁用账号时清理悬空引用。
+note(!html.includes('id="view-collab"') && !app.includes('loadCollabResources')
+  && html.includes('id="collab-inline-servers"') && app.includes('data-collab-open=')
+  && coreSrc.includes('removedIds') && permSrc.includes("status !== 'disabled'")
+  && permSrc.includes('proxy\\/overrides'),
+'资源协作页已移除；协作者按单个对象配置，删除 / 禁用时清理悬空引用');
 
 const scripts = [...html.matchAll(/<script src="\/vendor\/([^"]+)"/g)].map((m) => m[1]);
 const cmIndex = scripts.indexOf('codemirror.js');

@@ -396,7 +396,33 @@ function historyTurns(history) {
     .map((m) => ({ role: m.role, content: String(m.content).slice(0, 8000) }));
 }
 
-async function opsAgent({ providerId, prompt, allowWrite = false, history = [], attachments = [] }) {
+/**
+ * v0.4.4：把「下一次提问建议」从模型回复里解析出来，供输入框做 Tab 可填入的灰色提示。
+ * 约定模型在回复最后另起一行写 `NEXT: 一句话`；解析后该行从正文移除，不污染历史上下文。
+ * 模型不遵守约定时返回空建议，前端不显示，完全向后兼容。
+ */
+function extractSuggestion(answer) {
+  const text = String(answer || '');
+  const re = /^\s*(?:[-*]\s*)?(?:`+)?NEXT\s*[:：]\s*(.*?)(?:`+)?\s*$/gim;
+  const matches = [...text.matchAll(re)];
+  if (!matches.length) return { answer: text.trimEnd(), suggestion: '' };
+  const suggestion = String(matches[matches.length - 1][1] || '')
+    .trim().replace(/^`+|`+$/g, '').slice(0, 120);
+  const cleaned = text
+    .replace(/^\s*(?:[-*]\s*)?(?:`+)?NEXT\s*[:：].*$\n?/gim, '')
+    .replace(/\n{3,}/g, '\n\n').trimEnd();
+  return { answer: cleaned, suggestion };
+}
+
+/** 会话级服务器范围：'all' / 未指定 = 全部；数组 = 仅选中的服务器（空数组 = 不选）。 */
+function scopedServers(serverIds) {
+  const all = state().servers || [];
+  if (!Array.isArray(serverIds)) return all;
+  const set = new Set(serverIds.map(String));
+  return all.filter((s) => set.has(s.id));
+}
+
+async function opsAgent({ providerId, prompt, allowWrite = false, history = [], attachments = [], serverIds }) {
   const provider = state().aiProviders.find((p) => p.id === providerId)
     || state().aiProviders.find((p) => p.enabled !== false);
   if (!provider) throw new Error('请先在「AI 服务」中配置一个模型服务');
@@ -404,6 +430,11 @@ async function opsAgent({ providerId, prompt, allowWrite = false, history = [], 
   const files = attachmentList(attachments);
   const turns = historyTurns(history);
   const withImages = provider.kind !== 'cli' && files.some((a) => a.kind === 'image');
+  const servers = scopedServers(serverIds);
+  const allowedServerIds = new Set(servers.map((s) => s.id));
+  const scopeNote = Array.isArray(serverIds)
+    ? `本次会话只针对选中的 ${servers.length} 台服务器做诊断 / 巡检 / 运维，禁止查询或操作范围外的服务器。`
+    : '本次会话可使用全部已登记服务器。';
   const system = [
     provider.kind === 'cli'
       ? '你是服务器运维助手。平台已提前采集好实时上下文并附在问题后面，请直接基于这些数据分析，不要假设可以自己调用工具。'
@@ -411,7 +442,9 @@ async function opsAgent({ providerId, prompt, allowWrite = false, history = [], 
     '回答用简体中文，结论先行，给出可执行的建议。',
     '这是一段连续对话，请结合上文理解用户所指的「它 / 刚才 / 继续」等表述。',
     allowWrite ? '用户已授权写操作，必要时可执行部署。' : '当前为只读模式，禁止任何修改类操作。',
-    `可用服务器：${JSON.stringify(state().servers.map((s) => ({ id: s.id, name: s.name, host: s.host })))}`,
+    `可用服务器：${JSON.stringify(servers.map((s) => ({ id: s.id, name: s.name, host: s.host })))}`,
+    scopeNote,
+    '最后另起一行输出「NEXT: 一句话」，内容是建议用户下一步在输入框里输入的提示词（不超过 60 字，不要解释、不要加引号）。',
   ].join('\n');
 
   const trace = [];
@@ -420,7 +453,7 @@ async function opsAgent({ providerId, prompt, allowWrite = false, history = [], 
   // 由平台先执行只读工具采集上下文，再把上下文 + 历史 + 附件文本拼进一次提问里。
   if (provider.kind === 'cli') {
     const context = [];
-    for (const server of state().servers) {
+    for (const server of servers) {
       try {
         const status = await collectStatus(server);
         trace.push({ tool: 'server_status', args: { server_id: server.id }, result: status });
@@ -452,8 +485,9 @@ async function opsAgent({ providerId, prompt, allowWrite = false, history = [], 
       { role: 'system', content: system },
       { role: 'user', content: `${buildPrompt(prompt, files)}${imageNote}${historyText}\n\n=== 平台实时上下文（由平台采集） ===\n${context.join('\n\n')}` },
     ]);
+    const { answer, suggestion } = extractSuggestion(response.choices?.[0]?.message?.content || '');
     return {
-      answer: response.choices?.[0]?.message?.content || '',
+      answer, suggestion,
       trace,
       provider: provider.name,
       model: `${provider.command === 'custom' ? (provider.customCommand || 'custom') : (provider.command || 'cli')} (${provider.runner === 'wsl' ? `WSL:${provider.distro || 'default'}` : '宿主机'})`,
@@ -488,8 +522,9 @@ async function opsAgent({ providerId, prompt, allowWrite = false, history = [], 
     if (!message) throw new Error('AI 服务响应格式异常');
     messages.push(message);
     if (!message.tool_calls || !message.tool_calls.length) {
+      const { answer, suggestion } = extractSuggestion(typeof message.content === 'string' ? message.content : '');
       return {
-        answer: typeof message.content === 'string' ? message.content : '',
+        answer, suggestion,
         trace, provider: provider.name, model: provider.model,
         attachmentMode: visionFallback ? 'text-fallback' : (withImages ? 'vision' : (files.length ? 'text' : 'none')),
       };
@@ -498,10 +533,15 @@ async function opsAgent({ providerId, prompt, allowWrite = false, history = [], 
       let args = {};
       try { args = JSON.parse(call.function.arguments || '{}'); } catch { args = {}; }
       let content;
-      try {
-        content = await executeTool(call.function.name, args, allowWrite);
-      } catch (e) {
-        content = { error: e.message };
+      // 会话选定的服务器范围同时约束工具调用，避免模型「顺手」查了范围外的主机。
+      if (args.server_id && !allowedServerIds.has(String(args.server_id))) {
+        content = { error: `服务器 ${args.server_id} 不在本次会话选中的范围内，已拒绝调用` };
+      } else {
+        try {
+          content = await executeTool(call.function.name, args, allowWrite);
+        } catch (e) {
+          content = { error: e.message };
+        }
       }
       trace.push({ tool: call.function.name, args, result: content });
       messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(content).slice(0, 20000) });
@@ -509,6 +549,7 @@ async function opsAgent({ providerId, prompt, allowWrite = false, history = [], 
   }
   return {
     answer: '已达到工具调用轮次上限，请缩小问题范围后重试。',
+    suggestion: '请缩小问题范围，只描述需要诊断的服务器',
     trace, provider: provider.name, model: provider.model,
     attachmentMode: visionFallback ? 'text-fallback' : (withImages ? 'vision' : (files.length ? 'text' : 'none')),
   };

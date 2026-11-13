@@ -351,8 +351,68 @@ app.get('/api/overview', wrap(async (req, res) => {
 /* ------------------------------ Git 仓库管理 ----------------------------- */
 
 // 仓库列表聚合「平台自带 Gitea + 所有登记的外部源」，单个源失败不影响其它源。
+// v0.4.4：叠加平台侧展示信息并过滤已移除项。远端仓库本身永远不受影响。
+function decorateRepos(data) {
+  const s = state();
+  const hidden = new Set(s.hiddenRepos || []);
+  const meta = s.repoMeta || {};
+  const items = (data.items || [])
+    .filter((r) => r && !hidden.has(r.id))
+    .map((r) => ({ ...r, ...(meta[r.id] || {}), id: r.id, platformMeta: Boolean(meta[r.id]) }));
+  return { ...data, items, hiddenRepos: [...hidden] };
+}
+
 app.get('/api/repos', wrap(async (req, res) => {
-  ok(res, await gitSources.listAllRepos());
+  ok(res, decorateRepos(await gitSources.listAllRepos()));
+}));
+
+// 平台侧编辑：只把展示信息写入 state.repoMeta；带 proxy 时同步单项代理覆盖，
+// 这样「对象编辑表单」就是代理覆盖的唯一配置入口（v0.4.4）。
+app.put('/api/repos/meta', wrap(async (req, res) => {
+  const b = req.body || {};
+  const id = String(b.id || (req.query && req.query.id) || '');
+  if (!id) throw badRequest('缺少仓库 id');
+  const patch = { updatedAt: new Date().toISOString() };
+  if (b.name !== undefined) patch.name = String(b.name).trim().slice(0, 120);
+  if (b.description !== undefined) patch.description = String(b.description).slice(0, 500);
+  if (b.note !== undefined) patch.note = String(b.note).slice(0, 500);
+  if (b.proxy !== undefined) {
+    const url = proxy.validateUrl(String(b.proxy || '').trim());
+    patch.proxy = url;
+    proxy.setOverride('git', id, { url, note: '仓库编辑表单' });
+  }
+  update((s) => { s.repoMeta[id] = { ...(s.repoMeta[id] || {}), ...patch }; });
+  ok(res, { id, meta: state().repoMeta[id] });
+}));
+
+// 平台侧移除：加入隐藏列表（不动远端仓库）；可勾选一并删除本地工作区目录。
+app.post('/api/repos/remove', wrap(async (req, res) => {
+  const b = req.body || {};
+  const id = String(b.id || '');
+  if (!id) throw badRequest('缺少仓库 id');
+  const purge = Boolean(b.purgeWorkspace);
+  if (purge) {
+    if (!id.startsWith('workspace:')) throw badRequest('只有工作区本地仓库支持一并删除目录');
+    const name = id.slice('workspace:'.length);
+    if (!name || /[/\\]/.test(name) || name === '.' || name === '..') throw badRequest('仓库目录名不合法');
+    const dir = safeWorkspacePath(name);
+    if (dir === path.resolve(config.workspaceDir)) throw badRequest('拒绝删除工作区根目录');
+    if (!fs.existsSync(path.join(dir, '.git'))) throw badRequest('目标不是 Git 仓库目录，已拒绝删除');
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  update((s) => {
+    if (!Array.isArray(s.hiddenRepos)) s.hiddenRepos = [];
+    if (!s.hiddenRepos.includes(id)) s.hiddenRepos.push(id);
+  });
+  ok(res, { removed: id, purgeWorkspace: purge });
+}));
+
+// 误删恢复：把仓库重新放回聚合列表。
+app.post('/api/repos/restore', wrap(async (req, res) => {
+  const id = String((req.body && req.body.id) || '');
+  if (!id) throw badRequest('缺少仓库 id');
+  update((s) => { s.hiddenRepos = (s.hiddenRepos || []).filter((x) => x !== id); });
+  ok(res, { restored: id });
 }));
 
 app.post('/api/repos', wrap(async (req, res) => {
@@ -610,8 +670,8 @@ app.post('/api/openlist/storages/:id/toggle', wrap(async (req, res) => ok(res, a
 app.delete('/api/openlist/storages/:id', wrap(async (req, res) => ok(res, await openlist.deleteStorage(req.params.id))));
 
 app.get('/api/openlist/drivers', tolerant(
-  async (req, res) => ok(res, { items: await openlist.listDrivers() }),
-  { items: [] },
+  async (req, res) => ok(res, await openlist.listDrivers()),
+  { items: [], diagnostic: '' },
 ));
 app.get('/api/openlist/drivers/info', tolerant(async (req, res) => {
   const driver = String(req.query.driver || '');
@@ -764,6 +824,26 @@ app.get('/api/profiles', (req, res) => ok(res, { items: PROFILES, executor: conf
 
 app.get('/api/builds', (req, res) => ok(res, {
   items: state().builds.map((b) => ({ ...b, logs: undefined })),
+}));
+
+// 批量删除构建记录（v0.4.4）。ids 可放 body 或 query；逐条按 delete 权限校验，
+// 协作者不可删。运行中的记录被删后异步回写找不到目标会自然终止，不会复活。
+app.delete('/api/builds', wrap(async (req, res) => {
+  const b = req.body && typeof req.body === 'object' ? req.body : {};
+  const raw = Array.isArray(b.ids) ? b.ids : String((req.query && req.query.ids) || '').split(',');
+  const ids = [...new Set(raw.map((x) => String(x || '').trim()).filter(Boolean))];
+  if (!ids.length) throw badRequest('请先选择要删除的构建记录');
+  if (ids.length > 200) throw badRequest('单次最多删除 200 条构建记录');
+  const all = state().builds || [];
+  const denied = ids.filter((id) => {
+    const found = all.find((x) => x.id === id);
+    return found && !permissions.can(req.user, found, 'delete');
+  });
+  if (denied.length) throw new HttpError(403, `无权删除 ${denied.length} 条构建记录`);
+  const idSet = new Set(ids);
+  const deleted = ids.filter((id) => all.some((x) => x.id === id));
+  update((s) => { s.builds = (s.builds || []).filter((x) => !idSet.has(x.id)); });
+  ok(res, { deleted, count: deleted.length });
 }));
 
 app.post('/api/builds', wrap(async (req, res) => {

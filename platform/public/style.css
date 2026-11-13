@@ -299,6 +299,20 @@ tr:last-child td { border-bottom: 0; }
 .modal-head .muted { font-size: 12px; }
 .modal-body { padding: 16px 20px 20px; overflow: auto; min-height: 0; }
 
+/* ---------- 统一确认弹窗（v0.4.4） ---------- */
+.modal-panel.confirm-panel { width: min(460px, 94vw); }
+.confirm-panel .modal-head h2 { font-size: 15px; }
+.confirm-panel .modal-body { padding-bottom: 18px; }
+.confirm-panel .modal-body p { margin: 0; white-space: pre-wrap; line-height: 1.75; font-size: 14px; }
+/* 统一输入弹窗：与确认弹窗同宽同边距，输入框占满一行 */
+.prompt-field { display: block; margin-top: 12px; font-size: 12px; color: var(--muted, #7a8699); }
+.prompt-field input { display: block; width: 100%; margin-top: 6px; font-size: 14px; }
+.prompt-field input[readonly] { background: var(--panel-alt, #f5f7fa); font-family: var(--mono, monospace); }
+.modal-actions {
+  display: flex; justify-content: flex-end; gap: 10px;
+  padding: 12px 20px 18px; border-top: 1px solid var(--border);
+}
+
 .term-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .term-actions { margin-left: auto; }
 .chip-green { background: var(--green-soft); color: var(--green); border-color: #bbf7d0; }
@@ -888,6 +902,50 @@ tr.file-row.is-file .file-name b { font-weight: 550; }
   font-size: 13px; line-height: 1.6; outline: none;
 }
 #view-ops .ops-compose textarea:focus { border-color: var(--primary); }
+
+/* ---------- v0.4.4 AI 运维：输入框内联建议 + 会话服务器范围 ---------- */
+.ops-input-wrap { position: relative; }
+.ops-ghost {
+  position: absolute; left: 12px; top: 10px; right: 12px; z-index: 2;
+  pointer-events: none; color: var(--muted); font-size: 13px; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word;
+}
+.ops-ghost[hidden] { display: none; }
+.ops-ghost-tag {
+  display: inline-block; margin-left: 8px; padding: 1px 7px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2);
+  color: var(--primary); font-size: 10px; white-space: nowrap;
+}
+.ops-scope-wrap { position: relative; }
+.ops-scope-panel {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20;
+  width: 280px; max-height: 360px; overflow: auto; padding: 12px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); box-shadow: 0 16px 40px rgba(15, 23, 42, .18);
+}
+.ops-scope-panel[hidden] { display: none; }
+.ops-scope-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.ops-scope-head strong { font-size: 13px; margin-right: auto; }
+.ops-scope-list {
+  display: flex; flex-direction: column; gap: 4px;
+  max-height: 170px; overflow: auto; margin-bottom: 8px;
+}
+.ops-scope-item { padding: 4px 6px; border-radius: 6px; font-size: 12.5px; }
+.ops-scope-item:hover { background: var(--surface-2); }
+.ops-scope-panel .form-actions { margin-top: 8px; }
+
+/* ---------- v0.4.4 对象表单内嵌协作者 ---------- */
+.collab-inline {
+  margin-top: 12px; padding: 12px 14px; border: 1px dashed var(--border);
+  border-radius: 10px; background: var(--surface-2);
+}
+.collab-inline[hidden] { display: none; }
+.collab-inline-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.collab-inline-head b { font-size: 13px; }
+.collab-inline-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 14px; }
+.collab-inline-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.collab-inline-row select { margin-left: auto; padding: 3px 6px; font-size: 12px; }
+
 .ops-compose-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .ops-compose-bar .muted { font-size: 11px; }
 .ops-spacer { flex: 1 1 auto; }

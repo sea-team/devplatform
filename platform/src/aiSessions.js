@@ -20,6 +20,13 @@ const MAX_ATTACHMENTS = 6;
 const MAX_ATTACHMENT_CHARS = 4 * 1024 * 1024;   // 单个附件 dataURL / 文本上限
 const MAX_TOTAL_ATTACHMENT_CHARS = 16 * 1024 * 1024;
 const TITLE_MAX = 48;
+const MAX_SCOPE_SERVERS = 50;
+
+/** 会话服务器范围：'all' = 全部；数组 = 仅选中 id（空数组表示一台都不选）。 */
+function normalizeScope(value) {
+  if (!Array.isArray(value)) return 'all';
+  return [...new Set(value.map(String).filter(Boolean))].slice(0, MAX_SCOPE_SERVERS);
+}
 
 const now = () => new Date().toISOString();
 const sessions = () => (Array.isArray(state().aiSessions) ? state().aiSessions : []);
@@ -55,6 +62,7 @@ function summary(session) {
     ownerId: session.ownerId || '',
     providerId: session.providerId || '',
     allowWrite: Boolean(session.allowWrite),
+    serverScope: Array.isArray(session.serverScope) ? [...session.serverScope] : 'all',
     messageCount: (session.messages || []).length,
     preview: previewOf(session),
     createdAt: session.createdAt || '',
@@ -82,6 +90,7 @@ function create(user, body = {}) {
     title: String((body && body.title) || '新会话').slice(0, TITLE_MAX),
     providerId: String((body && body.providerId) || ''),
     allowWrite: Boolean(body && body.allowWrite),
+    serverScope: normalizeScope(body && body.serverScope),
     messages: [],
     createdAt: now(),
     updatedAt: now(),
@@ -109,6 +118,7 @@ function modify(user, id, body = {}) {
     if (body.title !== undefined) target.title = String(body.title).slice(0, TITLE_MAX) || '新会话';
     if (body.providerId !== undefined) target.providerId = String(body.providerId || '');
     if (body.allowWrite !== undefined) target.allowWrite = Boolean(body.allowWrite);
+    if (body.serverScope !== undefined) target.serverScope = normalizeScope(body.serverScope);
     target.updatedAt = now();
   });
   return detail(user, id);
@@ -164,6 +174,8 @@ async function send(user, id, body = {}) {
   const providerId = String((body && body.providerId) || session.providerId || '');
   const allowWrite = body && body.allowWrite !== undefined
     ? Boolean(body.allowWrite) : Boolean(session.allowWrite);
+  const serverScope = body && body.serverScope !== undefined
+    ? normalizeScope(body.serverScope) : normalizeScope(session.serverScope);
   const userMessage = {
     id: uid('msg'), role: 'user', content,
     attachments: files, trace: [], at: now(),
@@ -186,15 +198,20 @@ async function send(user, id, body = {}) {
     }
     target.providerId = providerId;
     target.allowWrite = allowWrite;
+    target.serverScope = serverScope;
     target.updatedAt = now();
   });
 
   let assistant;
   try {
-    const result = await opsAgent({ providerId, prompt: content, allowWrite, history, attachments: files });
+    const result = await opsAgent({
+      providerId, prompt: content, allowWrite, history, attachments: files,
+      serverIds: Array.isArray(serverScope) ? serverScope : undefined,
+    });
     assistant = {
       id: uid('msg'), role: 'assistant',
       content: result.answer || '（无文本结论）',
+      suggestion: String(result.suggestion || ''),
       trace: Array.isArray(result.trace) ? result.trace : [],
       provider: result.provider || '', model: result.model || '',
       mode: result.mode || '', attachmentMode: result.attachmentMode || 'none',
@@ -202,7 +219,7 @@ async function send(user, id, body = {}) {
     };
   } catch (e) {
     assistant = {
-      id: uid('msg'), role: 'assistant', content: '',
+      id: uid('msg'), role: 'assistant', content: '', suggestion: '',
       trace: [], error: String((e && e.message) || e), at: now(),
     };
   }

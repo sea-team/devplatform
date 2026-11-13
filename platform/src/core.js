@@ -114,6 +114,10 @@ function defaultState() {
     deploys: [],
     extensions: [],
     gitSources: [],
+    // v0.4.4 仓库「平台侧管理」：聚合列表来自外部 Git 源，平台只保存展示信息与移除标记，
+    // 不改动远端仓库。key 为仓库 id（可能含 / 与 :，故用对象字典而非数组）。
+    repoMeta: {},
+    hiddenRepos: [],
     // Git 运行时：手工指定 git 路径 + 是否允许「容器内无 Git 时借 SSH 宿主机执行」。
     git: { bin: '', sshFallback: 'auto' },
     backups: [],
@@ -160,6 +164,8 @@ function loadState() {
       users: Array.isArray(parsed.users) ? parsed.users : [],
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
       aiSessions: Array.isArray(parsed.aiSessions) ? parsed.aiSessions : [],
+      repoMeta: (parsed.repoMeta && typeof parsed.repoMeta === 'object' && !Array.isArray(parsed.repoMeta)) ? parsed.repoMeta : {},
+      hiddenRepos: Array.isArray(parsed.hiddenRepos) ? parsed.hiddenRepos : [],
       // 嵌套对象要逐层补齐，避免旧 state.json 缺字段导致策略读取为 undefined。
       environment: { ...base.environment, ...(parsed.environment || {}) },
     };
@@ -189,6 +195,7 @@ function update(mutator) {
   // 如果新对象漏带 ownerId / collaborators，这里能恢复，避免资源变成无人所有、
   // 普通用户编辑后反而看不到自己的数据（v0.4.1）。
   const before = new Map();
+  const beforeIds = new Set();
   for (const key of OWNED_COLLECTIONS) {
     for (const item of (state()[key] || [])) {
       if (!item || !item.id) continue;
@@ -196,6 +203,7 @@ function update(mutator) {
         ownerId: item.ownerId || '',
         collaborators: Array.isArray(item.collaborators) ? item.collaborators : null,
       });
+      beforeIds.add(item.id);
     }
   }
   const result = mutator(state());
@@ -213,6 +221,31 @@ function update(mutator) {
         item.ownerId = user.id;
       }
       if (!Array.isArray(item.collaborators)) item.collaborators = [];
+    }
+  }
+  // v0.4.4 级联清理：对象删除时同步移除以该对象 id 为键的单项代理覆盖；
+  // 账号被禁用 / 删除时移除它在所有资源上的协作者条目，避免下次保存报「协作者账号不存在」。
+  // 放在 update() 里可覆盖所有删除入口，无需逐个 handler 记得调用。
+  const liveIds = new Set();
+  for (const key of OWNED_COLLECTIONS) {
+    for (const item of (_state[key] || [])) if (item && item.id) liveIds.add(item.id);
+  }
+  const removedIds = [...beforeIds].filter((id) => !liveIds.has(id));
+  if (removedIds.length && _state.proxy && _state.proxy.overrides) {
+    for (const dict of Object.values(_state.proxy.overrides)) {
+      if (!dict || typeof dict !== 'object') continue;
+      for (const id of removedIds) delete dict[id];
+    }
+  }
+  const activeUserIds = new Set((_state.users || [])
+    .filter((u) => u && u.status !== 'disabled').map((u) => u.id));
+  if (activeUserIds.size) {
+    for (const key of OWNED_COLLECTIONS) {
+      for (const item of (_state[key] || [])) {
+        if (Array.isArray(item.collaborators)) {
+          item.collaborators = item.collaborators.filter((c) => c && activeUserIds.has(c.userId));
+        }
+      }
     }
   }
   save();

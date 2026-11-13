@@ -324,13 +324,25 @@ async function listStorages() {
 }
 
 async function listDrivers() {
-  const items = asList(await openlistApi.drivers());
-  return items.map((d) => ({
+  const raw = await openlistApi.drivers();
+  const items = asList(raw).map((d) => ({
     driver: String(d.driver || d.name || ''),
     name: String(d.name || d.driver || ''),
     description: String(d.description || d.help || '').slice(0, 240),
     config: d.config || d.addition || null,
   }));
+  // v0.4.4：区分「上游真的没给数据」与「凭据 / 权限不足」。后者根本不会走到这里
+  // （openlist() 把 code!=200 / 401 / 403 抛成上游错误，由 tolerant 降级并带 hint），
+  // 所以这里把原始响应形态回传，前端不再笼统提示「需要管理员权限 Token」。
+  let diagnostic = '';
+  if (!items.length) {
+    const d = unwrap(raw);
+    if (Array.isArray(d)) diagnostic = 'OpenList 连接与鉴权均正常，但上游返回了空的驱动数组';
+    else if (d && typeof d === 'object') {
+      diagnostic = `OpenList 响应结构未识别（字段：${Object.keys(d).slice(0, 8).join('、') || '空对象'}），已按空列表处理`;
+    } else diagnostic = `OpenList 响应类型异常（${typeof d}）`;
+  }
+  return { items, diagnostic };
 }
 
 async function driverInfo(driver) {

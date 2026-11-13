@@ -8,6 +8,7 @@ const VIEW_META = {
   repos: ['仓库列表', '聚合平台自带与 GitHub / 自建 Gitea 等外部源，克隆后直接开发'],
   'repo-new': ['新建仓库', '在指定 Git 源上创建并自动初始化仓库'],
   'repo-clone': ['克隆到工作区', '支持已登记源凭据、本次账号密码 / Token，以及分层代理'],
+  'git-runtime': ['Git 运行时', 'Git 可执行文件、SSH 宿主机兜底与执行通道检测'],
   ide: ['在线 IDE', '打开 code-server 项目：工作区目录可浏览选择，内嵌预览'],
   'ide-config': ['IDE 配置 / 凭据', 'code-server 服务地址、工作区映射与登录密码管理'],
   storage: ['文件浏览', '当前 OpenList 连接下的文件、上传、下载与批量操作'],
@@ -35,21 +36,20 @@ const VIEW_META = {
   'ai-test': ['连通性测试', '向已保存的服务发起真实请求验证可用性'],
   ops: ['AI 运维', '多轮对话式运维助手，支持文件 / 图片与会话留存'],
   users: ['账号管理', '管理员新增账号、调整角色、禁用与重置密码'],
-  collab: ['资源协作', '按 Gitea 仓库协作者语义管理资源授权（read / write）'],
 };
 const MODULE_ICONS = {
-  overview: '◈', repos: '⑂', 'repo-new': '＋', 'repo-clone': '⇩',
+  overview: '◈', repos: '⑂', 'repo-new': '＋', 'repo-clone': '⇩', 'git-runtime': '⚙',
   ide: '⌘', 'ide-config': '⎈', storage: '▤', 'storage-conn': '⇄', 'storage-mounts': '⛁', 'storage-drivers': '⎗',
   builds: '⚙', 'build-start': '▶', deploys: '⇧',
   servers: '▣', 'server-new': '＋', extensions: '▦', gitsrc: '⑃',
   docker: '⬡', 'docker-containers': '▣', 'docker-images': '◫', 'docker-volumes': '⛁',
   'docker-networks': '⌘', 'docker-compose': '▦',
   proxy: '⇄', environment: '⌬', envcfg: '⚙', ai: '✦', 'ai-list': '☷', 'ai-test': '⇆', ops: '◎',
-  users: '♙', collab: '⇆',
+  users: '♙',
 };
 // 子页面归属：侧边栏主项保持高亮，标签栏仍显示各自的子页标题。
 const NAV_GROUP = {
-  'repo-new': 'repos', 'repo-clone': 'repos',
+  'repo-new': 'repos', 'repo-clone': 'repos', 'git-runtime': 'repos',
   'storage-conn': 'storage', 'storage-mounts': 'storage', 'storage-drivers': 'storage',
   'build-start': 'builds', deploys: 'builds', 'server-new': 'servers',
   'ai-list': 'ai', 'ai-test': 'ai',
@@ -169,6 +169,103 @@ function toast(message, isError = false) {
   box.className = `toast show${isError ? ' error' : ''}`;
   clearTimeout(box._timer);
   box._timer = setTimeout(() => { box.className = 'toast'; }, 3600);
+}
+
+/**
+ * 平台统一确认弹窗（v0.4.4）：替代浏览器原生 confirm()，视觉与站点模态框一致。
+ * 返回 Promise<boolean>；Esc / 遮罩 / 关闭按钮一律视为取消，支持自定义按钮文案。
+ */
+function confirmDialog(options = {}) {
+  const opts = typeof options === 'string' ? { message: options } : options;
+  return new Promise((resolve) => {
+    const modal = $('#confirm-modal');
+    if (!modal) { resolve(false); return; }
+    $('#confirm-title').textContent = opts.title || '请确认';
+    $('#confirm-body').textContent = opts.message || '';
+    const okBtn = $('#confirm-ok');
+    const cancelBtn = $('#confirm-cancel');
+    okBtn.textContent = opts.confirmText || '确认';
+    cancelBtn.textContent = opts.cancelText || '取消';
+    okBtn.className = `btn ${opts.danger === false ? 'btn-primary' : 'btn-danger'}`;
+    const onKey = (e) => { if (e.key === 'Escape') finish(false); };
+    const finish = (value) => {
+      modal.hidden = true;
+      okBtn.onclick = null; cancelBtn.onclick = null; modal.onclick = null;
+      document.removeEventListener('keydown', onKey);
+      resolve(value);
+    };
+    okBtn.onclick = () => finish(true);
+    cancelBtn.onclick = () => finish(false);
+    modal.onclick = (e) => {
+      if (e.target === modal || (e.target.closest && e.target.closest('[data-confirm-close]'))) finish(false);
+    };
+    document.addEventListener('keydown', onKey);
+    modal.hidden = false;
+    okBtn.focus();
+  });
+}
+
+/**
+ * 平台统一输入 / 信息弹窗（v0.4.4）：替代浏览器原生 prompt()，与确认弹窗同款视觉。
+ * 返回 Promise<string|null>；取消 / Esc / 遮罩 / 空输入一律 null。
+ * readOnly 用于「只展示一次性信息」（如自动生成的初始密码），确定按钮一键复制。
+ */
+function promptDialog(options = {}, fallbackValue) {
+  // 兼容原生 prompt(message, defaultValue) 的两参数写法。
+  const opts = typeof options === 'string'
+    ? { message: options, value: fallbackValue === undefined ? '' : fallbackValue }
+    : options;
+  return new Promise((resolve) => {
+    const modal = $('#prompt-modal');
+    if (!modal) { resolve(null); return; }
+    const input = $('#prompt-input');
+    const okBtn = $('#prompt-ok');
+    const cancelBtn = $('#prompt-cancel');
+    const err = $('#prompt-error');
+    const body = $('#prompt-body');
+    $('#prompt-title').textContent = opts.title || '请输入';
+    body.textContent = opts.message || '';
+    body.hidden = !opts.message;
+    input.value = opts.value === undefined || opts.value === null ? '' : String(opts.value);
+    input.type = opts.password ? 'password' : 'text';
+    input.readOnly = Boolean(opts.readOnly);
+    input.placeholder = opts.placeholder || '';
+    input.hidden = Boolean(opts.hideInput);
+    err.hidden = true;
+    okBtn.textContent = opts.confirmText || (opts.readOnly ? '复制并关闭' : '确定');
+    cancelBtn.textContent = opts.cancelText || '取消';
+    cancelBtn.hidden = Boolean(opts.readOnly);
+    const finish = (value) => {
+      modal.hidden = true;
+      okBtn.onclick = null; cancelBtn.onclick = null; modal.onclick = null; input.onkeydown = null;
+      document.removeEventListener('keydown', onKey);
+      resolve(value);
+    };
+    const submit = () => {
+      const value = opts.readOnly ? String(opts.copyText || opts.value || '') : input.value;
+      if (!opts.readOnly && !opts.allowEmpty && !value.trim()) {
+        err.textContent = '请输入内容，或点「取消」放弃本次操作';
+        err.hidden = false;
+        input.focus();
+        return;
+      }
+      if (opts.copyText) {
+        try { if (navigator.clipboard) navigator.clipboard.writeText(String(opts.copyText)); } catch { /* 剪贴板权限不影响关闭 */ }
+      }
+      finish(opts.readOnly ? true : value);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') finish(null); };
+    okBtn.onclick = submit;
+    cancelBtn.onclick = () => finish(null);
+    modal.onclick = (e) => {
+      if (e.target === modal || (e.target.closest && e.target.closest('[data-prompt-close]'))) finish(null);
+    };
+    input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } };
+    document.addEventListener('keydown', onKey);
+    modal.hidden = false;
+    input.focus();
+    if (opts.readOnly) input.select();
+  });
 }
 
 // 若平台设置了 ADMIN_TOKEN，可在浏览器控制台执行：
@@ -401,10 +498,10 @@ function registerTab(config) {
   return tab;
 }
 
-function closeTab(id, force = false) {
+async function closeTab(id, force = false) {
   const tab = tabs.get(id);
   if (!tab || (!tab.closable && !force)) return;
-  if (tab.dirty && !force && !confirm(`「${tab.title}」有未保存的修改，确定关闭吗？`)) return;
+  if (tab.dirty && !force && !await confirmDialog({ message: `「${tab.title}」有未保存的修改，确定关闭吗？` })) return;
   if (tab.onClose) { try { tab.onClose(tab); } catch { /* noop */ } }
   if (tab.dynamic && tab.pane) tab.pane.remove();
   tabs.delete(id);
@@ -616,7 +713,9 @@ async function loadRepos() {
         errBox.textContent = `已聚合 ${sources.length} 个 Git 源、工作区 ${(d.workspace && d.workspace.count) || 0} 个本地仓库，共 ${(d.items || []).length} 条；外部源在「Git 源」页登记`;
       }
     }
-    const rows = (d.items || []).map((r) => {
+    repoState.items = d.items || [];
+    renderRepoHidden(d.hiddenRepos);
+    const rows = repoState.items.map((r) => {
       // 工作区内已克隆的仓库：直接进 IDE，不重复提供「克隆」按钮。
       if (r.isLocal) return `<tr>
         <td><b>${esc(r.name)}</b><div class="desc muted">${esc(r.fullName)}</div></td>
@@ -629,6 +728,9 @@ async function loadRepos() {
           <button class="btn btn-sm" data-repo-git="${esc(r.name)}">Git 操作</button>
           <button class="btn btn-sm" data-repo-term="${esc(r.name)}">终端</button>
           ${r.cloneUrl ? `<button class="btn btn-sm" data-copy="${esc(r.cloneUrl)}">复制地址</button>` : ''}
+          <button class="btn btn-sm" data-repo-edit="${esc(r.id)}">编辑</button>
+          <button class="btn btn-sm" data-proxy-repo="${esc(r.id)}">代理</button>
+          <button class="btn btn-sm btn-danger" data-repo-del="${esc(r.id)}">删除</button>
         </div></td>
       </tr>`;
       return `<tr>
@@ -641,6 +743,8 @@ async function loadRepos() {
           <button class="btn btn-sm" data-clone-repo="${esc(r.cloneUrl)}" data-clone-source="${esc(r.sourceId)}" data-clone-name="${esc(r.name)}" data-clone-id="${esc(r.id)}">克隆</button>
           <button class="btn btn-sm" data-copy="${esc(r.cloneUrl || '')}">复制地址</button>
           <button class="btn btn-sm" data-proxy-repo="${esc(r.id)}">代理</button>
+          <button class="btn btn-sm" data-repo-edit="${esc(r.id)}">编辑</button>
+          <button class="btn btn-sm btn-danger" data-repo-del="${esc(r.id)}">删除</button>
         </div></td>
       </tr>`;
     });
@@ -669,6 +773,11 @@ async function loadRepos() {
       catch { toast('复制失败，请手动选择', true); }
     }));
     $$('[data-proxy-repo]').forEach((b) => b.addEventListener('click', () => gotoProxyOverride('git', b.dataset.proxyRepo)));
+    $$('[data-repo-edit]').forEach((b) => b.addEventListener('click', () => openRepoEditModal(b.dataset.repoEdit)));
+    $$('[data-repo-del]').forEach((b) => b.addEventListener('click', () => {
+      const r = repoState.items.find((x) => x.id === b.dataset.repoDel) || {};
+      removeRepo(b.dataset.repoDel, r.name || b.dataset.repoDel, Boolean(r.isLocal));
+    }));
     // 扩展实例的「绑定仓库」也复用这份聚合列表。
     repoState.items = d.items || [];
     void loadGitRuntime().catch(() => {});
@@ -676,6 +785,72 @@ async function loadRepos() {
     $('#repo-list').innerHTML = errorBlock(e.message, '请在「Git 源」页登记可用的仓库服务并配置 Token');
   }
 }
+
+/* ---------- v0.4.4 仓库平台侧管理：编辑展示信息 / 移除 / 恢复 ---------- */
+function renderRepoHidden(hidden) {
+  const list = Array.isArray(hidden) ? hidden : [];
+  const count = $('#repo-hidden-count');
+  const sel = $('#repo-hidden-select');
+  const btn = $('#repo-restore');
+  if (count) count.textContent = list.length ? `已移除 ${list.length} 个` : '';
+  if (sel) {
+    sel.hidden = !list.length;
+    sel.innerHTML = list.map((id) => `<option value="${esc(id)}">${esc(id)}</option>`).join('');
+  }
+  if (btn) btn.hidden = !list.length;
+}
+
+function openRepoEditModal(id) {
+  const r = repoState.items.find((x) => x.id === id);
+  if (!r) { toast('仓库信息已过期，请刷新后重试', true); return; }
+  const form = $('#repoedit-form');
+  form.reset();
+  $('#repoedit-id').value = r.id;
+  $('#repoedit-title').textContent = `编辑仓库 · ${r.name || r.id}`;
+  $('#repoedit-sub').textContent = r.isLocal ? '工作区本地仓库' : (r.fullName || r.sourceLabel || r.id);
+  form.elements.name.value = r.name || '';
+  form.elements.description.value = r.description || '';
+  form.elements.note.value = r.note || '';
+  form.elements.proxy.value = r.proxy || '';
+  $('#repo-edit-modal').hidden = false;
+}
+
+async function removeRepo(id, name, isLocal) {
+  if (!id) return;
+  if (!await confirmDialog({ message: `确定从平台列表移除仓库「${name}」？远端仓库与 Git 源不受影响，之后可恢复。` })) return;
+  let purgeWorkspace = false;
+  if (isLocal) {
+    purgeWorkspace = await confirmDialog({
+      title: '是否同时删除本地工作区目录？',
+      message: `仓库「${name}」位于平台工作区。删除目录会一并移除本地克隆及其中未提交的文件，且不可撤销。`,
+      confirmText: '一并删除目录', cancelText: '仅从列表移除',
+    });
+  }
+  try {
+    await api('/repos/remove', { method: 'POST', body: { id, purgeWorkspace } });
+    toast(purgeWorkspace ? '仓库与本地目录已删除' : '仓库已从平台列表移除');
+    loadRepos();
+  } catch (e) { toast(e.message, true); }
+}
+
+$('#repoedit-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/repos/meta', { method: 'PUT', body: formData(e.target) });
+    toast('仓库信息已保存');
+    $('#repo-edit-modal').hidden = true;
+    loadRepos();
+  } catch (err) { toast(err.message, true); }
+});
+$$('[data-repoedit-close]').forEach((b) => b.addEventListener('click', () => {
+  $('#repo-edit-modal').hidden = true;
+}));
+$('#repo-restore').addEventListener('click', async () => {
+  const id = ($('#repo-hidden-select') || {}).value;
+  if (!id) return;
+  try { await api('/repos/restore', { method: 'POST', body: { id } }); toast('仓库已恢复'); loadRepos(); }
+  catch (e) { toast(e.message, true); }
+});
 
 /* ------------------- 工作区仓库 · 文件 / 终端 / Git 操作 ------------------- */
 
@@ -1160,7 +1335,7 @@ function renderOpenlistConnections(d) {
         closeOpenlistConnectionForm();
         await loadStorage();
       } else if (op === 'remove') {
-        if (!confirm(`确定删除连接「${b.dataset.olcName || id}」？只移除平台里的登记，不会影响远端服务。`)) return;
+        if (!await confirmDialog({ message: `确定删除连接「${b.dataset.olcName || id}」？只移除平台里的登记，不会影响远端服务。` })) return;
         await api(`/openlist/connections/${encodeURIComponent(id)}`, { method: 'DELETE' });
         toast('连接已删除');
         closeOpenlistConnectionForm();
@@ -1446,8 +1621,8 @@ async function saveOlEditor() {
   } catch (e) { toast(e.message, true); }
 }
 
-function closeOlEditor(force = false) {
-  if (!force && olEditorState.dirty && !confirm('文件有未保存的修改，确定关闭吗？')) return;
+async function closeOlEditor(force = false) {
+  if (!force && olEditorState.dirty && !await confirmDialog({ message: '文件有未保存的修改，确定关闭吗？' })) return;
   const modal = $('#ol-editor-modal');
   if (modal) modal.hidden = true;
   olEditorState.dirty = false;
@@ -1469,13 +1644,13 @@ function openOlEditor(path, name) {
   if (olEditorState.cm) { try { olEditorState.cm.refresh(); } catch { /* noop */ } }
   if (!olEditorState.bound) {
     olEditorState.bound = true;
-    document.addEventListener('click', (e) => {
+    document.addEventListener('click', async (e) => {
       if (e.target.closest && e.target.closest('[data-ol-ed-close]')) { closeOlEditor(); return; }
       const button = e.target.closest && e.target.closest('[data-ol-ed]');
       if (!button) return;
       if (button.dataset.olEd === 'save') saveOlEditor();
       else if (button.dataset.olEd === 'reload') {
-        if (olEditorState.dirty && !confirm('重新载入会丢弃未保存的修改，继续？')) return;
+        if (olEditorState.dirty && !await confirmDialog({ message: '重新载入会丢弃未保存的修改，继续？' })) return;
         loadOlEditor($('#ol-ed-encoding') ? $('#ol-ed-encoding').value : 'auto');
       } else if (button.dataset.olEd === 'find') {
         if (olEditorState.cm && typeof CodeMirror !== 'undefined') { olEditorState.cm.focus(); CodeMirror.commands.findPersistent(olEditorState.cm); }
@@ -1488,8 +1663,8 @@ function openOlEditor(path, name) {
       toast('语法高亮已切换');
     });
     const enc = $('#ol-ed-encoding');
-    if (enc) enc.addEventListener('change', () => {
-      if (olEditorState.dirty && !confirm('切换编码会重新读取文件并丢弃未保存的修改，继续？')) return;
+    if (enc) enc.addEventListener('change', async () => {
+      if (olEditorState.dirty && !await confirmDialog({ message: '切换编码会重新读取文件并丢弃未保存的修改，继续？' })) return;
       loadOlEditor(enc.value);
     });
     const nl = $('#ol-ed-newline');
@@ -1533,7 +1708,7 @@ function renderMountList(items) {
     } catch (e) { toast(e.message, true); }
   }));
   $$('[data-ol-storage-del]').forEach((b) => b.addEventListener('click', async () => {
-    if (!confirm('确认删除该挂载存储？不会删除底层文件，但会移除挂载点。')) return;
+    if (!await confirmDialog({ message: '确认删除该挂载存储？不会删除底层文件，但会移除挂载点。' })) return;
     try {
       await api(`/openlist/storages/${encodeURIComponent(b.dataset.olStorageDel)}`, { method: 'DELETE' });
       toast('已删除'); loadStorage();
@@ -1541,8 +1716,11 @@ function renderMountList(items) {
   }));
 }
 
-function renderDriverList(items) {
-  storageState.drivers = items || [];
+function renderDriverList(data) {
+  // v0.4.4：区分「OpenList 上游不可用 / 凭据权限不足」与「上游返回空清单」，
+  // 不再把空列表笼统归因为「需要管理员权限 Token」（平台账号权限与此无关）。
+  const items = (data && data.items) || [];
+  storageState.drivers = items;
   const select = $('#ol-driver');
   if (select) {
     const current = select.value;
@@ -1551,11 +1729,20 @@ function renderDriverList(items) {
       : '<option value="">（未读取到驱动清单，可手填）</option>';
     if (current && items.some((d) => d.driver === current)) select.value = current;
   }
+  const empty = data && data.degraded
+    ? `<div class="empty">驱动清单读取失败（OpenList 上游连接 / 凭据异常，<b>与当前登录的平台账号是否为管理员无关</b>）
+        <div class="desc">${esc(data.hint || data.error || '请检查 OpenList 服务与连接配置')}</div>
+        <div style="margin-top:8px"><button class="btn btn-sm" data-open-view="storage-conn">前往「连接管理」检查凭据</button></div>
+      </div>`
+    : `<div class="empty">未读取到驱动清单
+        <div class="desc">${esc((data && (data.diagnostic || data.error)) || '上游未返回任何驱动条目')}</div>
+        <div class="desc">这与平台登录账号的权限无关；若该 OpenList 要求管理员 Token，请在「连接管理」里更新凭据后刷新。</div>
+      </div>`;
   $('#storage-driver-list').innerHTML = items.length ? items.slice(0, 120).map((d) => `
     <div class="list-item"><div><div class="title">${esc(d.name || d.driver)}</div>
       <div class="desc">${esc(d.driver)}${d.description ? ` · ${esc(d.description)}` : ''}</div></div>
       <button class="btn btn-sm" data-ol-driver="${esc(d.driver)}">选用</button>
-    </div>`).join('') : '<div class="empty">未读取到驱动清单（需要管理员权限 Token）</div>';
+    </div>`).join('') : empty;
   $$('[data-ol-driver]').forEach((b) => b.addEventListener('click', async () => {
     const d = storageState.drivers.find((x) => x.driver === b.dataset.olDriver);
     const form = $('#storage-add-form');
@@ -1592,7 +1779,7 @@ async function loadStorage() {
   else $('#file-list').innerHTML = errorBlock(files.error || '无法读取目录',
     '请到「连接管理」切换到一个可用的 OpenList，或修复当前连接的管理员凭据');
   renderMountList(mounts && mounts.items || []);
-  renderDriverList(drivers && drivers.items || []);
+  renderDriverList(drivers || {});
 }
 
 /** 集成服务不可用时列表接口会返回 degraded 空数据：给一条可操作的黄色提示，而不是满屏 500。 */
@@ -1618,19 +1805,19 @@ async function olAction(action, forced = null) {
   try {
     if (action === 'rename') {
       const p = forced ? forced[0] : olFull(names[0]);
-      const next = prompt('新的名称（不含路径）', p.split('/').pop() || '');
+      const next = await promptDialog('新的名称（不含路径）', p.split('/').pop() || '');
       if (!next) return;
       await api('/openlist/files/rename', { method: 'POST', body: { path: p, name: next } });
       toast('已重命名');
     } else if (action === 'move' || action === 'copy') {
-      const dst = prompt(`把 ${names.length} 项${action === 'move' ? '移动' : '复制'}到哪个目录？`, '/');
+      const dst = await promptDialog(`把 ${names.length} 项${action === 'move' ? '移动' : '复制'}到哪个目录？`, '/');
       if (!dst) return;
       await api(`/openlist/files/${action}`, {
         method: 'POST', body: { srcDir: currentStoragePath, dstDir: dst, names },
       });
       toast(action === 'move' ? '移动任务已提交' : '复制任务已提交');
     } else if (action === 'remove') {
-      if (!confirm(`确认从 OpenList 删除 ${names.length} 项？此操作不可撤销。`)) return;
+      if (!await confirmDialog({ message: `确认从 OpenList 删除 ${names.length} 项？此操作不可撤销。` })) return;
       await api('/openlist/files/remove', { method: 'POST', body: { path: currentStoragePath, names } });
       toast('删除请求已提交');
     } else if (action === 'link') {
@@ -1767,27 +1954,30 @@ function renderProxyPriority(cfg) {
       <span>${p.chain.map((c, i) => `${i + 1}. ${esc(c)}`).join('　›　')}</span></div>`).join('');
 }
 
-function renderProxyEntities() {
-  const scope = $('#proxy-override-scope').value || 'git';
-  const items = (proxyState.entities && proxyState.entities[scope]) || [];
-  $('#proxy-override-id').innerHTML = items.length
-    ? `<option value="">（选择已登记对象）</option>${items.map((x) => `<option value="${esc(x.id)}">${esc(x.label)}</option>`).join('')}`
-    : '<option value="">（暂无对象，请在下方手填标识）</option>';
+// v0.4.4：代理页不再维护「对象下拉」，单项覆盖统一在对象自己的弹窗 / 表单里配置。
+function renderProxyEntities() { /* 保留调用点，避免历史代码引用报错 */ }
+
+/** 由对象行「代理」按钮打开：只影响该对象，不再跳转到代理页预填。 */
+const objProxyTarget = { scope: '', id: '' };
+async function openObjectProxy(scope, id) {
+  const targetId = String(id || '');
+  if (!targetId) { toast('对象标识为空，无法设置代理', true); return; }
+  objProxyTarget.scope = scope;
+  objProxyTarget.id = targetId;
+  const label = $('#objproxy-label');
+  if (label) label.textContent = `${PROXY_LABELS[scope] || scope} · ${targetId}`;
+  const form = $('#objproxy-form');
+  if (form) form.reset();
+  const modal = $('#object-proxy-modal');
+  if (modal) modal.hidden = false;
+  try {
+    const cfg = await api('/proxy');
+    const found = ((cfg.overrides || {})[scope] || []).find((o) => o.id === targetId);
+    if (found && form) form.elements.note.value = found.note || '';
+  } catch { /* 清单读取失败不阻止编辑 */ }
 }
 
-/** 从 Git / Docker / 服务器 / AI 页面一键跳到代理页并预填对象标识。 */
-async function gotoProxyOverride(scope, id) {
-  switchView('proxy');
-  try {
-    await loadProxy();
-    $('#proxy-override-scope').value = scope;
-    renderProxyEntities();
-    $('#proxy-override-custom').value = id || '';
-    const input = $('#proxy-override-form').elements.url;
-    if (input && input.focus) input.focus();
-    toast(`已选中 ${PROXY_LABELS[scope]} · ${id}，填写代理地址后点「保存覆盖」`);
-  } catch (e) { toast(e.message, true); }
-}
+function gotoProxyOverride(scope, id) { openObjectProxy(scope, id); }
 
 async function loadProxy() {
   try {
@@ -1835,6 +2025,7 @@ async function loadBuilds() {
 
     $('#build-list').innerHTML = (builds.items || []).length ? builds.items.map((b) => `
       <div class="list-item">
+        <label class="check" title="选中后可批量删除"><input type="checkbox" data-build-check="${esc(b.id)}" /></label>
         <div><div class="title">${esc(b.repoPath || '.')} · ${esc(b.profileLabel || b.profile)}</div>
           <div class="desc">${esc(fmtTime(b.startedAt))} · ${esc(b.durationMs ? Math.round(b.durationMs / 1000) + 's' : '进行中')} · ${esc(b.id)}</div></div>
         <div class="row">
@@ -1846,7 +2037,7 @@ async function loadBuilds() {
       </div>`).join('') : '<div class="empty">还没有构建任务，先在上方启动一次</div>';
     $$('[data-log]').forEach((b) => b.addEventListener('click', () => watchLog(b.dataset.log)));
     $$('[data-build-del]').forEach((b) => b.addEventListener('click', async () => {
-      if (!confirm('确认删除这条构建记录？（仅删除记录与日志，不影响已部署的产物）')) return;
+      if (!await confirmDialog({ message: '确认删除这条构建记录？（仅删除记录与日志，不影响已部署的产物）' })) return;
       try {
         const id = b.dataset.buildDel;
         await api(`/builds/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -1860,6 +2051,8 @@ async function loadBuilds() {
         loadBuilds();
       } catch (e) { toast(e.message, true); }
     }));
+    $$('[data-build-check]').forEach((box) => box.addEventListener('change', updateBuildSelection));
+    updateBuildSelection();
 
     $('#deploy-list').innerHTML = table(['时间', '服务器', '目标目录', '状态', '结果'], (deploys.items || []).map((d) => `
       <tr><td class="muted">${esc(fmtTime(d.createdAt))}</td><td>${esc(d.serverName || d.serverId)}</td>
@@ -1867,6 +2060,36 @@ async function loadBuilds() {
       <td class="muted">${esc(d.message)}</td></tr>`));
   } catch (e) { toast(e.message, true); }
 }
+
+/* ---------- v0.4.4 构建记录批量删除 ---------- */
+function updateBuildSelection() {
+  const boxes = $$('[data-build-check]');
+  const checked = boxes.filter((b) => b.checked);
+  const btn = $('#build-del-selected');
+  if (btn) btn.disabled = !checked.length;
+  const all = $('#build-select-all');
+  if (all) all.checked = boxes.length > 0 && checked.length === boxes.length;
+}
+$('#build-select-all').addEventListener('change', (e) => {
+  $$('[data-build-check]').forEach((b) => { b.checked = e.target.checked; });
+  updateBuildSelection();
+});
+$('#build-del-selected').addEventListener('click', async () => {
+  const ids = $$('[data-build-check]:checked').map((b) => b.dataset.buildCheck);
+  if (!ids.length) return;
+  if (!await confirmDialog({ message: `确认删除选中的 ${ids.length} 条构建记录？（仅删除记录与日志，不影响已部署的产物）` })) return;
+  try {
+    await api('/builds', { method: 'DELETE', body: { ids } });
+    if (typeof selectedBuildId !== 'undefined' && ids.includes(selectedBuildId)) {
+      if (typeof logTimer !== 'undefined' && logTimer) { clearInterval(logTimer); logTimer = null; }
+      selectedBuildId = '';
+      const logBox = $('#build-log'); if (logBox) logBox.textContent = '—';
+      const target = $('#log-target'); if (target) target.textContent = '选择一条构建记录';
+    }
+    toast(`已删除 ${ids.length} 条构建记录`);
+    loadBuilds();
+  } catch (e) { toast(e.message, true); }
+});
 
 async function watchLog(id) {
   selectedBuildId = id;
@@ -1905,6 +2128,7 @@ function fillServerEditForm(server) {
   f.privateKeyPath.value = server.privateKeyPath || '';
   f.deployDir.value = server.deployDir || '/data/platform';
   f.proxy.value = server.proxy || '';
+  renderCollabInline('servers', server.id);
   $('#server-form-title').textContent = `编辑服务器 · ${server.name || ''}`;
   $('#server-edit-tip').hidden = false;
 }
@@ -1918,6 +2142,7 @@ function resetServerEditForm() {
   if (title) title.textContent = '添加服务器';
   const tip = $('#server-edit-tip');
   if (tip) tip.hidden = true;
+  renderCollabInline('servers', '');
 }
 
 async function loadServers() {
@@ -1948,6 +2173,7 @@ async function loadServers() {
           <button class="btn btn-sm" data-status="${esc(s.id)}">检查状态</button>
           <button class="btn btn-sm" data-test="${esc(s.id)}">测试连接</button>
           <button class="btn btn-sm" data-server-proxy="${esc(s.id)}">代理</button>
+          <button class="btn btn-sm" data-collab-open="servers|${esc(s.id)}">协作者</button>
           <button class="btn btn-sm btn-danger" data-remove="${esc(s.id)}">删除</button>
         </div>
       </div>`).join('') : '<div class="card"><div class="empty">还没有服务器，先用上方表单添加</div></div>';
@@ -1971,7 +2197,7 @@ async function loadServers() {
     }));
     $$('[data-server-proxy]').forEach((b) => b.addEventListener('click', () => gotoProxyOverride('server', b.dataset.serverProxy)));
     $$('[data-remove]').forEach((b) => b.addEventListener('click', async () => {
-      if (!confirm('确认删除这台服务器？')) return;
+      if (!await confirmDialog({ message: '确认删除这台服务器？' })) return;
       try { await api(`/servers/${b.dataset.remove}`, { method: 'DELETE' }); toast('已删除'); loadServers(); }
       catch (e) { toast(e.message, true); }
     }));
@@ -2183,13 +2409,13 @@ async function fsToolbar(tab, action) {
     if (action === 'refresh') { await loadRemoteFiles(tab); return; }
     if (action === 'go') { await loadRemoteFiles(tab); return; }
     if (action === 'newfile') {
-      const name = prompt('新建文件名称（后缀决定语法高亮，例如 app.py / config.yaml）', 'new.txt');
+      const name = await promptDialog('新建文件名称（后缀决定语法高亮，例如 app.py / config.yaml）', 'new.txt');
       if (!name) return;
       await api(`/servers/${id}/files/create`, { method: 'POST', body: { path: tab.ctx.path, name } });
       toast('文件已创建'); await loadRemoteFiles(tab); return;
     }
     if (action === 'mkdir') {
-      const name = prompt('新建目录名称');
+      const name = await promptDialog('新建目录名称');
       if (!name) return;
       await api(`/servers/${id}/files/mkdir`, { method: 'POST', body: { path: tab.ctx.path, name } });
       toast('目录已创建'); await loadRemoteFiles(tab); return;
@@ -2197,7 +2423,7 @@ async function fsToolbar(tab, action) {
     if (action === 'remove-selected') {
       const names = Array.from(pane.querySelectorAll('[data-role="fs-check"]:checked')).map((c) => c.value);
       if (!names.length) { toast('请先勾选要删除的项', true); return; }
-      if (!confirm(`确认删除选中的 ${names.length} 项？目录会被递归删除。`)) return;
+      if (!await confirmDialog({ message: `确认删除选中的 ${names.length} 项？目录会被递归删除。` })) return;
       await api(`/servers/${id}/files/delete`, { method: 'POST', body: { path: tab.ctx.path, names } });
       toast('已删除'); await loadRemoteFiles(tab);
     }
@@ -2217,13 +2443,13 @@ async function fsRowAction(tab, button) {
         return;
       case 'edit': openEditorTab(tab.ctx, target, name); return;
       case 'rename': {
-        const next = prompt('新名称', name);
+        const next = await promptDialog('新名称', name);
         if (!next || next === name) return;
         await api(`/servers/${id}/files/rename`, { method: 'POST', body: { path: target, name: next } });
         toast('已重命名'); await loadRemoteFiles(tab); return;
       }
       case 'delete': {
-        if (!confirm(`确认删除 ${name}？目录会被递归删除。`)) return;
+        if (!await confirmDialog({ message: `确认删除 ${name}？目录会被递归删除。` })) return;
         await api(`/servers/${id}/files/delete`, { method: 'POST', body: { path: tab.ctx.path, names: [name] } });
         toast('已删除'); await loadRemoteFiles(tab); return;
       }
@@ -2473,7 +2699,7 @@ function bindEditorPane(tab) {
     switch (button.dataset.ed) {
       case 'save': await saveEditor(tab); break;
       case 'reload':
-        if (tab.dirty && !confirm('重新载入会丢弃未保存的修改，继续？')) return;
+        if (tab.dirty && !await confirmDialog({ message: '重新载入会丢弃未保存的修改，继续？' })) return;
         await loadEditor(tab, c.requestedEncoding || 'auto', true);
         break;
       case 'find':
@@ -2492,7 +2718,7 @@ function bindEditorPane(tab) {
     toast(`语法高亮已切换为：${e.target.selectedOptions[0].textContent}`);
   });
   q(pane, 'ed-encoding').addEventListener('change', async (e) => {
-    if (tab.dirty && !confirm('切换编码会重新读取文件并丢弃未保存的修改，继续？')) {
+    if (tab.dirty && !await confirmDialog({ message: '切换编码会重新读取文件并丢弃未保存的修改，继续？' })) {
       e.target.value = c.requestedEncoding || 'auto';
       return;
     }
@@ -2749,6 +2975,7 @@ async function loadAI() {
         <div class="actions">
           <button class="btn btn-sm" data-edit="${esc(p.id)}">编辑</button>
           <button class="btn btn-sm" data-ai-proxy="${esc(p.id)}">代理</button>
+          <button class="btn btn-sm" data-collab-open="aiProviders|${esc(p.id)}">协作者</button>
           <button class="btn btn-sm btn-danger" data-delprovider="${esc(p.id)}">删除</button>
         </div>
       </div>`).join('') : '<div class="empty">还没有配置 AI 服务，请在「配置 AI 服务」页添加</div>';
@@ -2769,6 +2996,9 @@ async function loadAI() {
         form.elements.apiKey.value = '';
         form.elements.apiKey.placeholder = '留空表示不修改已保存的 Key';
         setProviderKind(p.kind || 'api');
+        renderCollabInline('aiProviders', p.id);
+        const cancel = $('#provider-cancel');
+        if (cancel) cancel.textContent = '取消编辑 / 返回列表';
         if (p.kind === 'cli') {
           await detectPrograms(false);
           if (p.distro && !Array.from($('#cli-distro').options).some((o) => o.value === p.distro)) {
@@ -2782,7 +3012,7 @@ async function loadAI() {
     }));
     box.querySelectorAll('[data-ai-proxy]').forEach((b) => b.addEventListener('click', () => gotoProxyOverride('ai', b.dataset.aiProxy)));
     box.querySelectorAll('[data-delprovider]').forEach((b) => b.addEventListener('click', async () => {
-      if (!confirm('确认删除这个 AI 服务配置？')) return;
+      if (!await confirmDialog({ message: '确认删除这个 AI 服务配置？' })) return;
       try { await api(`/ai/providers/${b.dataset.delprovider}`, { method: 'DELETE' }); toast('已删除'); loadAI(); }
       catch (e) { toast(e.message, true); }
     }));
@@ -2792,7 +3022,76 @@ async function loadAI() {
 /* ------------------------ AI 运维 · 对话模式（v0.4.3） ------------------------ */
 // 会话由后端持久化（state.aiSessions），按账号隔离；消息里保留附件与工具调用轨迹，
 // 刷新 / 换设备后可恢复继续对话。图片走 vision，文本文件读内容；不支持时后端自动降级。
-const opsState = { sessions: [], currentId: '', attachments: [], sending: false, bound: false };
+const opsState = {
+  sessions: [], currentId: '', attachments: [], sending: false, bound: false,
+  suggestion: '',           // AI 回复给出的下一步提示词，Tab 可填入输入框
+  serverScope: 'all',       // 'all' | 服务器 id 数组（多台 / 单台 / 空）
+  servers: [],
+};
+
+/* ---------- v0.4.4：会话服务器范围 + 输入框 ghost-text 建议 ---------- */
+const OPS_PROMPT_PLACEHOLDER = '检查所有服务器负载，找出最近失败的构建并分析原因…（Ctrl/⌘ + Enter 发送）';
+
+function opsScopeLabel(scope) {
+  if (!Array.isArray(scope)) return '服务器：全部';
+  if (!scope.length) return '服务器：不选';
+  return `服务器：${scope.length} 台`;
+}
+
+function renderOpsScope() {
+  const btn = $('#ops-server-btn');
+  if (btn) btn.textContent = `🖥 ${opsScopeLabel(opsState.serverScope)}`;
+  const boxes = $$('#ops-server-list input[type="checkbox"]');
+  const scope = opsState.serverScope;
+  boxes.forEach((b) => { b.checked = !Array.isArray(scope) || scope.includes(b.value); });
+}
+
+function renderOpsServerList() {
+  const box = $('#ops-server-list');
+  if (!box) return;
+  box.innerHTML = opsState.servers.length ? opsState.servers.map((s) => `
+    <label class="check ops-scope-item" title="${esc(s.host || '')}">
+      <input type="checkbox" value="${esc(s.id)}" /> ${esc(s.name || s.host || s.id)}
+    </label>`).join('') : '<div class="empty">还没有登记服务器，默认按「全部」处理</div>';
+  renderOpsScope();
+}
+
+async function applyOpsScope(scope) {
+  opsState.serverScope = Array.isArray(scope) ? scope.slice() : 'all';
+  renderOpsScope();
+  const panel = $('#ops-server-panel');
+  if (panel) panel.hidden = true;
+  if (opsState.currentId) {
+    try {
+      await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}`, {
+        method: 'PUT', body: { serverScope: opsState.serverScope },
+      });
+    } catch (e) { toast(e.message, true); }
+  }
+  toast(`范围已更新：${opsScopeLabel(opsState.serverScope)}`);
+}
+
+function renderOpsGhost() {
+  const ghost = $('#ops-ghost');
+  const input = $('#ops-prompt');
+  if (!ghost || !input) return;
+  const show = Boolean(opsState.suggestion) && !input.value;
+  ghost.hidden = !show;
+  input.placeholder = show ? '' : OPS_PROMPT_PLACEHOLDER;
+  if (show) {
+    ghost.innerHTML = `${esc(opsState.suggestion)}<span class="ops-ghost-tag">Tab 填入 · Esc 忽略</span>`;
+  }
+}
+
+function acceptOpsSuggestion() {
+  const input = $('#ops-prompt');
+  if (!input || !opsState.suggestion || input.value) return false;
+  input.value = opsState.suggestion;
+  opsState.suggestion = '';
+  renderOpsGhost();
+  input.focus();
+  return true;
+}
 
 function opsStatus(text) { const el = $('#ops-status'); if (el) el.textContent = text || ''; }
 
@@ -2940,6 +3239,11 @@ async function openOpsSession(id) {
     const sub = $('#ops-chat-sub'); if (sub) sub.textContent = s.messageCount ? `${s.messageCount} 条消息 · 会话已留存，可继续对话` : '新会话';
     const prov = $('#ops-provider'); if (prov && s.providerId) prov.value = s.providerId;
     const w = $('#ops-write'); if (w) w.checked = Boolean(s.allowWrite);
+    opsState.serverScope = Array.isArray(s.serverScope) ? s.serverScope : (s.serverScope || 'all');
+    renderOpsScope();
+    const last = [...(s.messages || [])].reverse().find((m) => m && m.role === 'assistant' && m.suggestion);
+    opsState.suggestion = last ? String(last.suggestion) : '';
+    renderOpsGhost();
     renderOpsSessions();
     renderOpsMessages(s.messages);
   } catch (e) { toast(e.message, true); }
@@ -2950,6 +3254,7 @@ async function createOpsSession() {
     const s = await api('/ai/sessions', { method: 'POST', body: {
       providerId: ($('#ops-provider') || {}).value || '',
       allowWrite: Boolean(($('#ops-write') || {}).checked),
+      serverScope: opsState.serverScope,
     } });
     await loadOpsSessions(s.id);
     toast('已新建会话');
@@ -2958,7 +3263,7 @@ async function createOpsSession() {
 
 async function deleteOpsSession() {
   if (!opsState.currentId) return;
-  if (!confirm('确认删除当前会话？其中的消息与附件将无法恢复。')) return;
+  if (!await confirmDialog({ message: '确认删除当前会话？其中的消息与附件将无法恢复。' })) return;
   try {
     await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}`, { method: 'DELETE' });
     opsState.currentId = '';
@@ -2969,7 +3274,7 @@ async function deleteOpsSession() {
 
 async function clearOpsSession() {
   if (!opsState.currentId) return;
-  if (!confirm('确认清空当前会话的全部消息？（会话本身保留）')) return;
+  if (!await confirmDialog({ message: '确认清空当前会话的全部消息？（会话本身保留）' })) return;
   try {
     const s = await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}/clear`, { method: 'POST' });
     renderOpsMessages(s.messages);
@@ -2981,7 +3286,7 @@ async function clearOpsSession() {
 
 async function renameOpsSession() {
   if (!opsState.currentId) return;
-  const title = prompt('会话标题', ($('#ops-chat-title') || {}).textContent || '新会话');
+  const title = await promptDialog('会话标题', ($('#ops-chat-title') || {}).textContent || '新会话');
   if (!title || !title.trim()) return;
   try {
     await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}`, { method: 'PUT', body: { title: title.trim() } });
@@ -3002,6 +3307,7 @@ async function sendOpsMessage() {
       const s = await api('/ai/sessions', { method: 'POST', body: {
         providerId: ($('#ops-provider') || {}).value || '',
         allowWrite: Boolean(($('#ops-write') || {}).checked),
+        serverScope: opsState.serverScope,
       } });
       opsState.currentId = s.id;
     } catch (e) { toast(e.message, true); return; }
@@ -3012,6 +3318,8 @@ async function sendOpsMessage() {
   if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '分析中…'; }
   if (input) input.value = '';
   opsState.attachments = [];
+  opsState.suggestion = '';
+  renderOpsGhost();
   renderOpsAttachments();
   const box = $('#ops-messages');
   if (box) {
@@ -3029,6 +3337,7 @@ async function sendOpsMessage() {
         content, attachments,
         providerId: ($('#ops-provider') || {}).value || '',
         allowWrite: Boolean(($('#ops-write') || {}).checked),
+        serverScope: opsState.serverScope,
       },
     });
     const pending = $('#ops-pending');
@@ -3043,6 +3352,8 @@ async function sendOpsMessage() {
       toast('当前服务不支持图像识别，图片已降级为文字说明');
     }
     const sub = $('#ops-chat-sub'); if (sub) sub.textContent = '会话已留存，可继续追问或稍后恢复';
+    opsState.suggestion = String((d.assistantMessage && d.assistantMessage.suggestion) || '');
+    renderOpsGhost();
     await loadOpsSessions(opsState.currentId);
     opsStatus('');
   } catch (e) {
@@ -3058,10 +3369,14 @@ async function sendOpsMessage() {
 
 async function loadOps() {
   try {
-    const [tools, providers] = await Promise.all([api('/ai/tools'), api('/ai/providers')]);
+    const [tools, providers, servers] = await Promise.all([
+      api('/ai/tools'), api('/ai/providers'), api('/servers'),
+    ]);
     const hint = $('#ops-hint');
     if (hint) hint.textContent = `只读：${(tools.readCommands || []).join(' · ')}`;
     fillProviderSelects(providers.items || []);
+    opsState.servers = servers.items || [];
+    renderOpsServerList();
   } catch (e) { toast(e.message, true); }
   await loadOpsSessions();
 
@@ -3069,8 +3384,26 @@ async function loadOps() {
   opsState.bound = true;
   $('#ops-form').addEventListener('submit', (e) => { e.preventDefault(); sendOpsMessage(); });
   const promptEl = $('#ops-prompt');
-  if (promptEl) promptEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendOpsMessage(); }
+  if (promptEl) {
+    promptEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab' && acceptOpsSuggestion()) { e.preventDefault(); }
+      else if (e.key === 'Escape' && opsState.suggestion) { opsState.suggestion = ''; renderOpsGhost(); }
+      else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendOpsMessage(); }
+    });
+    promptEl.addEventListener('input', renderOpsGhost);
+  }
+  $('#ops-server-btn').addEventListener('click', () => {
+    const panel = $('#ops-server-panel');
+    if (!panel) return;
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) renderOpsScope();
+  });
+  $('#ops-scope-all').addEventListener('click', () => applyOpsScope('all'));
+  $('#ops-scope-none').addEventListener('click', () => applyOpsScope([]));
+  $('#ops-scope-apply').addEventListener('click', () => {
+    const boxes = $$('#ops-server-list input[type="checkbox"]');
+    const checked = boxes.filter((b) => b.checked).map((b) => b.value);
+    applyOpsScope(boxes.length && checked.length === boxes.length ? 'all' : checked);
   });
   $('#ops-new').addEventListener('click', createOpsSession);
   $('#ops-delete').addEventListener('click', deleteOpsSession);
@@ -3365,7 +3698,7 @@ async function runExtDiagnose() {
     }));
     box.querySelectorAll('[data-ext-rebuild]').forEach((b) => b.addEventListener('click', async () => {
       const id = b.dataset.extRebuild;
-      if (!confirm('将用当前配置重建该实例的容器（数据卷与凭据保留），确认继续？')) return;
+      if (!await confirmDialog({ message: '将用当前配置重建该实例的容器（数据卷与凭据保留），确认继续？' })) return;
       try {
         toast('正在重建容器…');
         await api(`/extensions/instances/${encodeURIComponent(id)}/rebuild`, { method: 'POST', body: {} });
@@ -3401,6 +3734,7 @@ async function loadGitSources() {
         <button class="btn btn-sm" data-gitsrc-op="test" data-gitsrc-id="${esc(s.id)}">测试连通</button>
         <button class="btn btn-sm" data-gitsrc-op="repos" data-gitsrc-id="${esc(s.id)}">仓库列表</button>
         ${s.builtin ? '' : `<button class="btn btn-sm btn-primary" data-gitsrc-op="edit" data-gitsrc-id="${esc(s.id)}">编辑</button>
+          <button class="btn btn-sm" data-collab-open="gitSources|${esc(s.id)}">协作者</button>
           <button class="btn btn-sm btn-danger" data-gitsrc-op="remove" data-gitsrc-id="${esc(s.id)}" data-gitsrc-name="${esc(s.label)}">删除</button>`}
       </div></td>
     </tr>`);
@@ -3646,7 +3980,7 @@ function switchDockerTab(tab) {
 
 const loaders = {
   overview: loadOverview,
-  repos: loadRepos, 'repo-new': loadRepos, 'repo-clone': loadRepos,
+  repos: loadRepos, 'repo-new': loadRepos, 'repo-clone': loadRepos, 'git-runtime': loadRepos,
   ide: loadIde, 'ide-config': loadIde,
   storage: loadStorage, 'storage-conn': loadStorage, 'storage-mounts': loadStorage, 'storage-drivers': loadStorage,
   builds: loadBuilds, 'build-start': loadBuilds, deploys: loadBuilds,
@@ -3658,7 +3992,7 @@ const loaders = {
   dbgate: loadExtExtras, backups: loadExtExtras,
   ai: loadAI, 'ai-list': loadAI, 'ai-test': loadAI, ops: loadOps,
   environment: loadEnvironment, envcfg: loadEnvConfig,
-  users: loadUsers, collab: loadCollabResources,
+  users: loadUsers,
 };
 
 /* 每个独立页顶部的子导航：点按钮打开对应标签，而不是把功能堆在一页里。 */
@@ -3798,7 +4132,7 @@ async function sysAction(action) {
       else if (d.available) toast(`发现新版本 v${d.latest}（当前 v${d.current}），可点「应用更新」`);
       else toast(`已是最新版本 v${d.current}`);
     } else if (action === 'apply') {
-      const source = sysSource || (prompt('输入更新源：本地目录路径或 release.json 的 URL', '') || '');
+      const source = sysSource || (await promptDialog('输入更新源：本地目录路径或 release.json 的 URL', '') || '');
       if (!source) { toast('已取消：未指定更新源'); return; }
       const d = await api('/system/update/apply', { method: 'POST', body: { source } });
       toast(d.updated ? `已更新 v${d.from} → v${d.version}，正在重载…` : (d.reason || '无变化'));
@@ -3893,10 +4227,15 @@ $('#ext-list').addEventListener('click', async (e) => {
       $('#ext-cred-modal').hidden = false;
     } else if (op === 'inject') {
       const inst = extState.items.find((x) => x.id === id);
-      const target = prompt('写入工作区内的哪个文件？', '.env');
+      const target = await promptDialog('写入工作区内的哪个文件？', '.env');
       if (!target) return;
       const bound = (inst && inst.repoIds) || [];
-      const useRepos = bound.length && confirm(`该实例绑定了 ${bound.length} 个仓库。\n确定 = 一次写入这些仓库目录下的 ${target}\n取消 = 只写工作区根目录的 ${target}`);
+      const useRepos = bound.length && await confirmDialog({
+        title: '写入范围',
+        message: `该实例绑定了 ${bound.length} 个仓库，请选择把 ${target} 写到哪里。`,
+        confirmText: `写入 ${bound.length} 个仓库目录`, cancelText: '只写工作区根目录',
+        danger: false,
+      });
       const d = await api(`/extensions/instances/${id}/inject`, {
         method: 'POST', body: { target, useRepos: Boolean(useRepos) },
       });
@@ -3910,9 +4249,9 @@ $('#ext-list').addEventListener('click', async (e) => {
       await loadExtExtras();
     } else if (op === 'upgrade') {
       const inst = extState.items.find((x) => x.id === id);
-      const tag = prompt(`输入要升级到的镜像版本（当前 ${inst ? inst.tag : '未知'}）`, inst ? inst.tag : '');
+      const tag = await promptDialog(`输入要升级到的镜像版本（当前 ${inst ? inst.tag : '未知'}）`, inst ? inst.tag : '');
       if (!tag) return;
-      if (!confirm(`升级前会自动备份，然后保留数据卷重建容器；健康检查失败将回滚到 ${inst ? inst.tag : '旧版本'}。继续？`)) return;
+      if (!await confirmDialog({ message: `升级前会自动备份，然后保留数据卷重建容器；健康检查失败将回滚到 ${inst ? inst.tag : '旧版本'}。继续？` })) return;
       toast('正在升级（备份 → 换版本 → 健康检查），请稍候…');
       const d = await api(`/extensions/instances/${id}/upgrade`, { method: 'POST', body: { tag: tag.trim() } });
       toast(`已升级到 ${d.to}（数据卷保留${d.backupId ? '，升级前已自动备份' : ''}）`);
@@ -3935,8 +4274,12 @@ $('#ext-list').addEventListener('click', async (e) => {
       $('#ext-log-card').hidden = false;
     } else if (op === 'remove') {
       const name = button.dataset.extName || '该实例';
-      if (!confirm(`确定卸载扩展实例「${name}」？`)) return;
-      const purge = confirm('是否同时删除数据卷？\n确定 = 连同数据一起删除（不可恢复）\n取消 = 保留数据卷，之后可重新挂载');
+      if (!await confirmDialog({ message: `确定卸载扩展实例「${name}」？` })) return;
+      const purge = await confirmDialog({
+        title: '是否同时删除数据卷？',
+        message: '删除后无法恢复；保留数据卷则之后可重新挂载。',
+        confirmText: '连同数据一起删除', cancelText: '保留数据卷',
+      });
       const d = await api(`/extensions/instances/${id}?purge=${purge ? 1 : 0}`, { method: 'DELETE' });
       toast(d.volumeKept ? '已卸载，数据卷已保留' : '已卸载');
       $('#ext-log-card').hidden = true;
@@ -3957,13 +4300,13 @@ $('#ext-backups').addEventListener('click', async (e) => {
       window.open(`/api/extensions/backups/${encodeURIComponent(id)}/download${streamToken()}`, '_blank');
     } else if (op === 'restore') {
       const name = button.dataset.bakName || id;
-      if (!confirm(`确定用「${name}」恢复数据？当前实例的同名库会被覆盖，此操作不可撤销。`)) return;
-      if (!confirm('再次确认：恢复过程可能需要重启数据库容器，期间连接会短暂中断。继续？')) return;
+      if (!await confirmDialog({ message: `确定用「${name}」恢复数据？当前实例的同名库会被覆盖，此操作不可撤销。` })) return;
+      if (!await confirmDialog({ message: '再次确认：恢复过程可能需要重启数据库容器，期间连接会短暂中断。继续？' })) return;
       const d = await api(`/extensions/backups/${id}/restore`, { method: 'POST', body: { confirm: true } });
       toast(`已恢复 ${fmtSize(d.size)} 数据${d.restartAfter ? '，容器已重启' : ''}`);
       await loadExtensions();
     } else if (op === 'delete') {
-      if (!confirm('确定删除这份备份存档？删除后无法再用它恢复。')) return;
+      if (!await confirmDialog({ message: '确定删除这份备份存档？删除后无法再用它恢复。' })) return;
       await api(`/extensions/backups/${id}`, { method: 'DELETE' });
       toast('备份已删除');
       await loadExtExtras();
@@ -4171,7 +4514,7 @@ if ($('#envcfg-save')) $('#envcfg-save').addEventListener('click', async () => {
   });
   const keys = Object.keys(values);
   if (!keys.length) { toast('还没有填写任何新值', true); return; }
-  if (!confirm(`将把 ${keys.length} 项写入 .env（自动备份、权限 600）：\n${keys.join(', ')}\n\n敏感项只有在你填写新值时才会更新。确认继续？`)) return;
+  if (!await confirmDialog({ message: `将把 ${keys.length} 项写入 .env（自动备份、权限 600）：\n${keys.join(', ')}\n\n敏感项只有在你填写新值时才会更新。确认继续？` })) return;
   try {
     const r = await api('/env-config', { method: 'PUT', body: { confirm: true, values } });
     await loadEnvConfig();
@@ -4326,7 +4669,7 @@ $('#gitsrc-list').addEventListener('click', async (e) => {
       $('#gitsrc-repos-card').hidden = false;
       if (!items.length && d.error) toast(d.error, true);
     } else if (op === 'remove') {
-      if (!confirm(`确定删除 Git 源「${button.dataset.gitsrcName || id}」？只移除本地登记，不会影响远端仓库。`)) return;
+      if (!await confirmDialog({ message: `确定删除 Git 源「${button.dataset.gitsrcName || id}」？只移除本地登记，不会影响远端仓库。` })) return;
       await api(`/git-sources/${id}`, { method: 'DELETE' });
       toast('Git 源已删除');
       await loadGitSources();
@@ -4366,10 +4709,10 @@ function dockerShowLog(title, text) {
 }
 
 const dockerQuery = () => `target=${encodeURIComponent(dockerState.target)}`;
-const dockerNeedConfirm = (label, owned) => {
-  if (owned) return confirm(`确定对平台自建对象执行「${label}」？`);
-  return confirm(`该对象不是平台创建的（可能是宿主机上的其它服务）。\n确定继续执行「${label}」？误操作可能影响生产服务。`)
-    && confirm('再次确认：此操作不可撤销，继续？');
+const dockerNeedConfirm = async (label, owned) => {
+  if (owned) return await confirmDialog({ message: `确定对平台自建对象执行「${label}」？` });
+  return await confirmDialog({ message: `该对象不是平台创建的（可能是宿主机上的其它服务）。\n确定继续执行「${label}」？误操作可能影响生产服务。` })
+    && await confirmDialog({ message: '再次确认：此操作不可撤销，继续？' });
 };
 
 // 拆分成独立页后，Docker 操作按钮分散在多个 section，统一用文档级委托。
@@ -4388,14 +4731,14 @@ document.addEventListener('click', async (e) => {
   }
   try {
     if (['start', 'stop', 'restart'].includes(op)) {
-      if (!dockerNeedConfirm(label, owned)) return;
+      if (!(await dockerNeedConfirm(label, owned))) return;
       const d = await api(`/docker/containers/${encodeURIComponent(id)}/action`, {
         method: 'POST', body: { target: dockerState.target, action: op, confirm: true },
       });
       toast(d.detail || '操作已完成');
       await loadDocker();
     } else if (op === 'remove') {
-      if (!dockerNeedConfirm(label, owned)) return;
+      if (!(await dockerNeedConfirm(label, owned))) return;
       const d = await api(`/docker/containers/${encodeURIComponent(id)}?${dockerQuery()}&confirm=true`, { method: 'DELETE' });
       toast(d.removed ? '容器已删除' : '操作已完成');
       await loadDocker();
@@ -4408,20 +4751,20 @@ document.addEventListener('click', async (e) => {
     } else if (op === 'export') {
       window.open(`/api/docker/images/export?${dockerQuery()}&ref=${encodeURIComponent(ref)}${streamToken()}`, '_blank');
     } else if (op === 'rmi') {
-      if (!dockerNeedConfirm(label, false)) return;
+      if (!(await dockerNeedConfirm(label, false))) return;
       await api(`/docker/images/remove?${dockerQuery()}&confirm=true`, { method: 'POST', body: { ref, target: dockerState.target, confirm: true } });
       toast('镜像已删除');
       await loadDocker();
     } else if (op === 'rmvol') {
-      if (!dockerNeedConfirm(label, false)) return;
+      if (!(await dockerNeedConfirm(label, false))) return;
       await api(`/docker/volumes/${encodeURIComponent(ref)}?${dockerQuery()}&confirm=true`, { method: 'DELETE' });
       await loadDocker();
     } else if (op === 'rmnet') {
-      if (!dockerNeedConfirm(label, false)) return;
+      if (!(await dockerNeedConfirm(label, false))) return;
       await api(`/docker/networks/${encodeURIComponent(ref)}?${dockerQuery()}&confirm=true`, { method: 'DELETE' });
       await loadDocker();
     } else if (op === 'rmtpl') {
-      if (!confirm('确定删除这份编排模板？')) return;
+      if (!await confirmDialog({ message: '确定删除这份编排模板？' })) return;
       await api(`/docker/templates/${encodeURIComponent(ref)}`, { method: 'DELETE' });
       await renderDockerTemplates();
     }
@@ -4781,7 +5124,7 @@ $('#openlist-config-form').addEventListener('submit', async (e) => {
   } catch (err) { toast(err.message || String(err), true); }
 });
 $('#openlist-config-reset').addEventListener('click', async () => {
-  if (!confirm('恢复使用 .env / 环境变量里的默认 OpenList 连接？其它已登记连接会保留。')) return;
+  if (!await confirmDialog({ message: '恢复使用 .env / 环境变量里的默认 OpenList 连接？其它已登记连接会保留。' })) return;
   try {
     await api('/openlist/connection/reset', { method: 'POST', body: {} });
     toast('已恢复 .env 默认连接');
@@ -4851,23 +5194,33 @@ $('#proxy-rule-form').addEventListener('submit', async (e) => {
     toast('Host 规则已添加'); e.target.reset(); loadProxy();
   } catch (err) { toast(err.message, true); }
 });
-$('#proxy-override-scope').addEventListener('change', renderProxyEntities);
-$('#proxy-entities-reload').addEventListener('click', () => loadProxy());
-$('#proxy-override-form').addEventListener('submit', async (e) => {
+/* ---------- v0.4.4 对象级单项代理覆盖弹窗 ---------- */
+async function saveObjectProxy(url, note) {
+  const { scope, id } = objProxyTarget;
+  if (!scope || !id) throw new Error('请先选择一个对象');
+  await api(`/proxy/overrides/${encodeURIComponent(scope)}?id=${encodeURIComponent(id)}`, {
+    method: 'PUT', body: { id, url, note },
+  });
+  const modal = $('#object-proxy-modal');
+  if (modal) modal.hidden = true;
+  toast(url ? '单项代理覆盖已保存' : '单项代理覆盖已删除');
+  if (currentView === 'proxy') loadProxy();
+}
+$('#objproxy-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const body = formData(e.target);
-  const id = String(body.customId || '').trim() || String(body.id || '').trim();
-  if (!id) { toast('请选择对象或手填对象标识', true); return; }
-  try {
-    await api(`/proxy/overrides/${encodeURIComponent(body.scope)}?id=${encodeURIComponent(id)}`, {
-      method: 'PUT', body: { url: body.url || '' },
-    });
-    toast(body.url ? '单项覆盖已保存' : '单项覆盖已删除');
-    e.target.elements.url.value = '';
-    e.target.elements.customId.value = '';
-    loadProxy();
-  } catch (err) { toast(err.message, true); }
+  try { await saveObjectProxy(String(body.url || '').trim(), String(body.note || '').trim()); }
+  catch (err) { toast(err.message, true); }
 });
+$('#objproxy-remove').addEventListener('click', async () => {
+  if (!await confirmDialog({ message: '确定删除该对象的单项代理覆盖？删除后回归分组 / 全局代理。' })) return;
+  try { await saveObjectProxy('', ''); }
+  catch (err) { toast(err.message, true); }
+});
+$$('[data-objproxy-close]').forEach((b) => b.addEventListener('click', () => {
+  const modal = $('#object-proxy-modal');
+  if (modal) modal.hidden = true;
+}));
 $('#proxy-resolve-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const body = formData(e.target);
@@ -4907,8 +5260,10 @@ $('#build-form').addEventListener('submit', async (e) => {
 $('#server-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const editing = Boolean($('#server-edit-id') && $('#server-edit-id').value);
+  const editingId = ($('#server-edit-id') || {}).value || '';
   try {
     await api('/servers', { method: 'POST', body: formData(e.target) });
+    if (editingId) await saveCollabInline('servers', editingId);
     toast(editing ? '服务器信息已更新' : '服务器已保存');
     resetServerEditForm();
     loadServers();
@@ -4931,20 +5286,34 @@ function providerFormBody(form) {
 
 $('#provider-form').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const editingId = (e.target.elements.id || {}).value || '';
   try {
     await api('/ai/providers', { method: 'POST', body: providerFormBody(e.target) });
+    if (editingId) await saveCollabInline('aiProviders', editingId);
+    renderCollabInline('aiProviders', '');
     toast('AI 服务已保存');
     e.target.reset();
     setProviderKind('api');
     $('#provider-test-result').hidden = true;
+    if ($('#provider-cancel')) $('#provider-cancel').textContent = '取消 / 返回列表';
     await loadAI();
     switchView('ai-list');                 // 保存后跳到「已配置服务」看到结果
   } catch (err) { toast(err.message, true); }
+});
+$('#provider-cancel').addEventListener('click', () => {
+  $('#provider-form').reset();
+  setProviderKind('api');
+  $('#provider-test-result').hidden = true;
+  $('#provider-cancel').textContent = '取消 / 返回列表';
+  renderCollabInline('aiProviders', '');
+  switchView('ai-list');                 // 编辑时一键放弃修改并回到列表
 });
 $('#provider-reset').addEventListener('click', () => {
   $('#provider-form').reset();
   setProviderKind('api');
   $('#provider-test-result').hidden = true;
+  $('#provider-cancel').textContent = '取消 / 返回列表';
+  renderCollabInline('aiProviders', '');
 });
 $('#provider-test').addEventListener('click', async (e) => {
   const box = $('#provider-test-result');
@@ -5523,7 +5892,7 @@ async function openSecurityModal() {
         actionsEl.innerHTML = '<button class="btn btn-sm btn-danger" type="button" id="security-disable">禁用二次验证</button>';
         const dbtn = $('#security-disable');
         if (dbtn) dbtn.addEventListener('click', async () => {
-          if (!confirm('确定禁用二次验证吗？禁用后登录将不再要求动态码。')) return;
+          if (!await confirmDialog({ message: '确定禁用二次验证吗？禁用后登录将不再要求动态码。' })) return;
           try { await api('/auth/2fa/disable', { method: 'POST' }); toast('已禁用二次验证'); await openSecurityModal(); }
           catch (e) { toast(e.message || String(e), true); }
         });
@@ -5593,9 +5962,14 @@ async function loadUsers() {
     </tr>`);
     box.innerHTML = table(['账号', '角色', '状态', '二次验证', '最近登录', '操作'], rows);
     box.querySelectorAll('[data-user-reset]').forEach((b) => b.addEventListener('click', async () => {
-      const password = prompt('输入新密码（至少 8 位，留空则自动生成）', '') || '';
+      const password = await promptDialog({
+        title: '重置账号密码',
+        message: '输入新密码（至少 8 位）；留空并确定 = 自动生成随机初始密码；点「取消」= 放弃本次重置。',
+        value: '', allowEmpty: true, password: true,
+      });
+      if (password === null) return;
       try {
-        const r = await api(`/users/${b.dataset.userReset}`, { method: 'PUT', body: password ? { password } : {} });
+        const r = await api(`/users/${b.dataset.userReset}`, { method: 'PUT', body: password.trim() ? { password: password.trim() } : {} });
         toast(`已重置 ${r.username} 的密码`);
         await loadUsers();
       } catch (e) { toast(e.message || String(e), true); }
@@ -5626,34 +6000,68 @@ if (userFormEl) userFormEl.addEventListener('submit', async (e) => {
     if (f.reset) f.reset();
     toast(`账号「${r.username || username}」已创建`);
     if (r.generatedPassword) {
-      prompt('初始密码已自动生成，请复制保存（关闭后无法再次查看）：', r.generatedPassword);
+      await promptDialog({
+        title: '初始密码已生成',
+        message: '请复制保存，关闭后无法再次查看；可先在下方选中并手动复制。',
+        value: r.generatedPassword, readOnly: true,
+        copyText: r.generatedPassword, confirmText: '复制并关闭',
+      });
     }
     await loadUsers();
   } catch (err) { toast(err.message || String(err), true); }
 });
 if ($('#users-reload')) $('#users-reload').addEventListener('click', () => loadUsers());
 
-/* ------------------------------- 资源协作 -------------------------------- */
-async function loadCollabResources() {
-  const box = $('#collab-resources');
+/* ---------------- 单个对象协作者（v0.4.4：资源协作页已移除） ---------------- */
+/** 在对象的新增 / 编辑表单里内嵌协作者勾选区；id 为空（新建）时不显示。 */
+async function renderCollabInline(type, id) {
+  const box = $(`#collab-inline-${type}`);
   if (!box) return;
+  if (!id) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  box.innerHTML = '<div class="muted small">正在读取协作者…</div>';
   try {
-    const data = await api('/resources');
-    const rows = (data.items || []).map((r) => `<tr>
-      <td>${esc(r.label)}</td>
-      <td><b>${esc(r.name)}</b><div class="desc muted small">${esc(r.id)}</div></td>
-      <td>${badge(r.permission === 'owner' ? '所有者' : (r.permission === 'write' ? '可写协作者'
-        : r.permission === 'read' ? '只读协作者' : '管理员可见'), r.permission === 'owner' ? 'green' : 'gray')}</td>
-      <td>${r.collaboratorCount || 0}</td>
-      <td class="actions"><button class="btn btn-sm" type="button" data-collab-open="${esc(r.type)}|${esc(r.id)}">协作者</button></td>
-    </tr>`);
-    box.innerHTML = table(['资源类型', '资源', '我的权限', '协作者数', '操作'], rows);
-    box.querySelectorAll('[data-collab-open]').forEach((b) => b.addEventListener('click', () => {
-      const [type, id] = b.dataset.collabOpen.split('|');
-      openCollabModal(type, id);
-    }));
-  } catch (e) { box.innerHTML = errorBlock(e.message, e.hint || ''); }
+    const d = await api(`/collaborators?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`);
+    const rows = (d.users || []).map((u) => {
+      const cur = (d.collaborators || []).find((c) => c.userId === u.id);
+      const dis = d.canManage ? '' : 'disabled';
+      return `<label class="check collab-inline-row">
+        <input type="checkbox" data-collab-user="${esc(u.id)}" ${cur ? 'checked' : ''} ${dis} />
+        <span>${esc(u.displayName || u.username)}</span>
+        <select data-collab-perm="${esc(u.id)}" ${dis}>
+          <option value="read"${cur && cur.permission === 'write' ? '' : ' selected'}>只读</option>
+          <option value="write"${cur && cur.permission === 'write' ? ' selected' : ''}>可写</option>
+        </select>
+      </label>`;
+    }).join('');
+    box.innerHTML = `<div class="collab-inline-head"><b>协作者</b><span class="muted small">${d.canManage ? '保存对象时一并生效' : '仅所有者 / 管理员可修改'}</span></div>
+      <div class="collab-inline-list">${rows || '<div class="muted small">暂无其它可协作账号</div>'}</div>`;
+  } catch (e) { box.innerHTML = `<div class="muted small">协作者读取失败：${esc(e.message)}</div>`; }
 }
+
+/** 对象保存成功后，把表单里的协作者勾选写回该对象。 */
+async function saveCollabInline(type, id) {
+  const box = $(`#collab-inline-${type}`);
+  if (!box || box.hidden || !id) return;
+  const list = [];
+  box.querySelectorAll('[data-collab-user]').forEach((c) => {
+    if (!c.checked || c.disabled) return;
+    const sel = box.querySelector(`[data-collab-perm="${c.dataset.collabUser}"]`);
+    list.push({ userId: c.dataset.collabUser, permission: sel ? sel.value : 'read' });
+  });
+  try { await api('/collaborators', { method: 'PUT', body: { type, id, collaborators: list } }); }
+  catch (e) { toast(e.message, true); }
+}
+
+// 对象列表行的「协作者」按钮：按单个对象打开协作者弹窗。
+document.addEventListener('click', (e) => {
+  const b = e.target && e.target.closest ? e.target.closest('[data-collab-open]') : null;
+  if (!b) return;
+  const parts = String(b.dataset.collabOpen).split('|');
+  const type = parts.shift();
+  const id = parts.join('|');
+  if (type && id) openCollabModal(type, id);
+});
 
 async function openCollabModal(type, id) {
   try {
@@ -5699,15 +6107,12 @@ if ($('#collab-save')) $('#collab-save').addEventListener('click', async () => {
     const modal = $('#collab-modal');
     if (modal) modal.hidden = true;
     toast('协作者已保存');
-    await loadCollabResources();
   } catch (e) { toast(e.message || String(e), true); }
 });
 $$('[data-collab-close]').forEach((b) => b.addEventListener('click', () => {
   const modal = $('#collab-modal');
   if (modal) modal.hidden = true;
 }));
-if ($('#collab-reload')) $('#collab-reload').addEventListener('click', () => loadCollabResources());
-
 /* --------------------------------- 启动 ---------------------------------- */
 
 async function startWorkbench() {
