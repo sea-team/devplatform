@@ -5056,6 +5056,7 @@ function renderAuthBox(user) {
   if (!box) return;
   if (!currentUser) { box.hidden = true; return; }
   box.hidden = false;
+  if (typeof window.__setAuthMenu === 'function') window.__setAuthMenu(false);
   const name = $('#auth-name');
   const role = $('#auth-role');
   const avatar = $('#auth-avatar');
@@ -5164,6 +5165,29 @@ if ($('#auth-logout')) $('#auth-logout').addEventListener('click', async () => {
   showLogin('已登出');
   if (typeof location !== 'undefined') location.reload();
 });
+
+/* 账号 pill 展开 / 收起（与版本徽标同款交互） */
+(function setupAuthPill() {
+  const pill = $('#auth-pill');
+  const menu = $('#auth-menu');
+  if (!pill || !menu) return;
+  const setMenu = (open) => {
+    const show = open === undefined ? menu.hidden : open;
+    menu.hidden = !show;
+    pill.setAttribute('aria-expanded', String(show));
+  };
+  pill.addEventListener('click', (e) => { e.stopPropagation(); setMenu(); });
+  document.addEventListener('click', (e) => {
+    if (menu.hidden) return;
+    if (menu.contains(e.target) || pill.contains(e.target)) return;
+    setMenu(false);
+  });
+  ['#auth-security', '#auth-password', '#auth-logout'].forEach((sel) => {
+    const b = $(sel);
+    if (b) b.addEventListener('click', () => setMenu(false));
+  });
+  window.__setAuthMenu = setMenu;
+})();
 
 /* --------------------------- 账号安全 · 二次验证 --------------------------- */
 if ($('#auth-security')) $('#auth-security').addEventListener('click', () => openSecurityModal());
