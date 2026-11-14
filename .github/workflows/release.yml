@@ -95,14 +95,13 @@ jobs:
           $assets = @('devplatform-dist.zip', 'devplatform-windows.zip',
                       'devplatform-windows-lite.zip', 'devplatform-services.zip',
                       'devplatform.exe', 'SHA256SUMS.txt')
-          gh release view $tag | Out-Null
-          $exists = ($LASTEXITCODE -eq 0)
-          if ($exists) {
-            gh release upload $tag @assets --clobber
-            gh release edit $tag --notes-file final-notes.md
-          } else {
-            $extra = @()
-            if ('${{ github.event_name }}' -ne 'push') { $extra += @('--target', $env:GITHUB_SHA) }
+          # 幂等发布：先尝试创建；若 tag 上已存在 Release（或上次删 tag 残留）则删除后重建，
+          # 避免 workflow 因 $exists 误判导致 Release 缺失。
+          $extra = @()
+          if ('${{ github.event_name }}' -ne 'push') { $extra += @('--target', $env:GITHUB_SHA) }
+          gh release create $tag @assets --title "DevPlatform $tag" --notes-file final-notes.md @extra 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release delete $tag -y 2>$null
             gh release create $tag @assets --title "DevPlatform $tag" --notes-file final-notes.md @extra
           }
           if ($LASTEXITCODE -ne 0) { throw '发布 Release 失败' }
