@@ -148,9 +148,9 @@ Write-Host "输出目录: $OutDir" -ForegroundColor DarkGray
 # 1) Gitea（官方直链优先，GitHub 镜像兜底）
 $giteaAsset = "gitea-$GiteaVersion-windows-4.0-amd64.exe"
 $giteaGithub = "https://github.com/go-gitea/gitea/releases/download/v$GiteaVersion/$giteaAsset"
-$giteaUrls = @("https://dl.gitea.com/gitea/$GiteaVersion/$giteaAsset")
+# GitHub 直链优先（美国 GitHub Actions 最快最稳），dl.gitea.com 与代理镜像兜底
+$giteaUrls = @($giteaGithub, "https://dl.gitea.com/gitea/$GiteaVersion/$giteaAsset")
 if ($DownloadProxy) { $giteaUrls += ($DownloadProxy.TrimEnd('/') + '/' + $giteaGithub) }
-$giteaUrls += $giteaGithub
 Step 'Gitea 官方 Windows exe'
 $gitea = Resolve-Component 'Gitea' 'gitea.exe' 40 $giteaUrls @() $GiteaVersion
 
@@ -166,7 +166,8 @@ $olMirrors += ''
 $olBase = "https://github.com/OpenListTeam/OpenList/releases/download/$OpenListVersion/"
 $olUrls = @()
 foreach ($asset in @('openlist-windows-amd64.zip', 'openlist-windows-amd64-lite.zip')) {
-  foreach ($m in $olMirrors) { $olUrls += ($m + $olBase + $asset) }
+  $olUrls += ($olBase + $asset)                              # GitHub 直链优先（美国 Actions 最快最稳）
+  foreach ($m in $olMirrors) { $olUrls += ($m + $olBase + $asset) }  # 国内镜像兜底
 }
 $openlist = Resolve-Component 'OpenList' 'openlist.exe' 30 $olUrls @('openlist') $OpenListVersion
 
