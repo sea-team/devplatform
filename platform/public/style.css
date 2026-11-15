@@ -668,6 +668,7 @@ body.dk-compact .card { padding: 14px; }
   padding: 6px 9px; border: 1px solid var(--border); border-radius: 7px;
   background: var(--surface); color: var(--text); font-size: 12px;
 }
+select.envcfg-input { height: 31px; cursor: pointer; }
 .envcfg-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
 #envcfg-list table { table-layout: fixed; }
 #envcfg-list td { word-break: break-word; }
@@ -687,6 +688,32 @@ body.dk-compact .card { padding: 14px; }
 .envcfg-detail { margin-top: 6px; }
 .envcfg-detail summary { cursor: pointer; color: var(--primary); font-size: 12px; }
 .envcfg-detail ul { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 6px 0 0; padding-left: 18px; }
+
+/* ===== 集成服务一键安装（v0.4.5） ===== */
+/* 管理区在列表上方常驻，用下边框与列表分隔；标题旁的徽标/刷新按钮是状态与真动作，不做无感跳转。 */
+.svc-setup { margin-bottom: 12px; border-bottom: 1px dashed var(--border); padding-bottom: 12px; }
+.svc-setup-head-actions { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; margin-left: auto; }
+/* 窄屏时允许标题行换行：否则徽标 + 刷新按钮会被挤出卡片，造成 14px 横向滚动 */
+.svc-card-head { flex-wrap: wrap; }
+.svc-setup-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.svc-setup-bar .btn { flex-shrink: 0; }
+.svc-setup-services { display: grid; gap: 6px; margin-top: 10px; }
+.svc-setup-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2);
+}
+.svc-setup-name { min-width: 132px; font-size: 12px; font-weight: 600; }
+@media (max-width: 560px) {
+  .svc-setup-head-actions { width: 100%; justify-content: flex-end; }
+  .svc-setup-name { min-width: 0; }
+}
+.svc-setup-log {
+  margin: 8px 0 0; max-height: 220px; overflow: auto; box-sizing: border-box;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface-2); color: var(--muted);
+  font-family: var(--mono, ui-monospace, Consolas, monospace); font-size: 11px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-all;
+}
 
 /* ===== 账号体系：登录遮罩 / 当前账号 / 协作者弹窗 ===== */
 .login-view { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; background: var(--surface-2); }

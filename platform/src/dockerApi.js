@@ -8,26 +8,46 @@
 const http = require('http');
 const fs = require('fs');
 const proxyModule = require('./proxy');
+const { config } = require('./core');
 
-const SOCKET_PATH = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
-const DOCKER_HOST = process.env.DOCKER_HOST || '';
+const SOCKET_PATH = '/var/run/docker.sock';
 const WIN_PIPE = '\\\\.\\pipe\\docker_engine';
 
 /**
- * 三种可达方式：显式 DOCKER_HOST（tcp://host:port）、Linux socket、
- * Windows Docker Desktop 命名管道。平台本体在容器里时由 compose 挂载 docker.sock。
+ * 归一化 Windows 命名管道写法，三种输入都接受：
+ *   npipe:////./pipe/kiri / \\.\pipe\kiri / 裸名 kiri  →  \\.\pipe\kiri
+ */
+function pipePath(value) {
+  let s = String(value || '').trim().replace(/^npipe:\/\//i, '').replace(/\//g, '\\');
+  if (/^\.\\/.test(s)) s = '\\\\.' + s;
+  if (!/\\pipe\\/i.test(s)) s = '\\\\.\\pipe\\' + s.replace(/^\\+/, '');
+  return s;
+}
+
+/**
+ * 四种可达方式（端点来源统一走 config，支持「环境配置」页管理，重启后生效）：
+ *   1) DOCKER_HOST=npipe:////./pipe/NAME —— 显式命名管道（如 Kiri 的 \\.\pipe\kiri）
+ *   2) DOCKER_HOST=tcp://host:port —— 远程 / TCP 端点
+ *   3) Windows：DOCKER_PIPE 覆盖管道名（裸名或全格式均可），留空用 Docker Desktop 默认管道
+ *   4) Linux socket：DOCKER_SOCKET（默认 /var/run/docker.sock）
+ * 平台本体在容器里时由 compose 挂载 docker.sock。
  */
 function endpoint() {
-  if (DOCKER_HOST) {
+  const dockerHost = String(config.dockerHost || '').trim();
+  const dockerPipe = String(config.dockerPipe || '').trim();
+  const dockerSocket = String(config.dockerSocket || SOCKET_PATH).trim();
+  if (/^npipe:/i.test(dockerHost)) return { socketPath: pipePath(dockerHost), kind: 'npipe' };
+  if (dockerHost) {
     try {
-      const u = new URL(DOCKER_HOST.replace(/^tcp:\/\//i, 'http://'));
+      const u = new URL(dockerHost.replace(/^tcp:\/\//i, 'http://'));
       return { host: u.hostname, port: Number(u.port || 2375), kind: 'tcp' };
     } catch { /* 落到 socket 分支 */ }
   }
-  if (process.platform === 'win32' && !fs.existsSync(SOCKET_PATH)) {
-    return { socketPath: WIN_PIPE, kind: 'npipe' };
+  if (process.platform === 'win32') {
+    if (dockerPipe) return { socketPath: pipePath(dockerPipe), kind: 'npipe' };
+    if (!fs.existsSync(dockerSocket)) return { socketPath: WIN_PIPE, kind: 'npipe' };
   }
-  return { socketPath: SOCKET_PATH, kind: 'socket' };
+  return { socketPath: dockerSocket || SOCKET_PATH, kind: 'socket' };
 }
 
 function request(method, path, body, { stream = false, binary = false, timeout = 0, rawBody = false, contentType = '' } = {}) {

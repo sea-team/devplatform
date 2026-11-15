@@ -26,6 +26,7 @@ const buildBackends = require('./buildBackends');
 const proxy = require('./proxy');
 const openlist = require('./openlist');
 const envConfig = require('./envConfig');
+const serviceSetup = require('./serviceSetup');
 const hostInfo = require('./hostInfo');
 const workspaceGit = require('./workspaceGit');
 const fileTypes = require('./fileTypes');
@@ -272,11 +273,25 @@ const tolerant = (handler, empty) => wrap(async (req, res) => {
 
 /* ------------------------------- 总览面板 -------------------------------- */
 
+/**
+ * 在线 IDE 可达性探测。code-server 有 /healthz，但 Windows 原生方案用的是
+ * VS Code 自带 serve-web（没有 /healthz，返回 404）——按状态码判定会误报离线。
+ * 这里只探根路径：能拿到 <500 的 HTTP 响应（含 401/404 等登录或路由响应）
+ * 就说明 Web 服务在监听，连接失败/超时/5xx 才算不可用。
+ */
+async function probeWeb(baseUrl) {
+  const url = `${String(baseUrl || '').replace(/\/+$/, '')}/`;
+  const response = await fetch(url, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(4000) });
+  if (response.status >= 500) throw new Error(`上游服务返回 ${response.status}`);
+  try { await response.arrayBuffer(); } catch { /* 不关心响应体 */ }
+  return { ok: true, status: response.status };
+}
+
 app.get('/api/overview', wrap(async (req, res) => {
   const probes = await Promise.allSettled([
     giteaApi.version(),
     openlistApi.health(),
-    httpJSON(`${config.codeServerUrl}/healthz`, { timeout: 4000 }),
+    probeWeb(config.codeServerUrl),
   ]);
   const names = ['Git 仓库 (Gitea)', '存储挂载 (OpenList)', '在线 IDE (code-server)'];
   const urls = [config.giteaUrl, config.openlistUrl, config.codeServerUrl];
@@ -286,9 +301,9 @@ app.get('/api/overview', wrap(async (req, res) => {
     true,
   ];
   const hints = [
-    'GITEA_TOKEN 未配置，仓库列表与创建不可用；在 dist/.env 中填写后完全重启程序',
-    'OPENLIST_TOKEN 或 OPENLIST_PASSWORD 未配置；在 dist/.env 中填写后完全重启程序',
-    '确认 code-server 已启动，或在 dist/.env 中把 CODE_SERVER_URL 指向已部署的地址',
+    'GITEA_TOKEN 未配置，仓库列表与创建不可用；管理员可在下方「一键安装并启动」自动生成凭据',
+    'OPENLIST_TOKEN 或 OPENLIST_PASSWORD 未配置；管理员可在下方「一键安装并启动」自动生成凭据',
+    'IDE 未启动；管理员可点下方「一键安装并启动」，或把 CODE_SERVER_URL 指向已部署的地址',
   ];
   // 把 Node 的 "fetch failed" 翻译成可操作的提示，避免出现容器服务名时用户无从下手。
   const friendly = (reason) => {
@@ -500,6 +515,16 @@ app.put('/api/env-config', wrap(async (req, res) => {
   ok(res, envConfig.write(body.values || {}, {
     confirm: body.confirm === true || body.confirm === '1' || body.confirm === 1,
   }));
+}));
+
+/* --------------------- 集成服务一键安装（v0.4.5） --------------------- */
+// 读：三个服务的二进制/端口状态（无敏感信息，登录用户可看）。
+// 写：setup / start / stop 触发 native-services.ps1，仅管理员；单任务互斥。
+app.get('/api/services/setup-status', wrap(async (req, res) => ok(res, await serviceSetup.status())));
+app.get('/api/services/setup/job', (req, res) => ok(res, serviceSetup.currentJob()));
+app.post('/api/services/setup', wrap(async (req, res) => {
+  requireAdmin(req);
+  ok(res, serviceSetup.run((req.body || {}).action));
 }));
 
 /* --------------------------- 外部 Git 源管理 --------------------------- */
@@ -1511,6 +1536,7 @@ const server = app.listen(config.port, () => {
 // 监督进程会立刻拉起加载新 bundle.cjs 的 worker，实现 1~2s 的平滑热替换。
 process.on('SIGTERM', () => {
   console.log('[devplatform] 收到重载信号，正在关闭连接…');
+  serviceSetup.dispose();
   server.close(() => process.exit(0));
   const timer = setTimeout(() => process.exit(0), 2000);
   if (timer.unref) timer.unref();

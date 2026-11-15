@@ -96,7 +96,10 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
-note(html.includes('?v=20261113f'), '静态资源版本已升到 20261113f');
+// 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
+const CACHE_STAMP = '20261115a';
+const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
+note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
 
 // v0.3.10：IDE 登录凭据、总览运行主机卡片、仓库文件 / 终端 / Git 操作。
 note(html.includes('id="ide-cred"') && html.includes('id="ide-cred-reveal"')
@@ -172,7 +175,9 @@ note(envcfg.includes('AUTH_DISABLED') && envcfg.includes('authEnabled')
 // v0.4.0：账号体系（登录、owner 隔离、协作者、全局配置只读）。
 note(html.includes('id="login-view"') && html.includes('id="login-form"')
   && html.includes('id="password-form"') && html.includes('id="auth-wrap"')
-  && app.includes('async function startWorkbench') && app.includes("fetch('/api/auth/status')")
+  && app.includes('async function startWorkbench') && app.includes("fetch('/api/auth/status'")
+  // boot 用原生 fetch，须把 localStorage.dp_token 带上，否则令牌通道会被误判为未登录、工作台不启动。
+  && app.includes("localStorage.getItem('dp_token')") && app.includes('Bearer ${token}')
   && app.includes("authFetch('/auth/login'") && css.includes('.login-view[hidden]'),
 '未登录遮罩、首次改密、登录状态检查与工作台延迟启动链路齐全');
 note(html.includes('id="view-users"') && html.includes('id="collab-modal"')

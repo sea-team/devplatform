@@ -668,7 +668,7 @@ function Invoke-Setup {
   Step '启动原生集成服务'
   if ($giteaOk) { Start-One 'gitea' $plan.gitea "http://127.0.0.1:$GiteaPort/api/v1/version" 90 | Out-Null }
   if ($olOk) { Start-One 'openlist' $plan.openlist "http://127.0.0.1:$OpenListPort/api/public/settings" 90 | Out-Null }
-  if ($ide) { Start-One 'ide' $plan.ide "http://127.0.0.1:$IdePort/healthz" 120 | Out-Null }
+  if ($ide) { Start-One 'ide' $plan.ide "http://127.0.0.1:$IdePort/" 120 | Out-Null }
 
   Step '初始化访问凭据'
   $gToken = ''
@@ -705,7 +705,7 @@ function Invoke-Start {
     $url = ''
     if ($key -eq 'gitea') { $url = "http://127.0.0.1:$([int]$spec.port)/api/v1/version" }
     if ($key -eq 'openlist') { $url = "http://127.0.0.1:$([int]$spec.port)/api/public/settings" }
-    if ($key -eq 'ide') { $url = "http://127.0.0.1:$([int]$spec.port)/healthz" }
+    if ($key -eq 'ide') { $url = "http://127.0.0.1:$([int]$spec.port)/" }
     Start-One $key $h $url 45 | Out-Null
   }
 }

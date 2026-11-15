@@ -71,11 +71,34 @@ const SPECS = [
   { key: 'GIT_BIN', group: 'git', label: 'git 可执行文件路径', sensitive: false, restart: true, example: '/usr/bin/git', kind: 'text', desc: '容器镜像或单文件 exe 找不到 git 时可写死路径；控制台「Git 运行时」的设置优先级更高且无需重启。', problems: ['GIT_BIN_MISSING'] },
   { key: 'DP_GIT_FALLBACK_SERVER_ID', group: 'git', label: '克隆兜底服务器 ID', sensitive: false, restart: true, example: '', kind: 'text', desc: '容器内无 Git 时借哪台已登记 SSH 宿主机执行 clone；留空自动挑选。' },
   { key: 'DOCKER_IMAGE_PREFIX', group: 'image', label: '镜像加速器前缀', sensitive: false, restart: true, example: 'docker.m.daocloud.io/', kind: 'text', desc: 'Docker Hub 不可达时填 registry 根即可；平台会自动判断官方镜像是否补 library/，不要手工写 library/dbgate 这类拼接。', problems: ['IMAGE_DENIED'] },
-  { key: 'BUILD_EXECUTOR', group: 'image', label: '构建后端', sensitive: false, restart: true, example: 'auto', kind: 'text', desc: 'auto | ssh | docker | wsl | local；auto 按可用性自动降级。' },
+  { key: 'DOCKER_HOST', group: 'image', label: 'Docker 端点', sensitive: false, restart: true, example: 'npipe:////./pipe/kiri', kind: 'text',
+    desc: '显式指定 Docker Engine API 端点：tcp://host:port（远程 / TCP）或 npipe:////./pipe/NAME（Windows 命名管道全格式）。优先级最高，设置后覆盖下面的「管道名」。Kiri 等不支持 TCP 的 Windows 运行时填 npipe 全格式，或留空改用「Docker 管道名」下拉。' },
+  { key: 'DOCKER_PIPE', group: 'image', label: 'Docker 管道名（Windows）', sensitive: false, restart: true, example: 'kiri', kind: 'select',
+    desc: 'Windows 命名管道覆盖：留空 = Docker Desktop 默认管道 \\.\pipe\docker_engine；Kiri 服务在 \\.\pipe\kiri，选 Kiri 即可（裸名会自动补全为完整管道路径）。',
+    options: [
+      { value: 'docker_engine', label: 'Docker Desktop · \\.\pipe\docker_engine（默认）' },
+      { value: 'kiri', label: 'Kiri · \\.\pipe\kiri' },
+    ] },
+  { key: 'DOCKER_SOCKET', group: 'image', label: 'Docker socket 路径（Linux）', sensitive: false, restart: true, example: '/var/run/docker.sock', kind: 'text', desc: 'Linux 下 Docker Engine API 的 unix socket 路径；平台本体在容器里时由 compose 挂载 docker.sock，一般无需修改。' },
+  { key: 'BUILD_EXECUTOR', group: 'image', label: '构建后端', sensitive: false, restart: true, example: 'auto', kind: 'select', desc: '构建在哪执行：auto 按可用性自动降级（ssh → docker → wsl → local）；无 Docker 的 Windows 可选 wsl（需 WSL2）或 local（本机工具链，无隔离）。',
+    options: [
+      { value: 'auto', label: 'auto · 自动降级（推荐）' },
+      { value: 'ssh', label: 'ssh · 远程 Linux 服务器' },
+      { value: 'docker', label: 'docker · 隔离容器（Docker Desktop / Kiri）' },
+      { value: 'wsl', label: 'wsl · WSL2 工具链（仅 Windows）' },
+      { value: 'local', label: 'local · 本机工具链兜底' },
+    ] },
   { key: 'BUILD_TIMEOUT_MS', group: 'image', label: '构建超时（毫秒）', sensitive: false, restart: true, example: '900000', kind: 'text', desc: '单次构建的最长执行时间。' },
   { key: 'DP_PROXY_GLOBAL', group: 'platform', label: '全局代理', sensitive: false, restart: true, example: 'http://127.0.0.1:7890', kind: 'text', desc: '首次启动默认值；控制台「代理配置」页修改后写入 state.json 并优先生效。', problems: ['PROXY_TARGET_UNREACHABLE'] },
   { key: 'DP_PROXY_NO', group: 'platform', label: 'NO_PROXY 直连名单', sensitive: false, restart: true, example: 'localhost,127.0.0.1,10.0.0.0/8', kind: 'text', desc: '逗号分隔的域名 / IP / CIDR；命中即不走代理。' },
-  { key: 'DP_ENV_PROFILE', group: 'platform', label: '环境档案', sensitive: false, restart: true, example: 'container-lite', kind: 'text', desc: 'auto | native | container | container-lite | remote；换机器时用来覆盖旧 state.json 的策略。' },
+  { key: 'DP_ENV_PROFILE', group: 'platform', label: '环境档案', sensitive: false, restart: true, example: 'container-lite', kind: 'select', desc: '声明当前部署环境的档案，覆盖旧 state.json 的策略；换机器 / 换部署方式时改这里。留空 = auto。',
+    options: [
+      { value: 'auto', label: 'auto · 自动适配（推荐）' },
+      { value: 'native', label: 'native · 宿主机直跑' },
+      { value: 'container', label: 'container · 完整容器' },
+      { value: 'container-lite', label: 'container-lite · 精简容器' },
+      { value: 'remote', label: 'remote · 远程部署' },
+    ] },
   { key: 'DP_ENV_FILE', group: 'platform', label: '.env 文件路径', sensitive: false, restart: true, example: '/app/.env', kind: 'text', desc: '显式告诉平台去哪读写 .env；容器部署由 remote.js 自动注入，一般无需手工填写。' },
 ];
 
@@ -97,6 +120,9 @@ const RUNTIME_MAP = {
   GIT_BIN: () => config.gitBin,
   DP_GIT_FALLBACK_SERVER_ID: () => config.gitFallbackServerId,
   DOCKER_IMAGE_PREFIX: () => config.dockerImagePrefix,
+  DOCKER_HOST: () => config.dockerHost,
+  DOCKER_PIPE: () => config.dockerPipe,
+  DOCKER_SOCKET: () => config.dockerSocket,
   BUILD_EXECUTOR: () => config.buildExecutor,
   BUILD_TIMEOUT_MS: () => String(config.buildTimeoutMs),
   DP_EXT_BIND_IP: () => config.extBindIp,
@@ -303,6 +329,10 @@ function validateValue(key, value) {
   }
   if (spec.kind === 'url' && v && !/^https?:\/\//i.test(v)) {
     throw new HttpError(400, `${key} 必须是 http(s):// 开头的地址`);
+  }
+  // 下拉项只允许候选值，防止绕过前端直接 POST 任意值。
+  if (spec.kind === 'select' && v && !(spec.options || []).some((o) => (typeof o === 'string' ? o : o.value) === v)) {
+    throw new HttpError(400, `${key} 只能选下拉候选值之一：${(spec.options || []).map((o) => (typeof o === 'string' ? o : o.value)).filter(Boolean).join(' / ')}`);
   }
   return v;
 }

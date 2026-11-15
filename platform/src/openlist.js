@@ -119,10 +119,12 @@ function publicConnection(c) {
 function applyConfig() {
   const active = activeConnection();
   if (!active) return;
-  config.openlistUrl = String(active.url || ENV.url).replace(/\/+$/, '');
-  config.openlistUser = String(active.user || 'admin');
-  config.openlistToken = String(active.token || '');
-  config.openlistPassword = String(active.password || '');
+  // 「面板连接优先」只覆盖真的填了值的字段：历史上无条件覆盖，导致保存过
+  // 不带密码的连接后，.env 里的有效凭据在重启时被静默清空（OpenList 变未配置）。
+  if (active.url) config.openlistUrl = String(active.url || ENV.url).replace(/\/+$/, '');
+  if (active.user) config.openlistUser = String(active.user);
+  if (active.token) config.openlistToken = String(active.token);
+  if (active.password) config.openlistPassword = String(active.password);
 }
 
 /** 旧接口：返回当前连接（含多连接清单），前端与文档可继续沿用。 */

@@ -623,7 +623,150 @@ async function loadOverview() {
     pill.textContent = '正常模式';
     pill.classList.add('live');
     void loadHostInfo().catch(() => {});
+    return await refreshSvcSetup(d.services).catch(() => false);
+  } catch (e) { toast(e.message, true); return false; }
+}
+
+/* --------------------- 集成服务一键安装（v0.4.5） --------------------- */
+// 概览页「集成服务」卡片内：管理员可一键触发 native-services.ps1
+// （下载二进制 → 生成凭据写 .env → 启动），日志实时滚动，无需手工跑脚本。
+// 管理区位于服务列表上方常驻，标题旁只保留「状态摘要 + 刷新状态」两个有实际作用的元素，
+// 不再放只做滚动/高亮、点了看不出变化的「管理集成服务 ↓」跳转按钮。
+let svcJobTimer = null;
+let lastOverviewServices = [];
+
+function svcSummary(downCount, total, runningJob, unavailable = false) {
+  const el = $('#svc-setup-summary');
+  if (!el) return;
+  el.hidden = false;
+  el.className = 'badge ' + (unavailable ? 'gray' : runningJob ? 'blue' : downCount ? 'amber' : 'green');
+  el.textContent = unavailable ? '状态未知'
+    : runningJob ? '任务执行中…'
+      : downCount ? `${Math.max(0, total - downCount)}/${total} 就绪 · ${downCount} 项未就绪`
+        : `${total}/${total} 就绪`;
+}
+
+async function refreshSvcSetup(overviewServices) {
+  const box = $('#svc-setup');
+  if (!box) return false;
+  if (Array.isArray(overviewServices)) lastOverviewServices = overviewServices;
+  let st;
+  try { st = await api('/services/setup-status'); }
+  catch { svcSummary(0, 0, false, true); return false; }
+  if (!st.scriptAvailable) {
+    box.hidden = true;
+    const el = $('#svc-setup-summary');
+    if (el) { el.hidden = false; el.className = 'badge gray'; el.textContent = '未找到安装脚本'; }
+    return true;
+  }
+  const services = st.services || [];
+  const bad = services.filter((s) => !s.running);
+  // 概览口径（连通性）与安装状态口径（端口 + 健康检查）都算未就绪，避免提示与按钮不一致。
+  // lastOverviewServices 沿用最近一次概览结果，任务刚启动、无参刷新时徽标不会闪回「全部就绪」。
+  const downFromOverview = lastOverviewServices.filter((s) => s && s.status !== 'online');
+  const downCount = Math.max(bad.length, downFromOverview.length);
+  const isAdmin = currentUser && currentUser.role === 'admin';
+  const running = st.runningJob || null;
+  svcSummary(downCount, services.length, running);
+  const $actions = $('#svc-setup-actions');
+  const $note = $('#svc-setup-note');
+  const $log = $('#svc-setup-log');
+  const $install = $('#svc-setup-install');
+  const $start = $('#svc-setup-start');
+  const $stop = $('#svc-setup-stop');
+  const $rows = $('#svc-setup-services');
+  const btn = (el, show, disabled = false) => { if (el) { el.hidden = !show; el.disabled = disabled; } };
+  // 管理员常驻显示：一键安装/启动/停止是「集成服务管理」入口，不该只在故障时出现。
+  // 普通用户无写权限，仅在有故障或任务进行中看到状态说明。
+  const show = Boolean(isAdmin || downCount || running);
+  box.hidden = !show;
+  if (!show) return true;
+  btn($install, isAdmin && !running);
+  btn($start, isAdmin && !running);
+  btn($stop, isAdmin && !running);
+  if ($actions) $actions.hidden = !isAdmin;
+  // 逐服务明细：一眼看清「装没装 / 端口通不通 / 健康检查过没过」，管理动作才有依据。
+  if ($rows) {
+    $rows.innerHTML = services.map((s) => {
+      const tone = s.running ? 'green' : (s.portOpen ? 'amber' : 'red');
+      const state = s.running ? '就绪' : (s.portOpen ? '健康检查未过' : '未运行');
+      const detail = `${s.installed ? '已安装' : '未安装'} · :${s.port} · ${s.portOpen ? '端口通' : '端口不通'}`;
+      return `<div class="svc-setup-row"><span class="svc-setup-name">${esc(s.name)}</span>${badge(state, tone)}<span class="muted small">${esc(detail)}</span></div>`;
+    }).join('');
+  }
+  if ($note) {
+    if (running) {
+      $note.hidden = false;
+      $note.textContent = `正在执行「${running.action === 'setup' ? '安装并启动' : running.action === 'start' ? '启动服务' : '停止服务'}」，日志见下方…`;
+    } else if (!isAdmin) {
+      $note.hidden = downCount === 0;
+      $note.textContent = downCount ? `有 ${downCount} 个服务未就绪，请联系管理员在页面上一键安装，或手工执行 windows\\native-services.ps1` : '';
+    } else if (downFromOverview.length && !bad.length) {
+      $note.hidden = false;
+      $note.textContent = '概览显示服务未就绪，但端口与健康检查均正常（多为状态缓存）；可点「刷新状态」重新探测，或点「启动服务」重新拉起';
+    } else {
+      $note.hidden = false;
+      $note.textContent = bad.length
+        ? `${bad.length} 项未就绪：可点「一键安装并启动」修复，或点「启动服务」重新拉起；执行日志见下方。`
+        : '全部就绪。按钮可重复执行：「一键安装并启动」用于修复或更新，「停止服务」用于释放端口。';
+    }
+  }
+  // 任务进行中：拉日志滚动轮询；结束时刷新概览与新状态。
+  if (running) {
+    const j = await api('/services/setup/job').catch(() => null);
+    if (j && $log) {
+      $log.hidden = false;
+      const tail = (j.logs || []).slice(-200).join('\n');
+      if ($log.textContent !== tail) { $log.textContent = tail; $log.scrollTop = $log.scrollHeight; }
+    }
+    if (!svcJobTimer) {
+      svcJobTimer = setInterval(async () => {
+        try {
+          const cur = await api('/services/setup/job');
+          if (!cur || cur.status !== 'running') {
+            clearInterval(svcJobTimer); svcJobTimer = null;
+            if (cur && cur.status === 'success') toast('集成服务任务完成');
+            else if (cur && cur.status === 'failed') toast('集成服务任务失败，请查看日志', true);
+            await loadOverview();
+            return;
+          }
+          if ($('#svc-setup-log')) {
+            const tail = (cur.logs || []).slice(-200).join('\n');
+            const el = $('#svc-setup-log');
+            if (el.textContent !== tail) { el.textContent = tail; el.scrollTop = el.scrollHeight; }
+          }
+        } catch { clearInterval(svcJobTimer); svcJobTimer = null; }
+      }, 1500);
+    }
+  } else if ($log) { $log.hidden = true; $log.textContent = ''; }
+  return true;
+}
+
+async function svcSetupAction(action) {
+  const verb = action === 'setup' ? '一键安装并启动全部集成服务' : action === 'start' ? '启动集成服务' : '停止集成服务';
+  if (!await confirmDialog({ message: `确认${verb}？${action === 'setup' ? '首次安装需下载约 100~200MB 二进制（支持国内镜像加速），并自动写入服务凭据。' : ''}` })) return;
+  try {
+    await api('/services/setup', { method: 'POST', body: { action } });
+    toast('任务已开始，请查看下方日志');
+    await refreshSvcSetup();
   } catch (e) { toast(e.message, true); }
+}
+
+$('#svc-setup-install') && $('#svc-setup-install').addEventListener('click', () => svcSetupAction('setup'));
+$('#svc-setup-start') && $('#svc-setup-start').addEventListener('click', () => svcSetupAction('start'));
+$('#svc-setup-stop') && $('#svc-setup-stop').addEventListener('click', () => svcSetupAction('stop'));
+
+// 「刷新状态」是真动作：重新拉概览连通性 + 端口/健康检查，明细与徽标随之更新。
+const $svcRefresh = $('#svc-setup-refresh');
+if ($svcRefresh) {
+  $svcRefresh.addEventListener('click', async () => {
+    $svcRefresh.disabled = true;
+    $svcRefresh.textContent = '刷新中…';
+    const okState = await loadOverview();
+    $svcRefresh.disabled = false;
+    $svcRefresh.textContent = okState === false ? '刷新状态' : '已刷新';
+    if (okState !== false) setTimeout(() => { $svcRefresh.textContent = '刷新状态'; }, 1500);
+  });
 }
 
 /* ------------------------- 运行主机信息（v0.3.10） ------------------------- */
@@ -660,13 +803,17 @@ async function loadHostInfo(force = false) {
       kv('磁盘 /', h.disk ? `${h.disk.used} / ${h.disk.total}（${h.disk.usagePct}）` : ''),
       kv('Git', h.git && h.git.available ? `${h.git.version} · ${h.git.bin}` : '未检测到'),
       kv('宿主机工作区', h.workspace ? `${h.workspace}${h.workspaceWritable === true ? ' · 可写' : (h.workspaceWritable === false ? ' · 不可写' : '')}` : ''),
-      kv('Docker 容器', h.containers !== null && h.containers !== undefined ? String(h.containers) : ''),
+      kv('Docker 容器', h.containers !== null && h.containers !== undefined ? String(h.containers) : (h.source === 'local' ? '未采集（本机直跑）' : '')),
     ];
     const lsbExtra = h.lsb
       ? `<details class="dk-raw" style="margin-top:8px"><summary>lsb_release -a 原始输出</summary><pre class="log short">${esc(h.lsb)}</pre></details>`
       : '';
+    const hostTitle = h.source === 'local'
+      ? '运行主机（本机直跑，Git / Docker 在本机执行）'
+      : 'SSH 宿主机（真正执行 Git / Docker 的机器）';
     body.innerHTML = side('平台进程（当前运行环境）', localRows)
-      + side('SSH 宿主机（真正执行 Git / Docker 的机器）', hostRows, lsbExtra)
+      + side(hostTitle, hostRows, lsbExtra)
+      + (h.note ? `<div class="notice" style="grid-column:1/-1">${esc(h.note)}</div>` : '')
       + (h.error ? `<div class="notice warn" style="grid-column:1/-1">${esc(h.error)}</div>` : '');
     if (checked) {
       const t = d.checkedAt ? new Date(d.checkedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '—';
@@ -4480,11 +4627,22 @@ async function loadEnvConfig() {
         const detail = (it.detail && it.detail.length)
           ? `<details class="envcfg-detail"><summary>详细说明（${it.detail.length} 条）</summary><ul>${it.detail.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></details>`
           : '';
+        // 固定候选值的配置项用下拉选择，杜绝手滑写错；自由格式仍用输入框。
+        const field = (Array.isArray(it.options) && it.options.length)
+          ? `<select class="envcfg-input" data-env-key="${esc(it.key)}" autocomplete="off">
+              <option value="">留空表示不修改</option>
+              ${it.options.map((o) => {
+                const v = typeof o === 'string' ? o : o.value;
+                const label = typeof o === 'string' ? o : (o.label || o.value);
+                return `<option value="${esc(v)}">${esc(label)}</option>`;
+              }).join('')}
+            </select>`
+          : `<input class="envcfg-input" data-env-key="${esc(it.key)}" placeholder="留空表示不修改" autocomplete="off" spellcheck="false" />`;
         rows.push(`<tr class="envcfg-row${focus}" data-env-key="${esc(it.key)}">
           <td><b>${esc(it.key)}</b><div class="desc muted">${esc(it.label)}</div><div class="desc muted small">${esc(it.desc)}</div>${detail}</td>
           <td><code class="envcfg-val">${esc(it.display)}</code>${it.masked ? ' <span class="muted small">脱敏</span>' : ''}</td>
           <td><code class="envcfg-val">${esc(it.runtimeValue || '默认')}</code>${it.pendingRestart ? ` ${badge('待重启', 'amber')}` : ''}</td>
-          <td><input class="envcfg-input" data-env-key="${esc(it.key)}" placeholder="留空表示不修改" autocomplete="off" spellcheck="false" /></td>
+          <td>${field}</td>
           <td>${it.hot ? badge('即时生效', 'green') : badge('需重启', 'gray')}${it.example ? `<div class="muted small">示例 <code>${esc(it.example)}</code></div>` : ''}</td>
         </tr>`);
       }
@@ -6134,7 +6292,10 @@ async function startWorkbench() {
 (async function boot() {
   let authStatus = null;
   try {
-    const response = await fetch('/api/auth/status');
+    // 令牌通道（localStorage.dp_token）与 Cookie 会话并列：boot 用原生 fetch，必须把令牌带上，
+    // 否则后端判定「未登录」而弹出登录遮罩、工作台不启动，管理员也就看不到集成服务管理区。
+    const token = localStorage.getItem('dp_token');
+    const response = await fetch('/api/auth/status', token ? { headers: { Authorization: `Bearer ${token}` } } : {});
     const json = await response.json();
     authStatus = json && json.data ? json.data : null;
   } catch { /* 服务不可达或旧版本：仍启动工作台，由接口自行报错 */ }

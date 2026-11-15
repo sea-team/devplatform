@@ -300,6 +300,10 @@ v0.4.0 起它是账号体系之外的**共享机器密钥**，不再是唯一门
 
 显示「已配置服务器 / 构建任务 / 部署次数」统计、三个集成服务的在线状态与架构说明。状态为真实探测结果：服务不可达时显示离线并给出真实错误，**不注入演示数据**。
 
+**集成服务一键安装（v0.4.5）**：集成服务卡片排在统计区之后、运行主机之前，管理区位于卡片顶部，管理员登录后首屏即可见、无需滚动或跳转——「一键安装并启动」自动下载缺失的二进制（Gitea / OpenList / VS Code Web IDE，支持国内镜像加速）、生成凭据写入 `.env` 并启动全部服务；「启动服务 / 停止服务」管理已装服务。管理区逐条列出每个服务的「已安装 / 未安装 · 端口 · 端口是否可连 · 健康检查」，标题右侧的状态徽标汇总 `就绪数 / 总数`，旁边的「刷新状态」会重新探测概览连通性与端口/健康检查并即时更新明细。执行日志在页面实时滚动，完成后凭据自动热同步进运行时（无需重启）。等价于手工执行 `windows\native-services.ps1 -Action setup`。普通用户只读，仅在服务未就绪时看到提示。
+
+> 早期版本在卡片标题放过「管理集成服务 ↓」跳转按钮，但管理区本就在同一张卡片内，点击只是滚动几像素，实测无实际作用，已移除；改为常驻管理区 + 状态徽标 + 刷新动作。同时修复令牌通道：以 `localStorage.dp_token` 访问时，启动检查现在会带上该令牌，不再被误判为未登录而弹出登录遮罩（否则管理区也会跟着隐藏）。
+
 ### 7.2 Git 仓库
 
 - **新建仓库**：填名称、描述、是否私有，调用 Gitea API 创建并初始化。
@@ -1430,7 +1434,8 @@ tr -d '\r' < SHA256SUMS.txt | sha256sum -c -
 |---|---|---|
 | `DP_EXT_BIND_IP` | `127.0.0.1` | 扩展容器端口绑定的宿主机 IP；需要跨机访问时改 `0.0.0.0`（务必配合防火墙） |
 | `DP_EXT_HOST` | `127.0.0.1` | 生成连接串与做 TCP 探测时使用的主机名；平台在容器内时填**宿主机 IP** |
-| `DOCKER_HOST` | 空 | 显式指定 Docker 端点，如 `tcp://127.0.0.1:2375`；不填时依次用 `DOCKER_SOCKET`（默认 `/var/run/docker.sock`）或 Windows 命名管道 |
+| `DOCKER_HOST` | 空 | 显式指定 Docker 端点，如 `tcp://127.0.0.1:2375` 或 `npipe:////./pipe/NAME`；不填时依次用 `DOCKER_SOCKET`（默认 `/var/run/docker.sock`）或 Windows 命名管道 |
+| `DOCKER_PIPE` | 空 | 覆盖 Windows 命名管道名；兼容 Kiri 等非默认管道的运行时（Kiri 为 `\\.\pipe\kiri`，不支持 TCP，填 `kiri` 或完整管道路径均可）。不填时用 Docker Desktop 的 `\\.\pipe\docker_engine`，行为不变 |
 
 `docker-compose.yml` 里 `platform` 服务的 `docker.sock` 挂载默认注释，启用扩展的容器安装前需打开（挂载 docker.sock 等于把宿主机 root 权限交给平台容器，仅限可信内网）。镜像不可达时沿用已有的 `DOCKER_IMAGE_PREFIX` 加速器；内网离线可先 `docker load` 导入镜像，平台检测到本地已有镜像会跳过拉取。
 
@@ -2387,6 +2392,8 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 
 `GET /api/host-info` 整份报告缓存 60 秒（`?force=1` 强制重采）；总览新增全宽「运行主机」卡片，Git 运行时卡片新增「运行平台」（`linux/x64 · Alpine Linux 3.23.3 · 内核 ...`）、「运行镜像」与「Git 宿主机」（`Debian GNU/Linux 9.13 (stretch) · 内核 4.9.x · Git 2.11.0`），并可展开宿主机 `lsb_release -a`。
 
+**本机直跑（非容器部署）**：平台没跑在容器里时，「真正执行 Git / Docker 的机器」就是本机，不需要登记 SSH 宿主机。此时右半边面板自动改用本机实时信息（OS / 内核 / 主机名 / CPU / 内存 / 磁盘 / 本地 Git），标题变为「运行主机（本机直跑，Git / Docker 在本机执行）」并给出说明，不再显示一片「无」或「未登记可用于采集的 SSH 宿主机」。只有**平台在容器内运行**且未登记 SSH 节点时，才需要到「服务器」登记一台宿主机用于采集资源信息（同时供 Git SSH 兜底 / SSH 构建后端使用）。
+
 ### 37.3 仓库列表的文件管理与 Git 命令
 
 工作区仓库（来源标为「工作区」）现在每个都有 5 个入口：
@@ -2777,3 +2784,25 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 **现象**：部署后跑 `api-sweep --full` / `api-audit` 回归，管理员密码被无声换掉，按 `initial-admin.txt` 里的密码无法登录。原因是两套巡检对写路由统一发 `{}`，而 `POST /api/auth/reset-password` 把「未传 password」解释成「自动生成随机密码」；随机值只出现在那次响应里，无人记录。远端 `state.json` 的修改时间可直接定位触发时刻。部署包本身排除 `state.json` / `.env`，**部署不会改密码**。
 
 **修复**：① 两套巡检把账号类写接口（重置密码、改密、2FA 设置/关闭、用户增改删）加入跳过清单；② `server.js` 对空 body 一律返回 400，自动生成随机密码必须显式带 `username` 或 `generate=true`（命令行 `reset-admin-password.js` 始终带账号，行为不变）；③ `auth.js` 写入 `passwordChangedAt / passwordChangedVia` 并打印不含明文的审计日志，`GET /api/users` 可查；④ `api-audit` 增加「空参数被拒绝」安全探测，`smoke-auth` 增加 3 项回归（39 → 42 项），前端自检增加 1 项（87 → 88 项）。
+
+---
+
+## 44. v0.4.5 · 集成服务一键安装、Kiri / Docker 双兼容与总览管理区（2026-11-15）
+
+### 44.1 平台内一键安装与配置集成服务
+
+新增 `platform/src/serviceSetup.js` 与三个接口（`GET /api/services/setup-status`、`POST /api/services/setup`、`GET /api/services/setup/job`），复用 `windows\native-services.ps1`：管理员在总览点「一键安装并启动 / 启动服务 / 停止服务」即可自动下载 Gitea / OpenList / VS Code Web IDE、生成凭据写入 `.env` 并启动全部服务，日志在页面实时滚动，单任务互斥、30 分钟超时兜底，成功后凭据热同步进运行时（无需重启）。写操作仅管理员，普通用户只读。详见 §7.1。
+
+集成服务卡片提到总览首屏，管理区常驻并置于服务列表上方；逐服务显示「已安装 / 未安装 · 端口 · 端口通断 · 健康检查」，标题徽标汇总就绪数，旁边「刷新状态」重新探测概览连通性与端口/健康检查。早期那个只做滚动、点击几乎无变化的「管理集成服务 ↓」跳转按钮已移除。同时修复令牌通道：以 `localStorage.dp_token` 访问时，启动检查会带上令牌，不再被误判为未登录而弹出登录遮罩（否则管理区也会跟着隐藏）。
+
+### 44.2 Docker 端点与 Kiri 兼容
+
+`dockerApi.js` 的 `endpoint()` 新增 `npipe://` 解析：`DOCKER_HOST=npipe:////./pipe/NAME`、`DOCKER_PIPE`（裸管道名或全格式）、`DOCKER_SOCKET`，默认仍是 Docker Desktop 的 `\\.\pipe\docker_engine`，行为不变。三项均纳入平台「环境配置」页（§19.6），`BUILD_EXECUTOR`、`DP_ENV_PROFILE`、`DOCKER_PIPE` 等固定枚举改为下拉选择并带白名单校验。Kiri 只需 `DOCKER_PIPE=kiri`（或 `DOCKER_HOST=npipe:////./pipe/kiri`）+ `BUILD_EXECUTOR=docker`；Kiri 在 Windows 只监听命名管道、不支持 TCP，Windows bind mount 兼容性待装 Kiri 后实测。
+
+### 44.3 修复与验证
+
+- `core.js` 源码直跑启动时自动加载 `.env`；`openlist.applyConfig()` 不再用面板空凭据覆盖 `.env` 有效凭据。
+- IDE 健康探测改用根路径（VS Code `serve-web` 无 `/healthz`）；`hostInfo.js` 本机直跑且无 SSH 节点时填充本机 CPU / 内存 / 磁盘 / Git 信息（§37.2）。
+- PowerShell 安装日志 UTF-8 输出；480px 窄屏横向溢出与状态文案修正。
+- 回归：`npm run check`、前端自检全过，`smoke-auth` 42/42，`api-sweep --full` 178 项 0 个 500（4 个 502 为 OpenList / Docker 上游预期），浏览器管理员 / 普通用户 / 窄屏三视角无 JS 异常；`build.mjs --bundle-only` 同步发行目录。
+- 版本号升至 `0.4.5`，静态资源缓存戳升至 `?v=20261115a`；本轮打 tag `v0.4.5`，由 GitHub Actions 构建 Windows 发行包并发布 Release。

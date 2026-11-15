@@ -9,6 +9,25 @@ const crypto = require('crypto');
 // 编译成单文件程序后由引导器注入 DP_ROOT（exe 所在目录），bundle.cjs / public / data 都放那里。
 // 不设置 DP_ROOT 时行为与原来完全一致，线上容器不受影响。
 const ROOT = process.env.DP_ROOT ? path.resolve(process.env.DP_ROOT) : path.resolve(__dirname, '..');
+
+// .env 自动加载（v0.4.5）。源码直跑 node src/server.js 时既没有 compose 的
+// --env-file，也没有单文件版的引导器注入，.env 里的配置（「需重启」项、
+// 一键安装写入的服务凭据）重启后会静默丢失。这里在构建 config 前把它
+// 载入 process.env；语义与 --env-file 一致：已存在的环境变量优先。
+(() => {
+  try {
+    const candidates = [];
+    if (process.env.DP_ENV_FILE) candidates.push(path.resolve(process.env.DP_ENV_FILE));
+    candidates.push(path.resolve(__dirname, '..', '.env'));           // 单文件包 / 容器
+    candidates.push(path.resolve(__dirname, '..', '..', '.env'));     // 源码直跑
+    candidates.push(path.resolve(process.cwd(), '.env'));             // 兜底
+    const file = candidates.find((p) => { try { return fs.statSync(p).isFile(); } catch { return false; } });
+    if (file && typeof process.loadEnvFile === 'function') {
+      process.loadEnvFile(file);
+      if (!process.env.DP_ENV_FILE) process.env.DP_ENV_FILE = file;   // 让「环境配置」页读写同一份文件
+    }
+  } catch { /* .env 缺失或格式异常不阻塞启动 */ }
+})();
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const PUBLIC_DIR = process.env.PUBLIC_DIR || path.join(ROOT, 'public');
@@ -46,6 +65,12 @@ const config = {
   hostWorkspaceDir: env('HOST_WORKSPACE_DIR'),
   // 语言镜像的加速器前缀，例如 docker.m.daocloud.io/library/（注意结尾斜杠）。
   dockerImagePrefix: env('DOCKER_IMAGE_PREFIX'),
+  // Docker 端点三件套：优先级 DOCKER_HOST（tcp:// 或 npipe://）> Windows 管道（DOCKER_PIPE，
+  // 留空用 Docker Desktop 默认 \\.\pipe\docker_engine，可填 kiri 等裸名）> Linux socket（DOCKER_SOCKET）。
+  // 详见 src/dockerApi.js endpoint()。
+  dockerHost: env('DOCKER_HOST'),
+  dockerPipe: env('DOCKER_PIPE'),
+  dockerSocket: env('DOCKER_SOCKET', '/var/run/docker.sock'),
   buildTimeoutMs: Number(env('BUILD_TIMEOUT_MS', '900000')),
   // 扩展（MySQL / PgSQL / Redis 等）容器对外绑定地址与连接串里使用的主机名。
   // 平台本体跑在容器里时，容器内的 127.0.0.1 不是宿主机，需由 compose 注入宿主机 IP。

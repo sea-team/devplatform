@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261113f" />
+  <link rel="stylesheet" href="/style.css?v=20261115a" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -139,17 +139,29 @@
         <!-- 总览 -->
         <section class="page" id="view-overview">
           <div class="stat-grid" id="stat-grid"></div>
-          <div class="card" id="host-info-card" style="margin-bottom:14px">
-            <div class="card-head">
-              <h2>运行主机</h2>
-              <span class="muted" id="host-info-checked">正在采集…</span>
-              <button class="btn btn-sm" id="host-info-refresh" type="button">刷新</button>
-            </div>
-            <div id="host-info-body" class="host-info-grid"><div class="empty">正在采集平台与宿主机信息…</div></div>
-          </div>
+          <!-- 集成服务是操作入口，放在运行主机信息之前，保证管理按钮落在首屏 -->
           <div class="grid-2">
             <div class="card">
-              <div class="card-head"><h2>集成服务</h2><span class="muted">各组件连通性</span></div>
+              <div class="card-head svc-card-head"><h2>集成服务</h2><span class="muted">各组件连通性</span>
+                <span class="svc-setup-head-actions">
+                  <span class="badge gray" id="svc-setup-summary" hidden>状态检测中…</span>
+                  <button class="btn btn-sm" id="svc-setup-refresh" type="button">刷新状态</button>
+                </span>
+              </div>
+              <!-- 管理区放在列表上方：管理员打开总览即可看到操作按钮，无需滚动或跳转 -->
+              <div id="svc-setup" class="svc-setup" hidden>
+                <div class="svc-setup-bar">
+                  <span class="muted small">本机一键管理（自动下载 Gitea / OpenList / 在线 IDE 并生成凭据）</span>
+                  <span id="svc-setup-actions">
+                    <button class="btn btn-sm btn-primary" id="svc-setup-install" type="button">一键安装并启动</button>
+                    <button class="btn btn-sm" id="svc-setup-start" type="button" hidden>启动服务</button>
+                    <button class="btn btn-sm" id="svc-setup-stop" type="button" hidden>停止服务</button>
+                  </span>
+                </div>
+                <div id="svc-setup-services" class="svc-setup-services"></div>
+                <div class="muted small" id="svc-setup-note" hidden></div>
+                <pre id="svc-setup-log" class="svc-setup-log" hidden></pre>
+              </div>
               <div id="service-list" class="list"></div>
             </div>
             <div class="card">
@@ -163,6 +175,14 @@
                 <div class="arch-row"><b>AI</b><span>API 网关 + 宿主机/WSL 本地程序 · 代理配置 · 只读运维 Agent</span></div>
               </div>
             </div>
+          </div>
+          <div class="card" id="host-info-card" style="margin-bottom:14px">
+            <div class="card-head">
+              <h2>运行主机</h2>
+              <span class="muted" id="host-info-checked">正在采集…</span>
+              <button class="btn btn-sm" id="host-info-refresh" type="button">刷新</button>
+            </div>
+            <div id="host-info-body" class="host-info-grid"><div class="empty">正在采集平台与宿主机信息…</div></div>
           </div>
         </section>
 
@@ -1723,6 +1743,6 @@
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
   <script src="/vendor/qrcode.js"></script>
-  <script src="/app.js?v=20261113f"></script>
+  <script src="/app.js?v=20261115a"></script>
 </body>
 </html>

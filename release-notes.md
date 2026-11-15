@@ -207,6 +207,26 @@
      自动生成随机密码须显式带 username 或 generate=true；
   3) auth.js 写入 passwordChangedAt 与 passwordChangedVia 及审计日志，GET /api/users 可查；smoke-auth 与前端自检各增回归项。
 
+【本版新增 · v0.4.5】集成服务一键安装、Kiri / Docker Desktop 双兼容与总览管理区（README §44）：
+  1) 平台内一键安装并配置集成服务：新增 services/setup-status、services/setup、services/setup/job 三个接口，
+     管理员在总览直接点「一键安装并启动 / 启动服务 / 停止服务」，等价手工执行 windows\native-services.ps1；
+     自动下载 Gitea / OpenList / VS Code Web IDE、生成凭据写入 .env，日志在页面实时滚动，
+     单任务互斥并有超时兜底，成功后凭据热同步进运行时（无需重启）。
+  2) 总览集成服务卡片提到首屏，管理区常驻并置于服务列表上方；逐服务显示「已安装 / 未安装 · 端口 · 端口通断 · 健康检查」，
+     标题徽标汇总就绪数，旁边「刷新状态」重新探测；移除只做滚动、无实际作用的「管理集成服务 ↓」跳转按钮。
+     普通用户只读；令牌通道（localStorage.dp_token）访问时不再被误判为未登录而隐藏管理区。
+  3) Docker 端点三件套纳入平台环境配置：DOCKER_HOST（支持 npipe:// 与 tcp://）、DOCKER_PIPE、DOCKER_SOCKET；
+     BUILD_EXECUTOR / DP_ENV_PROFILE / DOCKER_PIPE 等固定枚举改为下拉选择（带白名单校验）。
+     Kiri 可用 DOCKER_PIPE=kiri 或 DOCKER_HOST=npipe:////./pipe/kiri + BUILD_EXECUTOR=docker，
+     Docker Desktop 默认行为不变。Windows bind mount 兼容性仍待装 Kiri 后实测。
+  4) 在线 IDE 改用 VS Code serve-web，健康探测由 /healthz 改为根路径；运行主机面板在本机直跑且无 SSH 节点时
+     填充本机 CPU / 内存 / 磁盘 / Git 信息，不再全显示「无」。
+
+【本版修复 · v0.4.5】：
+  1) core.js 源码直跑启动时自动加载 .env（此前配置重启即丢）；
+  2) openlist.applyConfig 不再用面板里的空凭据覆盖 .env 有效凭据（曾致重启后 OpenList 未配置）；
+  3) PowerShell 安装日志按 UTF-8 输出，修复中文乱码；前端 480px 窄屏横向溢出与多处状态文案修正。
+
 下载哪个：
   1) devplatform-windows.zip       推荐 · 全量包：控制台 + 三项集成服务程序。
                                     START.bat 只启控制台；INSTALL.bat 离线装好服务。

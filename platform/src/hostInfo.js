@@ -61,6 +61,39 @@ function humanUptime(sec) {
   return [d ? `${d} 天` : '', h ? `${h} 小时` : '', `${m} 分钟`].filter(Boolean).join(' ');
 }
 
+/**
+ * 平台直接跑在宿主机（非容器）且没登记 SSH 服务器时，报告右半边不该是
+ * 一整片「无」：此时「真正执行 Git / Docker 的机器」就是本机，直接用 os
+ * 模块采集一份与 collectStatus 同结构的数据填进去。
+ */
+function localStatus() {
+  const totalMB = Math.round(os.totalmem() / 1048576);
+  const freeMB = Math.round(os.freemem() / 1048576);
+  let disk = null;
+  try {
+    const st = fs.statfsSync(process.cwd());
+    const total = st.blocks * st.bsize;
+    const free = st.bfree * st.bsize;
+    const gb = (n) => `${(n / 1073741824).toFixed(1)}G`;
+    disk = {
+      used: gb(total - free), total: gb(total),
+      usagePct: total ? `${Math.round(((total - free) / total) * 100)}%` : '',
+    };
+  } catch { /* 某些系统拿不到 statfs */ }
+  return {
+    cpuCores: os.cpus().length,
+    memory: {
+      usedMB: totalMB - freeMB, totalMB,
+      usagePct: totalMB ? Math.round(((totalMB - freeMB) / totalMB) * 100) : 0,
+    },
+    disk,
+    load1: null, load5: null, load15: null,   // Windows 的 os.loadavg() 全 0，不展示更诚实
+    containers: [],
+    host: os.hostname(),
+    checkedAt: new Date().toISOString(),
+  };
+}
+
 async function report({ force = false } = {}) {
   if (!force && cache && Date.now() - cache.at < TTL_MS) return { ...cache.value, cached: true };
 
@@ -70,8 +103,12 @@ async function report({ force = false } = {}) {
   let status = null;
   let statusError = '';
   const server = (state().servers || []).find((s) => s.id === fb.serverId);
+  // 本机直跑 + 未登记 SSH 节点：不需要 SSH 采集，本机即宿主机。
+  const localFallback = !server && !local.container;
+  const localGit = localFallback ? gitRuntime.describe() : null;
   if (!server) {
-    statusError = '未登记可用于采集的 SSH 宿主机';
+    if (localFallback) status = localStatus();
+    else statusError = '未登记可用于采集的 SSH 宿主机：平台运行在容器内时，需在「服务器」登记一台 SSH 宿主机才能采集其资源信息';
   } else {
     try { status = await collectStatus(server); }
     catch (e) { statusError = `采集失败：${String(e.message || e).slice(0, 160)}`; }
@@ -80,29 +117,31 @@ async function report({ force = false } = {}) {
   const value = {
     local: { ...local, uptime: humanUptime(local.uptimeSec) },
     host: {
-      name: fb.serverName || hostGit.serverName || '',
-      host: fb.serverHost || hostGit.host || '',
-      ip: hostGit.ip || '',
-      os: hostGit.os || '',
-      kernel: hostGit.kernel || '',
-      hostname: hostGit.hostname || '',
-      lsb: hostGit.lsb || '',
-      git: {
-        available: Boolean(hostGit.available),
-        version: hostGit.version || '',
-        bin: hostGit.bin || '',
-      },
-      workspace: fb.hostWorkspaceDir || '',
-      workspaceWritable: hostGit.workspaceWritable,
+      name: localFallback ? '本机（平台所在主机）' : (fb.serverName || hostGit.serverName || ''),
+      host: localFallback ? os.hostname() : (fb.serverHost || hostGit.host || ''),
+      ip: localFallback ? '' : (hostGit.ip || ''),
+      os: localFallback ? gitRuntime.localOsName() : (hostGit.os || ''),
+      kernel: localFallback ? os.release() : (hostGit.kernel || ''),
+      hostname: localFallback ? os.hostname() : (hostGit.hostname || ''),
+      lsb: localFallback ? '' : (hostGit.lsb || ''),
+      git: localFallback
+        ? { available: Boolean(localGit.available), version: localGit.version || '', bin: localGit.bin || '' }
+        : { available: Boolean(hostGit.available), version: hostGit.version || '', bin: hostGit.bin || '' },
+      workspace: localFallback ? local.workspaceDir : (fb.hostWorkspaceDir || ''),
+      workspaceWritable: localFallback ? true : hostGit.workspaceWritable,
       cpuCores: status ? status.cpuCores : 0,
       memory: status ? status.memory : null,
       disk: status ? status.disk : null,
       load1: status ? status.load1 : null,
       load5: status ? status.load5 : null,
       load15: status ? status.load15 : null,
-      containers: status ? (status.containers || []).length : 0,
+      containers: localFallback ? null : (status ? (status.containers || []).length : 0),
       systemHost: status ? status.host : '',
       checkedAt: status ? status.checkedAt : '',
+      source: localFallback ? 'local' : 'ssh',
+      note: localFallback
+        ? '本机直跑（非容器部署）：Git 与 Docker 都在平台所在主机执行，无需登记 SSH 宿主机；下方为本机实时信息。'
+        : '',
       error: statusError,
     },
     gitChannel: gitRuntime.describe().channel,
