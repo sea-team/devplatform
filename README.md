@@ -1044,7 +1044,7 @@ node scripts/sync-integrations.js --check
 node scripts/sync-integrations.js --probe
 ```
 
-浏览器打开 `http://localhost:9000`，总览「集成服务」三项应为绿色「在线」。`local` / `remote` 模式下 Gitea `http://localhost:3002`、OpenList `http://localhost:5244`、code-server `http://localhost:8080` 均可访问；`native` 模式下 8080 打开的是 VS Code Web。Gitea/OpenList 管理员账号为 `admin`，密码在根 `.env` 的 `OPENLIST_PASSWORD`；code-server 密码在 `CODE_SERVER_PASSWORD`（`native` 模式的 VS Code Web 不需要密码，仅监听 127.0.0.1）。
+浏览器打开 `http://localhost:9000`，总览「集成服务」三项应为绿色「在线」。`local` / `remote` 模式下 Gitea `http://localhost:3002`、OpenList `http://localhost:5244`、code-server `http://localhost:8080` 均可访问；`native` 模式下 8080 打开的是 VS Code Web。Gitea / OpenList 的管理员账号与口令由安装脚本自动生成，IDE 访问口令同理；三项均可在平台「集成服务 → 服务账号 / 口令」查看、复制与修改（对应 `GITEA_ADMIN_USER/PASSWORD`、`OPENLIST_USER/PASSWORD`、`CODE_SERVER_PASSWORD`），原生 VS Code Web 默认免密、可切到口令保护。详见 §45。
 
 ---
 
@@ -2849,4 +2849,42 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
   - **兼容挂载列表漏过滤**：`/api/storage/mounts` 原先用 `Array.isArray(raw)`，上游返回 `{content:[]}` 时列表为空且未归一化。现统一走 `listStorages(req.user)`。
 - **多账号验证矩阵**（A / B 两个普通账号 + 管理员，真实写入本机 OpenList）：A 列表只见 A、B 只见 B、管理员见两条；A 编辑 / 启停 / 删除 B 的挂载全部 403，自己与管理员的操作 200；A 直接读、建目录、重命名、直链、下载、写内容、move / copy 到 B 挂载以及从根目录写 B 挂载段名全部 403；根目录列表 A 只含 A、B 只含 B、管理员两条都在；兼容 `/api/storage*` 同样的 403 / 裁剪结果；重复启停 200（第二次 `unchanged:true`）、停用状态下编辑仍保持停用；清理后挂载与归属表均清空。
 - **回归**：`npm run check`、前端自检（新增两条隔离 / 幂等静态护栏）、`smoke-auth` 42/42、`api-audit` 309 请求 0 个 500、`api-sweep --full` 176 项 0 个 500（4 个 502 为 Docker 未安装与 OpenList 空挂载的预期上游错误）；`build.mjs --bundle-only` 已同步发行目录。
-- **状态**：本轮改动仍在本地工作区未提交；按使用者此前决定，GitHub 推送 / tag / Release 均未执行。
+- **状态**：本轮改动已随 `3a540d7` 提交到本地；按使用者此前决定，GitHub 推送 / tag / Release 均未执行。
+
+## 45. 集成服务账号 / 口令：自动配置、平台内管理与 IDE 修正
+
+使用者反馈：「IDE 配置 - 密码状态显示未配置，集成的 IDE 服务却不能正常操作；如果需要密码，集成时应自动配置并支持在平台上修改；OpenList、Gitea 也应该能这样操作，现在不知道账号和密码是多少」。审计后确认这不是一个提示文案问题，而是安装脚本、运行时、前端页面三处口径互相矛盾。
+
+### 45.1 根因
+
+- **凭据从未交给用户**：`native-services.ps1` 只往根 `.env` 写 `GITEA_TOKEN`、`OPENLIST_TOKEN`、`OPENLIST_PASSWORD`，且把**同一个随机密码**同时用作 Gitea 与 OpenList 的 `admin` 密码。账号固定为 `admin`，但平台任何页面都没有展示入口，用户自然无从登录 `/user/login`、`/@manage`。
+- **IDE 密码状态是错配**：本机原生 IDE 是 VS Code `code-tunnel.exe serve-web`，启动参数带 `--without-connection-token`（免密、无用户名、无登录页）。平台 UI 却沿用 code-server 容器的 `$PASSWORD` 模型，提示「未配置 · 请到「环境配置」新增 `CODE_SERVER_PASSWORD`」——这一项安装脚本**根本不生成**，填了也不会生效。
+- **IDE 打开目录路径错误**：`/api/ide/open` 无条件返回 `/home/coder/project/...` 容器映射路径；本机直跑时不存在该 Linux 目录。安装脚本的 `--default-folder` 又写死 `platform/dist/workspace`，与平台实际工作区 `platform/workspace` 不一致。
+- **IDE 无法嵌入**：serve-web 返回 `X-Frame-Options: SAMEORIGIN` 与 `CSP frame-ancestors 'self'`，平台 9100 页面的 iframe 必然白屏；页面原先只有一句「如被浏览器拦截」的弱提示。
+- **没有修改入口**：Gitea / OpenList 的密码只能在服务端用 CLI 改，平台侧「连接管理」改的只是平台自己保存的连接对象，不会动上游服务。
+
+### 45.2 交付
+
+- **安装时自动配置**：`native-services.ps1 -Action setup` 现在把 `GITEA_ADMIN_USER`、`GITEA_ADMIN_PASSWORD`、`OPENLIST_USER`、`CODE_SERVER_PASSWORD`、`IDE_ACCESS_MODE` 一并写入根 `.env` 与 `platform/dist/.env`。历史安装里 Gitea 与 OpenList 共用旧密码，因此首次补齐 `GITEA_ADMIN_PASSWORD` 时**沿用旧值**，避免显示的密码与 Gitea 实际密码对不上。旧安装缺项时，平台启动会用 `serviceCredentials.ensureGenerated()` 按同样规则补齐，不覆盖已有凭据。顺手修掉「token 生成失败就把 .env 里有效 token 清空」的隐患。
+- **平台内统一面板**：总览「集成服务 → 服务账号 / 口令」，三项服务各一张卡片，显示地址、账号、脱敏密码 / 令牌、登录页与管理后台外链；管理员可「显示 / 复制」明文、「修改并同步」口令，IDE 还可切换「免密访问 / 口令保护」。普通用户看不到该面板，明文接口 `POST /api/services/credentials/reveal` 与写接口 `PUT /api/services/credentials` 都要求管理员（并在权限守卫里双重收口）。
+- **改密码真的改服务**：顺序是「先改上游，成功后再写 .env」，避免出现「平台显示新密码、服务还是旧密码」。Gitea 走 `gitea admin user change-password --must-change-password=false`，OpenList 走 `openlist admin set` 并自动重新取 `admin token` 写回 `.env`、刷新 API 凭据缓存与 `state.json` 里的 `env-default` 连接。访问令牌与登录密码互不影响，改密不会让仓库 / 存储模块失效。
+- **IDE 访问模式**：`IDE_ACCESS_MODE=open`（默认）用 `--without-connection-token`；切到 `token` 时把口令写进 `windows/runtime/ide/connection-token`，改用 `--connection-token-file`（口令不进进程命令行），平台更新 `services.json` 后单独重启 IDE，不打断 Gitea / OpenList。
+- **IDE 三处修正**：`/api/ide/open` 按本机 / 容器形态分别返回绝对路径与 `/home/coder/project` 映射；「IDE 配置」页按真实形态显示访问模式、目录映射与口令状态；工作台明确说明跨端口禁嵌入并引导新窗口打开。
+
+### 45.3 凭据一览（到哪里看、账号是什么）
+
+| 服务 | 登录入口 | 账号 | 口令 / 令牌 |
+| --- | --- | --- | --- |
+| Gitea | `http://localhost:3002/user/login`，后台 `/admin` | `admin`（`GITEA_ADMIN_USER`） | `GITEA_ADMIN_PASSWORD`；平台 API 用 `GITEA_TOKEN` |
+| OpenList | `http://localhost:5244/@login`，后台 `/@manage` | `admin`（`OPENLIST_USER`） | `OPENLIST_PASSWORD`；平台 API 用 `OPENLIST_TOKEN` |
+| 在线 IDE | `http://localhost:8080` | 无用户名 | `CODE_SERVER_PASSWORD`；默认免密，切 `token` 模式后作为连接令牌 |
+
+真实值只保存在本机 `.env`（600）与 `platform/dist/.env`，**不写进文档和仓库**；在平台「集成服务 → 服务账号 / 口令」点「显示 / 复制」即可取得。
+
+### 45.4 验证
+
+- 端到端（真实改上游服务再恢复）：Gitea 改密后新密码 Basic Auth 200、旧密码 401；OpenList 改密后新密码登录 `code=200`、旧密码 `code=401`，平台 `/api/openlist/storages` 仍 200、`state.json` 连接对象同步、令牌自动刷新；IDE 切到口令保护后访问根路径 403、token 文件内容与 `.env` 一致，切回免密后 200，三项服务始终 running。
+- 重启 IDE 的坑：serve-web 会 fork `cmd.exe → node.exe` 持有监听 socket，`netstat` 的 OwningProcess 却是已退出的父进程，原重启逻辑误判「非本平台进程」而跳过，留下端口开着却无人应答的僵死状态，新进程又因 10048 端口占用秒退。现按 `--server-data-dir <runtime\ide>` 精确结束整棵进程树、等端口释放后强制启动，并在平台侧用真实 HTTP 响应（含 token 模式的 403）确认重启成功，不再只看脚本 exit code。
+- 回归：`npm run check`（已把 `serviceSetup.js` / `serviceCredentials.js` 纳入语法检查）、前端自检（新增 3 条护栏）、`smoke-auth` 42/42、`api-audit` 312 请求 0 个 500（200=171 / 4xx=135 / 502=6）、`api-sweep --full` 181 项 0 个 500（4 个 502 为 Docker 未安装与空挂载的预期上游错误）、无头浏览器管理员 / 普通用户 / 480px 三视角（凭据面板 3 张卡片、普通用户隐藏、无横向溢出、`runtimeErrors=[]`）；`build.mjs --bundle-only` 已同步发行目录 `bundle.cjs` 与 12 个前端文件。
+- **状态**：本节改动已提交到本地仓库；GitHub 推送 / tag / Release 仍按使用者决定暂停。
+

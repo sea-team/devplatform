@@ -26,6 +26,8 @@ const miniSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src',
 const remoteSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'remoteOps.js'), 'utf8');
 const openlistSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'openlist.js'), 'utf8');
 const integrationsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'integrations.js'), 'utf8');
+const credsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'serviceCredentials.js'), 'utf8');
+const nativeSrc = fs.readFileSync(path.resolve(__dirname, '..', 'windows', 'native-services.ps1'), 'utf8');
 const errors = [];
 const note = (ok, label, extra = '') => {
   console.log(`${ok ? '✔' : '✖'} ${label}${extra ? ` · ${extra}` : ''}`);
@@ -100,7 +102,7 @@ note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
 // 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
-const CACHE_STAMP = '20261115a';
+const CACHE_STAMP = '20261115b';
 const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
 note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
 
@@ -211,6 +213,24 @@ note(openlistSrc.includes('currentStorageState') && openlistSrc.includes('unchan
   && openlistSrc.includes('have (enabled|disabled)')
   && serverSrc.includes('items.map((x) => ({ ...x, mount_path: x.mountPath }))'),
 '挂载启停幂等不再误报 502、编辑保留停用状态、兼容 /api/storage/mounts 同步归一化过滤');
+note(html.includes('id="svc-credentials"') && html.includes('id="svc-cred-list"')
+  && html.includes('id="svc-cred-refresh"') && app.includes('function loadServiceCredentials')
+  && app.includes('function renderServiceCredentials') && app.includes('data-svc-cred-save')
+  && app.includes('data-svc-cred-mode-save') && app.includes('/services/credentials/reveal'),
+'集成服务账号 / 口令面板已接线（查看 / 复制 / 改密 / IDE 访问模式切换，明文仅管理员）');
+note(credsSrc.includes('admin user change-password') && credsSrc.includes("['admin', 'set', password]")
+  && credsSrc.includes('refreshOpenlistToken') && credsSrc.includes('openlistApi.resetToken()')
+  && credsSrc.includes('serviceSetup.applyServiceEnv()') && credsSrc.includes('ensureGenerated')
+  && envcfg.includes('GITEA_ADMIN_PASSWORD') && envcfg.includes('IDE_ACCESS_MODE')
+  && serverSrc.includes("app.put('/api/services/credentials'")
+  && permSrc.includes('集成服务账号 / 口令（明文与写操作仅管理员）'),
+'改口令先同步上游 Gitea / OpenList 再写 .env、刷新令牌与连接对象；安装时自动补齐账号 / 口令白名单');
+note(serverSrc.includes('serviceCredentials.ideNative()') && serverSrc.includes('abs.replace(/\\\\/g,')
+  && serverSrc.includes('modeLabel') && app.includes('a.modeLabel')
+  && html.includes('id="ide-frame"') && html.includes('frame-ancestors')
+  && nativeSrc.includes('Stop-IdeTree') && nativeSrc.includes('restart-ide')
+  && nativeSrc.includes('--connection-token-file'),
+'IDE 不再按容器模型误导：本机路径打开、免密语义、跨端口禁嵌入说明、重启清理 fork 进程树');
 note(remoteSrc.includes('canUseTerminal') && serverSrc.includes('remoteOps.activeTerminals(req.user)'),
 'SSH 终端会话按 ownerId 隔离（stream / input / resize / close / 列表逐入口校验）');
 note(app.includes('function invalidateSession') && app.includes('function stopBackgroundPolling')

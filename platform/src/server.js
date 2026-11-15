@@ -27,6 +27,7 @@ const proxy = require('./proxy');
 const openlist = require('./openlist');
 const envConfig = require('./envConfig');
 const serviceSetup = require('./serviceSetup');
+const serviceCredentials = require('./serviceCredentials');
 const hostInfo = require('./hostInfo');
 const workspaceGit = require('./workspaceGit');
 const fileTypes = require('./fileTypes');
@@ -38,6 +39,12 @@ const aiSessions = require('./aiSessions');
 openlist.applyConfig();
 // 首次启动创建初始管理员、把历史资源归属补齐；已有账号时不做任何改动。
 auth.initialize();
+// 老安装（v0.4.5 及以前）的 .env 只有三个键：补齐账号与 IDE 访问口令等缺项，
+// 只写没配过的键、绝不覆盖已有凭据，也不改上游服务密码。
+try {
+  const generated = serviceCredentials.ensureGenerated();
+  if (generated.length) console.log(`[devplatform] 已自动补齐集成服务凭据：${generated.join(', ')}`);
+} catch (e) { console.log(`[devplatform] 集成服务凭据补齐跳过：${e.message}`); }
 
 // 账号体系：分发层统一解析身份（未登录拦截），资源级权限在 body/params 解析后判定。
 const authGate = {
@@ -527,6 +534,18 @@ app.post('/api/services/setup', wrap(async (req, res) => {
   ok(res, serviceSetup.run((req.body || {}).action));
 }));
 
+/* --------------------- 集成服务账号 / 口令（v0.4.5） --------------------- */
+// 查看只给脱敏值；明文与修改都要求管理员，且修改会同步到上游服务本身。
+app.get('/api/services/credentials', wrap(async (req, res) => ok(res, serviceCredentials.overview(req.user))));
+app.post('/api/services/credentials/reveal', wrap(async (req, res) => {
+  requireAdmin(req);
+  ok(res, serviceCredentials.reveal((req.body || {}).service, req.user));
+}));
+app.put('/api/services/credentials', wrap(async (req, res) => {
+  requireAdmin(req);
+  ok(res, await serviceCredentials.setCredential(req.body || {}, req.user));
+}));
+
 /* --------------------------- 外部 Git 源管理 --------------------------- */
 // 凭据只存 state.json（600），列表脱敏；clone 用临时 http.extraHeader，不落到 .git/config。
 
@@ -577,15 +596,29 @@ const maskSecret = (v) => {
 
 app.get('/api/ide', wrap(async (req, res) => {
   const pwd = String(config.codeServerPassword || '');
+  const mode = config.ideAccessMode === 'token' ? 'token' : 'open';
+  const native = serviceCredentials.ideNative();
+  const access = {
+    mode,
+    modeLabel: mode === 'token' ? '访问口令保护' : '免密（VS Code serve-web）',
+    native,
+    note: native
+      ? '本机原生 IDE 是 VS Code serve-web，没有用户名。默认免密可直接打开；切到「访问口令保护」后，打开时需输入「集成服务 → 服务凭据」里的访问口令。'
+      : '外部 code-server：登录页密码来自该服务自身的 PASSWORD 环境变量。',
+  };
   ok(res, {
     url: config.codeServerUrl,
     workspace: config.workspaceDir,
+    access,
+    credentialsUrl: '#service-credentials',
     password: {
       configured: Boolean(pwd),
       masked: maskSecret(pwd),
       key: 'CODE_SERVER_PASSWORD',
-      envVar: '$PASSWORD',
-      hint: 'code-server 登录页的「Password was set from $PASSWORD」指的就是平台 .env 里的 CODE_SERVER_PASSWORD；容器部署时由 .env 注入 code-server 容器的 PASSWORD。',
+      envVar: mode === 'token' ? '--connection-token-file' : '$PASSWORD',
+      hint: mode === 'token'
+        ? '当前 IDE 处于「访问口令保护」模式：打开 IDE 登录页后输入下面的访问口令。修改请到「集成服务 → 服务凭据」。'
+        : '当前 IDE 为 VS Code serve-web 免密模式，打开即可使用，无需输入密码。下面这个口令是安装时自动预置的，切到「访问口令保护」后才会生效；修改请到「集成服务 → 服务凭据」。',
     },
   });
 }));
@@ -624,9 +657,18 @@ app.post('/api/ide/open', wrap(async (req, res) => {
   const repoPath = String(req.body.repoPath || '').trim();
   const abs = safeWorkspacePath(repoPath);
   if (!fs.existsSync(abs)) throw new Error(`工作区内不存在目录：${repoPath || '/'}`);
-  // code-server 容器内路径来自 compose 的 ./workspace:/home/coder/project 映射
-  const folder = `/home/coder/project/${relativeWorkspacePath(abs)}`.replace(/\/+$/, '');
-  ok(res, { url: `${config.codeServerUrl}/?folder=${encodeURIComponent(folder)}`, folder });
+  // 本机 VS Code serve-web 直接用平台工作区的绝对路径；只有 code-server 容器部署
+  // 才把宿主目录映射成 /home/coder/project。旧版一律返回容器路径，本机直跑时
+  // IDE 打开的是一个根本不存在的 Linux 目录，看起来就像「IDE 不能用」。
+  const native = serviceCredentials.ideNative();
+  const folder = native
+    ? abs.replace(/\\/g, '/')
+    : `/home/coder/project/${relativeWorkspacePath(abs)}`.replace(/\/+$/, '');
+  ok(res, {
+    url: `${config.codeServerUrl}/?folder=${encodeURIComponent(folder)}`,
+    folder, mode: native ? 'native' : 'container',
+    hint: native ? '本机路径（VS Code serve-web）' : '容器内映射路径 /home/coder/project',
+  });
 }));
 
 /* ------------------------------ 存储文件管理 ----------------------------- */

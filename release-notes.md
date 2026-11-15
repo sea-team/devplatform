@@ -232,6 +232,11 @@
   5) OpenList 挂载链路：驱动字典解析、启停 / 删除 id 放进 query（上游 strconv.Atoi 要求）；
      全局单例服务不变，挂载改为按账号隔离（归属表 + 列表 / 写操作 / 文件访问 / 根目录写过滤）；
      启停做成幂等、编辑保留停用状态、兼容 /api/storage/mounts 同步归一化。详见 README §44.4-§44.6。
+  6) 集成服务账号 / 口令（README §45）：安装时自动为 Gitea / OpenList / 在线 IDE 生成账号与口令并写入 .env；
+     总览新增「服务账号 / 口令」面板，管理员可查看 / 复制 / 修改，改密同步到上游服务（Gitea change-password、
+     OpenList admin set + 自动刷新令牌），IDE 可在免密与口令保护间切换并单独重启。
+     修正 IDE 三处错配：serve-web 免密却提示配 code-server 密码、打开目录用容器路径、跨端口 iframe 白屏。
+     凭据真实值只存本机 .env，不写入文档 / 仓库。
 
 下载哪个：
   1) devplatform-windows.zip       推荐 · 全量包：控制台 + 三项集成服务程序。

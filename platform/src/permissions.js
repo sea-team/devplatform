@@ -51,6 +51,7 @@ const GLOBAL_WRITE_PATTERNS = [
   // （见 guard() 里的对象级分支），不能用路径级白名单一刀切，否则普通用户
   // 无法登记并启用自己的 OpenList、write 协作者也无法编辑被授权的连接。
   /^\/api\/services\/setup(?:\/|$)/,                 // 一键安装（后端已 requireAdmin，双保险）
+  /^\/api\/services\/credentials(?:\/|$)/,           // 集成服务账号 / 口令（明文与写操作仅管理员）
 ];
 
 const isAdmin = (user) => Boolean(user && user.role === 'admin');

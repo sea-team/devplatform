@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261115a" />
+  <link rel="stylesheet" href="/style.css?v=20261115b" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -159,6 +159,16 @@
                   </span>
                 </div>
                 <div id="svc-setup-services" class="svc-setup-services"></div>
+                <!-- v0.4.5：三项集成服务的账号 / 口令统一在这里查看与修改，修改会同步到服务本身 -->
+                <div id="svc-credentials" class="svc-credentials" hidden>
+                  <div class="svc-cred-head">
+                    <b>服务账号 / 口令</b>
+                    <span class="muted small">安装时自动生成 · 明文仅管理员可见</span>
+                    <button class="btn btn-sm" id="svc-cred-refresh" type="button">重新读取</button>
+                  </div>
+                  <div id="svc-cred-list" class="svc-cred-list"></div>
+                  <div class="hint" id="svc-cred-hint" hidden></div>
+                </div>
                 <div class="muted small" id="svc-setup-note" hidden></div>
                 <pre id="svc-setup-log" class="svc-setup-log" hidden></pre>
               </div>
@@ -673,8 +683,9 @@
             </div>
           </div>
           <div class="card">
-            <div class="card-head"><h2>嵌入式预览</h2><span class="muted">如被浏览器拦截，请用上方按钮新窗口打开</span></div>
-            <iframe id="ide-frame" class="ide-frame" title="code-server"></iframe>
+            <div class="card-head"><h2>打开 IDE</h2><span class="muted">在线 IDE 不允许被跨端口页面嵌入</span></div>
+            <div class="hint">IDE 服务返回 <code>X-Frame-Options: SAMEORIGIN</code> 与 <code>frame-ancestors 'self'</code>，平台页面无法用 iframe 嵌入（会白屏）。请点上方「打开 IDE」或「打开 IDE 首页」在新窗口使用；选中目录时会直接带上 <code>?folder=</code> 参数。</div>
+            <iframe id="ide-frame" class="ide-frame" title="code-server" hidden></iframe>
           </div>
         </section>
 
@@ -686,27 +697,27 @@
             <button class="subnav-btn active" data-open-view="ide-config">配置 / 凭据</button>
           </div>
           <div class="card">
-            <div class="card-head"><h2>服务与工作区</h2><span class="muted">只读信息，改地址 / 密码请到「环境配置」</span></div>
+            <div class="card-head"><h2>服务与工作区</h2><span class="muted">只读信息，改地址请到「环境配置」，改口令请到「集成服务 → 服务账号 / 口令」</span></div>
             <div id="ide-config-info" class="dk-kv-list">—</div>
           </div>
           <div class="card">
-            <div class="card-head"><h2>登录凭据</h2><span class="muted">code-server 登录页的密码来自 .env</span></div>
+            <div class="card-head"><h2>访问凭据</h2><span class="muted">本机 VS Code serve-web 默认免密；如需口令保护可在「集成服务」里开启</span></div>
             <div class="notice ide-cred" id="ide-cred">
               <div class="row gap wrap" style="align-items:center">
-                <b>登录密码</b><span class="muted" id="ide-cred-state">读取中…</span>
+                <b>访问口令</b><span class="muted" id="ide-cred-state">读取中…</span>
               </div>
               <div class="hint" id="ide-cred-hint" style="margin-top:6px"></div>
               <div class="row gap wrap" style="margin-top:8px;align-items:center">
                 <code id="ide-cred-value">—</code>
-                <button class="btn btn-sm" id="ide-cred-reveal" type="button">显示密码</button>
-                <button class="btn btn-sm" id="ide-cred-copy" type="button">复制密码</button>
-                <button class="btn btn-sm" id="ide-cred-env" type="button">去环境配置修改</button>
+                <button class="btn btn-sm" id="ide-cred-reveal" type="button">显示口令</button>
+                <button class="btn btn-sm" id="ide-cred-copy" type="button">复制口令</button>
+                <button class="btn btn-sm" id="ide-cred-env" type="button">到「集成服务」修改</button>
               </div>
             </div>
           </div>
           <div class="card">
             <div class="card-head"><h2>项目目录</h2><span class="muted">在「IDE 工作台」用浏览选择器定位</span></div>
-            <div class="hint">code-server 容器把平台工作区映射为 <code>/home/coder/project</code>；在 IDE 工作台选择工作区内的子目录后，打开时会自动带上 <code>?folder=</code> 参数，直接进入该目录。</div>
+            <div class="hint">本机原生 IDE（VS Code serve-web）直接使用平台工作区的绝对路径打开目录；只有容器版 code-server 才映射到 <code>/home/coder/project</code>。在 IDE 工作台选择子目录后，打开时会自动带上 <code>?folder=</code> 参数。</div>
             <div class="form-actions"><button class="btn btn-sm" type="button" id="ide-config-goto">回到 IDE 工作台</button></div>
           </div>
         </section>
@@ -1743,6 +1754,6 @@
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
   <script src="/vendor/qrcode.js"></script>
-  <script src="/app.js?v=20261115a"></script>
+  <script src="/app.js?v=20261115b"></script>
 </body>
 </html>

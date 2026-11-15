@@ -681,6 +681,8 @@ async function refreshSvcSetup(overviewServices) {
   const show = Boolean(isAdmin || downCount || running);
   box.hidden = !show;
   if (!show) return true;
+  // 管理员进总览时拉一次凭据清单；后续由「重新读取」或安装任务完成后刷新。
+  if (isAdmin && !svcCredLoaded) void loadServiceCredentials();
   btn($install, isAdmin && !running);
   btn($start, isAdmin && !running);
   btn($stop, isAdmin && !running);
@@ -725,8 +727,11 @@ async function refreshSvcSetup(overviewServices) {
           const cur = await api('/services/setup/job');
           if (!cur || cur.status !== 'running') {
             clearInterval(svcJobTimer); svcJobTimer = null;
-            if (cur && cur.status === 'success') toast('集成服务任务完成');
-            else if (cur && cur.status === 'failed') toast('集成服务任务失败，请查看日志', true);
+            if (cur && cur.status === 'success') {
+              toast('集成服务任务完成');
+              // 安装脚本可能重新生成账号 / 令牌，凭据面板要跟着刷新。
+              void loadServiceCredentials();
+            } else if (cur && cur.status === 'failed') toast('集成服务任务失败，请查看日志', true);
             await loadOverview();
             return;
           }
@@ -741,6 +746,133 @@ async function refreshSvcSetup(overviewServices) {
   } else if ($log) { $log.hidden = true; $log.textContent = ''; }
   return true;
 }
+
+/* --------------------- 集成服务账号 / 口令（v0.4.5） --------------------- */
+// 三项服务的账号 / 口令由安装脚本自动生成；这里统一查看、复制、修改，
+// 修改会写 .env 并同步到上游服务（IDE 切换模式会单独重启）。
+const svcCredState = { items: [], plain: {} };
+let svcCredLoaded = false;
+
+function svcCredRow(item) {
+  const key = esc(item.key);
+  const isIde = item.key === 'ide';
+  const modeBadge = item.modeLabel ? badge(item.modeLabel, item.mode === 'token' ? 'amber' : 'green') : '';
+  const links = [
+    `<a class="btn btn-sm" href="${esc(item.loginUrl)}" target="_blank" rel="noopener">${isIde ? '打开 IDE' : '登录页'}</a>`,
+    item.manageUrl ? `<a class="btn btn-sm" href="${esc(item.manageUrl)}" target="_blank" rel="noopener">管理后台</a>` : '',
+  ].join('');
+  return `<div class="svc-cred-card" data-svc-cred="${key}">
+    <div class="svc-cred-top"><b>${esc(item.name)}</b>${modeBadge}<span class="muted small">${esc(item.url)}</span><span class="svc-cred-links">${links}</span></div>
+    <div class="svc-cred-grid">
+      <span class="muted small">账号</span><code>${item.user ? esc(item.user) : '（无用户名，仅访问口令）'}</code>
+      <span class="muted small">${isIde ? '访问口令' : '登录密码'}</span><code data-svc-cred-value="${key}">${esc(item.masked || '—')}</code>
+      <span class="muted small">访问令牌</span><code>${esc(item.tokenMasked || (item.tokenKey ? '未配置' : '不适用'))}</code>
+    </div>
+    <div class="svc-cred-actions">
+      <button class="btn btn-sm" type="button" data-svc-cred-reveal="${key}">显示${isIde ? '口令' : '密码'}</button>
+      <button class="btn btn-sm" type="button" data-svc-cred-copy="${key}">复制</button>
+      <input type="password" class="svc-cred-input" data-svc-cred-new="${key}" placeholder="新口令（8–128 位）" autocomplete="new-password" />
+      <button class="btn btn-sm btn-primary" type="button" data-svc-cred-save="${key}">修改并同步</button>
+    </div>
+    ${isIde ? `<div class="svc-cred-actions svc-cred-mode">
+      <label class="muted small">访问模式
+        <select data-svc-cred-mode="${key}">
+          <option value="open"${item.mode === 'token' ? '' : ' selected'}>免密访问（默认）</option>
+          <option value="token"${item.mode === 'token' ? ' selected' : ''}>口令保护</option>
+        </select>
+      </label>
+      <button class="btn btn-sm" type="button" data-svc-cred-mode-save="${key}">应用并重启 IDE</button>
+    </div>` : ''}
+    <div class="hint">${esc(item.note)}　·　配置项 <code>${esc(item.passwordKey)}</code>${item.tokenKey ? ` / <code>${esc(item.tokenKey)}</code>` : ''}</div>
+  </div>`;
+}
+
+function renderServiceCredentials() {
+  const box = $('#svc-credentials');
+  if (!box) return;
+  const admin = Boolean(currentUser && currentUser.role === 'admin');
+  box.hidden = !admin;
+  if (!admin) return;
+  const list = $('#svc-cred-list');
+  if (list) list.innerHTML = svcCredState.items.map(svcCredRow).join('');
+  const hint = $('#svc-cred-hint');
+  if (hint) {
+    hint.hidden = false;
+    hint.textContent = '改口令会写入 .env（自动备份）并同步到服务本身：Gitea / OpenList 的访问令牌不因改密失效，OpenList 会自动刷新令牌；IDE 切换访问模式会单独重启 IDE，不打断另外两项服务。';
+  }
+}
+
+async function loadServiceCredentials() {
+  const box = $('#svc-credentials');
+  if (!box) return;
+  if (!currentUser || currentUser.role !== 'admin') { box.hidden = true; return; }
+  try {
+    const d = await api('/services/credentials');
+    svcCredState.items = d.services || [];
+    svcCredState.plain = {};
+    svcCredLoaded = true;
+    renderServiceCredentials();
+  } catch (e) {
+    box.hidden = false;
+    const list = $('#svc-cred-list');
+    if (list) list.innerHTML = `<div class="muted small">读取失败：${esc(e.message)}</div>`;
+  }
+}
+
+const $svcCredList = $('#svc-cred-list');
+if ($svcCredList) {
+  $svcCredList.addEventListener('click', async (e) => {
+    const t = e.target;
+    if (!t || !t.dataset) return;
+    const reveal = t.dataset.svcCredReveal;
+    const copy = t.dataset.svcCredCopy;
+    const save = t.dataset.svcCredSave;
+    const modeSave = t.dataset.svcCredModeSave;
+    const service = reveal || copy || save || modeSave;
+    if (!service) return;
+    try {
+      if (reveal || copy) {
+        let plain = svcCredState.plain[service];
+        if (!plain) {
+          const d = await api('/services/credentials/reveal', { method: 'POST', body: { service } });
+          plain = d.password || '';
+          svcCredState.plain[service] = plain;
+        }
+        const code = document.querySelector(`[data-svc-cred-value="${service}"]`);
+        if (reveal) {
+          if (code) code.textContent = plain || '—';
+          toast('已显示明文，请留意周围环境');
+        } else {
+          if (!plain) { toast('没有可复制的口令', true); return; }
+          await navigator.clipboard.writeText(plain);
+          toast('已复制到剪贴板');
+        }
+        return;
+      }
+      if (modeSave) {
+        const sel = document.querySelector(`[data-svc-cred-mode="${service}"]`);
+        const mode = sel ? sel.value : 'open';
+        if (!await confirmDialog({ message: `确认把在线 IDE 切换为「${mode === 'token' ? '口令保护' : '免密访问'}」？会单独重启 IDE（约 10 秒），Gitea / OpenList 不受影响。` })) return;
+        const d = await api('/services/credentials', { method: 'PUT', body: { service, mode } });
+        toast(d.message || '访问模式已更新');
+        await loadServiceCredentials();
+        return;
+      }
+      if (save) {
+        const input = document.querySelector(`[data-svc-cred-new="${service}"]`);
+        const password = input ? input.value.trim() : '';
+        if (!password) { toast('请先输入新口令', true); return; }
+        if (!await confirmDialog({ message: `确认修改「${service}」的登录口令？将写入 .env 并同步到服务本身，旧口令立即失效。` })) return;
+        const d = await api('/services/credentials', { method: 'PUT', body: { service, password } });
+        if (input) input.value = '';
+        toast(d.message || '口令已更新');
+        await loadServiceCredentials();
+      }
+    } catch (err) { toast(err.message, true); }
+  });
+}
+const $svcCredRefresh = $('#svc-cred-refresh');
+if ($svcCredRefresh) $svcCredRefresh.addEventListener('click', () => loadServiceCredentials());
 
 async function svcSetupAction(action) {
   const verb = action === 'setup' ? '一键安装并启动全部集成服务' : action === 'start' ? '启动集成服务' : '停止集成服务';
@@ -1287,28 +1419,29 @@ async function loadIde() {
     const d = await api('/ide');
     $('#ide-home').href = d.url;
     $('#ide-url').textContent = `服务地址：${d.url} · 平台工作区：${d.workspace}`;
-    // v0.3.11：独立「IDE 配置」页展示服务 / 工作区 / 凭据来源，工作台页专注打开项目。
+    // v0.4.5：info 区按实际 IDE 形态展示。旧版一律按 code-server 容器写死
+    // /home/coder/project 与 $PASSWORD，本机 VS Code serve-web 下全是错的。
+    const a = d.access || {};
+    const p = d.password || {};
     const info = $('#ide-config-info');
     if (info) {
-      const p = d.password || {};
       info.innerHTML = [
         ['服务地址', d.url],
         ['平台工作区', d.workspace],
-        ['容器内映射', '/home/coder/project'],
-        ['密码配置项', `${p.key || 'CODE_SERVER_PASSWORD'}（对应 ${p.envVar || '$PASSWORD'}）`],
-        ['密码状态', p.configured ? '已配置 · 可在下方显示 / 复制' : '未配置 · 请到「环境配置」新增该项'],
+        ['目录映射', a.native ? '本机绝对路径（VS Code serve-web）' : '/home/coder/project'],
+        ['访问模式', a.modeLabel || '免密（VS Code serve-web）'],
+        ['口令配置项', String(p.key || 'CODE_SERVER_PASSWORD')],
+        ['口令状态', p.configured ? '已自动配置 · 可在下方显示 / 复制' : '未配置 · 请到「集成服务」生成'],
       ].map(([k, v]) => `<div class="ide-config-row"><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join('');
     }
-    // v0.3.10：登录页那句「Password was set from $PASSWORD」对应 .env 的哪一项，讲清楚并可复制。
-    const p = d.password || {};
     ideCredState.configured = Boolean(p.configured);
     ideCredState.plain = '';
     const st = $('#ide-cred-state');
     if (st) st.textContent = p.configured
-      ? `已配置 · ${esc(p.key || 'CODE_SERVER_PASSWORD')}（对应 ${esc(p.envVar || '$PASSWORD')}）`
-      : `未配置 · 请到「环境配置」填写 ${esc(p.key || 'CODE_SERVER_PASSWORD')}`;
+      ? `已配置 · ${a.modeLabel || ''} · 在「集成服务 → 服务账号 / 口令」里可修改`
+      : '未配置 · 请到「集成服务 → 服务账号 / 口令」生成';
     const h = $('#ide-cred-hint');
-    if (h) h.textContent = p.hint || '';
+    if (h) h.textContent = p.hint || a.note || '';
     const v = $('#ide-cred-value');
     if (v) v.textContent = p.configured ? (p.masked || '******') : '—';
   } catch (e) { toast(e.message, true); }
@@ -5111,7 +5244,15 @@ if (ideCredCopyBtn) ideCredCopyBtn.addEventListener('click', async () => {
   } catch (e) { toast(e.message, true); }
 });
 const ideCredEnvBtn = $('#ide-cred-env');
-if (ideCredEnvBtn) ideCredEnvBtn.addEventListener('click', () => openEnvConfig(['CODE_SERVER_PASSWORD'], ''));
+if (ideCredEnvBtn) ideCredEnvBtn.addEventListener('click', () => {
+  // 「集成服务」卡片在总览首屏，切过去后展开凭据面板并滚到可见位置。
+  switchView('overview');
+  setTimeout(() => {
+    const box = $('#svc-credentials');
+    if (box) { box.hidden = false; if (box.scrollIntoView) box.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    void loadServiceCredentials();
+  }, 260);
+});
 
 const hostInfoRefreshBtn = $('#host-info-refresh');
 if (hostInfoRefreshBtn) hostInfoRefreshBtn.addEventListener('click', () => { void loadHostInfo(true); });
@@ -5937,6 +6078,9 @@ function renderAuthBox(user) {
       const el = $(sel);
       if (el) el.hidden = true;
     });
+    const cred = $('#svc-credentials');
+    if (cred) cred.hidden = true;
+    svcCredState.plain = {};
     return;
   }
   box.hidden = false;
@@ -5958,6 +6102,12 @@ function renderAuthBox(user) {
   if (ideReveal) ideReveal.hidden = currentUser.role !== 'admin';
   const ideCopy = $('#ide-cred-copy');
   if (ideCopy) ideCopy.hidden = currentUser.role !== 'admin';
+  // 集成服务账号 / 口令明文仅管理员可见；切换账号或登出后立即收起。
+  const svcCred = $('#svc-credentials');
+  if (svcCred) {
+    svcCred.hidden = currentUser.role !== 'admin';
+    if (currentUser.role === 'admin' && !svcCredLoaded) void loadServiceCredentials();
+  }
 }
 
 const loginFormEl = $('#login-form');

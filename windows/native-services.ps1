@@ -11,6 +11,8 @@
     powershell -ExecutionPolicy Bypass -File windows\native-services.ps1 -Action start
     powershell -ExecutionPolicy Bypass -File windows\native-services.ps1 -Action stop
     powershell -ExecutionPolicy Bypass -File windows\native-services.ps1 -Action status
+    powershell -ExecutionPolicy Bypass -File windows\native-services.ps1 -Action restart-ide
+      （平台内改 IDE 访问口令 / 模式后，按 services.json 的新参数单独重启 IDE）
 
   setup 额外参数：-BinDir（额外离线目录）、-NoDownload、-IdeMode、
                   -ForceEnv、-GiteaVersion、-OpenListVersion、-DownloadProxy、-DryRun
@@ -21,7 +23,7 @@
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('setup', 'start', 'stop', 'status')][string]$Action = 'status',
+  [ValidateSet('setup', 'start', 'stop', 'status', 'restart-ide')][string]$Action = 'status',
   [string]$Root = '',
   [string]$BinDir = '',
   [switch]$NoDownload,
@@ -54,7 +56,11 @@ $PidsFile  = Join-Path $Runtime 'pids.txt'
 $Dist      = Join-Path $Root 'platform\dist'
 $DistEnv   = Join-Path $Dist '.env'
 $RootEnv   = Join-Path $Root '.env'
-$Workspace = Join-Path $Dist 'workspace'
+# 源码直跑时平台工作区是 platform/workspace；打成单文件发行包后则是 platform/dist/workspace。
+# 旧版写死 dist/workspace，导致源码直跑安装的 IDE 默认打开一个不存在的空目录。
+$SourceWorkspace = Join-Path $Root 'platform\workspace'
+$Workspace = if (Test-Path -LiteralPath $SourceWorkspace) { $SourceWorkspace } else { Join-Path $Dist 'workspace' }
+$IdeTokenFile = Join-Path $IdeHome 'connection-token'
 $GiteaExe  = Join-Path $Bin 'gitea.exe'
 $OlExe     = Join-Path $Bin 'openlist.exe'
 $IdeExe    = Join-Path $Bin 'code-tunnel.exe'
@@ -346,10 +352,29 @@ function Get-IdePlan {
     return $null
   }
   Ensure-Dir $IdeHome
-  $args = @('serve-web', '--host', '127.0.0.1', '--port', "$IdePort",
-    '--without-connection-token', '--accept-server-license-terms', '--disable-telemetry',
+  # v0.4.5：访问口令由安装脚本生成在 .env 里。open = 免连接令牌（本机默认）；
+  # token = 把口令写进 connection-token 文件并用 --connection-token-file 注入，
+  # 口令不会出现在进程命令行里。平台「服务凭据」页可切换并自动重启 IDE。
+  $rootCfg = Read-EnvFile $RootEnv
+  $accessMode = if ($rootCfg.IDE_ACCESS_MODE) { [string]$rootCfg.IDE_ACCESS_MODE } else { 'open' }
+  $accessArgs = @('--without-connection-token')
+  if ($accessMode -eq 'token') {
+    $ideToken = [string]$rootCfg.CODE_SERVER_PASSWORD
+    if (-not $ideToken) {
+      Warn 'IDE_ACCESS_MODE=token 但 CODE_SERVER_PASSWORD 为空，本次回退为免密模式'
+      $accessMode = 'open'
+    } else {
+      if (-not $DryRun) {
+        [IO.File]::WriteAllText($IdeTokenFile, $ideToken, (New-Object 'System.Text.UTF8Encoding' $false))
+      }
+      $accessArgs = @('--connection-token-file', $IdeTokenFile)
+      Good '在线 IDE 已启用访问口令保护（--connection-token-file）'
+    }
+  }
+  $args = @('serve-web', '--host', '127.0.0.1', '--port', "$IdePort") + $accessArgs + @(
+    '--accept-server-license-terms', '--disable-telemetry',
     '--server-data-dir', $IdeHome, '--default-folder', $Workspace)
-  return @{ kind = 'code'; exe = $exe; args = $args; workdir = (Split-Path -Parent $exe); port = $IdePort; enabled = $true }
+  return @{ kind = 'code'; exe = $exe; args = $args; workdir = (Split-Path -Parent $exe); port = $IdePort; enabled = $true; accessMode = $accessMode }
 }
 
 # PowerShell 5.1 的 Start-Process 会构造一个大小写不敏感的环境变量字典；
@@ -374,14 +399,16 @@ function Invoke-WithoutDuplicateEnv([scriptblock]$Block) {
   }
 }
 
-function Start-One([string]$Key, [hashtable]$Spec, [string]$HealthUrl, [int]$WaitSeconds) {
+function Start-One([string]$Key, [hashtable]$Spec, [string]$HealthUrl, [int]$WaitSeconds, [switch]$ForceRestart) {
   $port = [int]$Spec.port
-  $pids = Read-Pids
-  if (Test-Port $port) {
+  # 重启场景必须忽略残留监听：刚 kill 的旧进程 socket 可能还没释放，
+  # 若在这里「已有服务在监听，跳过启动」，就会留下一个端口开着却没人应答的僵死状态。
+  if (-not $ForceRestart -and (Test-Port $port)) {
     Good "$Key :$port 已有服务在监听，跳过启动"
     return $true
   }
   if ($DryRun) { Skip "启动 $Key（$($Spec.exe)）"; return $true }
+  $pids = Read-Pids
   Ensure-Dir $LogDir
   $out = Join-Path $LogDir "$Key.out.log"
   $err = Join-Path $LogDir "$Key.err.log"
@@ -470,11 +497,15 @@ function Write-NativeDistEnv([hashtable]$Tokens, [bool]$GiteaOk, [bool]$OpenList
     "PORT=$Port",
     "GITEA_URL=$gUrl",
     "GITEA_TOKEN=$gToken",
+    "GITEA_ADMIN_USER=$($Tokens.GiteaUser)",
+    "GITEA_ADMIN_PASSWORD=$($Tokens.GiteaPassword)",
     "OPENLIST_URL=$oUrl",
     "OPENLIST_TOKEN=$oToken",
-    'OPENLIST_USER=admin',
+    "OPENLIST_USER=$($Tokens.OpenListUser)",
     "OPENLIST_PASSWORD=$oPw",
     "CODE_SERVER_URL=$iUrl",
+    "CODE_SERVER_PASSWORD=$($Tokens.IdePassword)",
+    "IDE_ACCESS_MODE=$($Tokens.IdeMode)",
     "WORKSPACE_DIR=$Workspace",
     '# ADMIN_TOKEN：控制台 / API 访问令牌。留空＝所有 /api/* 无鉴权（仅限可信本机 / 内网，',
     '#   且 /api/servers/:id/exec 降级为只读白名单）；对局域网 / 公网暴露时必须设置。',
@@ -611,8 +642,27 @@ function Invoke-Setup {
   $pw = $rootCfg.OPENLIST_PASSWORD
   if (-not $pw) {
     $pw = New-Secret 20
-    if ($DryRun) { Skip '生成随机管理员密码并写入根 .env' }
-    else { Set-EnvValue $RootEnv 'OPENLIST_PASSWORD' $pw; Good '已生成随机管理员密码并写入根 .env' }
+    if ($DryRun) { Skip '生成随机 OpenList 管理员密码并写入根 .env' }
+    else { Set-EnvValue $RootEnv 'OPENLIST_PASSWORD' $pw; Good '已生成随机 OpenList 管理员密码并写入根 .env' }
+  }
+  # v0.4.5：三项服务的账号 / 口令都要在安装时自动落盘，不能再让用户去猜。
+  # 历史版本把同一个 $pw 同时用作 Gitea 与 OpenList 的 admin 密码，所以首次补齐
+  # GITEA_ADMIN_PASSWORD 必须沿用旧值，否则平台显示的密码和 Gitea 实际密码对不上。
+  $giteaPw = $rootCfg.GITEA_ADMIN_PASSWORD
+  if (-not $giteaPw) { $giteaPw = $pw }
+  $giteaUser = if ($rootCfg.GITEA_ADMIN_USER) { [string]$rootCfg.GITEA_ADMIN_USER } else { 'admin' }
+  $openlistUser = if ($rootCfg.OPENLIST_USER) { [string]$rootCfg.OPENLIST_USER } else { 'admin' }
+  $idePw = $rootCfg.CODE_SERVER_PASSWORD
+  if (-not $idePw) { $idePw = New-Secret 24 }
+  $ideMode = if ($rootCfg.IDE_ACCESS_MODE) { [string]$rootCfg.IDE_ACCESS_MODE } else { 'open' }
+  if ($DryRun) { Skip '写入 Gitea / OpenList / IDE 账号与访问口令到根 .env' }
+  else {
+    if (-not $rootCfg.GITEA_ADMIN_USER) { Set-EnvValue $RootEnv 'GITEA_ADMIN_USER' $giteaUser }
+    if (-not $rootCfg.GITEA_ADMIN_PASSWORD) { Set-EnvValue $RootEnv 'GITEA_ADMIN_PASSWORD' $giteaPw }
+    if (-not $rootCfg.OPENLIST_USER) { Set-EnvValue $RootEnv 'OPENLIST_USER' $openlistUser }
+    if (-not $rootCfg.CODE_SERVER_PASSWORD) { Set-EnvValue $RootEnv 'CODE_SERVER_PASSWORD' $idePw }
+    if (-not $rootCfg.IDE_ACCESS_MODE) { Set-EnvValue $RootEnv 'IDE_ACCESS_MODE' $ideMode }
+    Good '三项服务的账号 / 口令已写入根 .env（可在平台「服务凭据」页查看与修改）'
   }
 
   $giteaFile = "gitea-$GiteaVersion-windows-4.0-amd64.exe"
@@ -642,8 +692,8 @@ function Invoke-Setup {
 
   $ide = Get-IdePlan
 
-  $ini = New-GiteaIni $pw
-  if ($giteaOk) { Initialize-Gitea $ini $pw }
+  $ini = New-GiteaIni $giteaPw
+  if ($giteaOk) { Initialize-Gitea $ini $giteaPw }
   else { Warn 'Gitea 二进制不可用，跳过初始化（可离线放置后重跑 -Action setup）' }
 
   $plan = @{
@@ -674,15 +724,20 @@ function Invoke-Setup {
   $gToken = ''
   $oToken = ''
   if ($giteaOk -and -not $DryRun -and (Test-Port $GiteaPort)) {
-    $gToken = Get-GiteaToken $pw
-    Set-EnvValue $RootEnv 'GITEA_TOKEN' $gToken
+    $gToken = Get-GiteaToken $giteaPw
+    # 生成失败时不能把 .env 里仍然有效的旧 token 清成空（上游偶发不可用会拖垮仓库模块）。
+    if ($gToken) { Set-EnvValue $RootEnv 'GITEA_TOKEN' $gToken }
+    else { Warn '保留已有 GITEA_TOKEN（本次未取得新令牌）' }
   } elseif ($DryRun) { $gToken = 'dry-run' }
   if ($olOk -and -not $DryRun -and (Test-Port $OpenListPort)) {
     $oToken = Get-OpenListToken $pw
-    Set-EnvValue $RootEnv 'OPENLIST_TOKEN' $oToken
+    if ($oToken) { Set-EnvValue $RootEnv 'OPENLIST_TOKEN' $oToken }
+    else { Warn '保留已有 OPENLIST_TOKEN（将回退到账号密码登录）' }
   } elseif ($DryRun) { $oToken = 'dry-run' }
 
-  Write-NativeDistEnv @{ GiteaToken = $gToken; OpenListToken = $oToken; Password = $pw } ([bool]$giteaOk) ([bool]$olOk) ([bool]$ide)
+  Write-NativeDistEnv @{ GiteaToken = $gToken; OpenListToken = $oToken; Password = $pw;
+                        GiteaUser = $giteaUser; GiteaPassword = $giteaPw;
+                        OpenListUser = $openlistUser; IdePassword = $idePw; IdeMode = $ideMode } ([bool]$giteaOk) ([bool]$olOk) ([bool]$ide)
 
   Step '无 Docker 安装完成'
   $final = Read-EnvFile $DistEnv
@@ -725,6 +780,57 @@ function Invoke-Stop {
   Good '原生集成服务已停止'
 }
 
+# 平台内改 IDE 访问口令 / 模式后，只重启 IDE 一项（不打断 Gitea / OpenList）。
+# services.json 的 args 由平台先更新，这里按新参数拉起并等待端口就绪。
+# VS Code serve-web 会 fork cmd.exe -> node.exe 来持有监听 socket，netstat 里的
+# OwningProcess 常常是已经退出的 code-tunnel.exe 父进程；只靠 Stop-PortOwner 会
+# 误判成「非本平台进程」而跳过，留下端口开着却没人应答的僵死状态。按
+# --server-data-dir <本平台 runtime\ide> 精确匹配整棵进程树来收尾。
+function Stop-IdeTree {
+  $list = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.CommandLine -and $_.CommandLine.IndexOf($IdeHome, [StringComparison]::OrdinalIgnoreCase) -ge 0 `
+      -and $_.CommandLine -match 'serve-web|code-server|server-main\.js'
+  })
+  foreach ($p in $list) { Stop-ProcessById ([int]$p.ProcessId) | Out-Null }
+  if ($list.Count -gt 0) { Good "已结束 $($list.Count) 个旧 IDE 进程（含持有监听端口的子进程）" }
+  return $list.Count
+}
+
+function Invoke-RestartIde {
+  $plan = Read-Services
+  if (-not $plan -or -not $plan.ide -or -not $plan.ide.enabled) {
+    Warn '未安装本机原生 IDE（services.json 里 ide.enabled=false），跳过重启'; return
+  }
+  $pids = Read-Pids
+  if ($pids.ContainsKey('ide')) {
+    Stop-ProcessById $pids['ide'] | Out-Null
+    $pids.Remove('ide')
+    Save-Pids $pids
+  }
+  Stop-IdeTree | Out-Null
+  # VS Code serve-web 在 --server-data-dir 下留有名管道 / 锁句柄，杀完进程立刻
+  # 重启会因「已有实例」或端口未释放而秒退；实测留 2 秒再启动才稳定。
+  Start-Sleep -Seconds 2
+  Stop-PortOwner ([int]$plan.ide.port) | Out-Null
+  $port = [int]$plan.ide.port
+  for ($i = 0; $i -lt 20; $i++) {
+    if (-not (Test-Port $port)) { break }
+    Start-Sleep -Milliseconds 500
+  }
+  $h = @{}
+  foreach ($p in $plan.ide.PSObject.Properties) { $h[$p.Name] = $p.Value }
+  # token 模式下根路径会是登录页 / 401，Wait-Http 的 2xx 判定会空等；
+  # 这里跳过 HTTP 健康探测，只等端口起来（平台侧另有连通性探测）。
+  Start-One 'ide' $h '' 0 -ForceRestart | Out-Null
+  for ($i = 0; $i -lt 30; $i++) {
+    if (Test-Port $port) { break }
+    Start-Sleep -Seconds 1
+  }
+  $mode = if ($h.ContainsKey('accessMode')) { [string]$h.accessMode } else { 'open' }
+  if (Test-Port $port) { Good "在线 IDE 已按新配置重启（访问模式：$mode）" }
+  else { Warn '在线 IDE 30 秒内未监听端口，请查看 windows\runtime\logs\ide.*.log' }
+}
+
 function Invoke-Status {
   $plan = Read-Services
   if (-not $plan) { Write-Host '    未安装原生服务（未执行过 -Mode native）' -ForegroundColor DarkGray; return }
@@ -741,8 +847,9 @@ function Invoke-Status {
 Write-Host 'DevPlatform · Windows 原生集成服务（无 Docker）' -ForegroundColor Cyan
 if ($DryRun) { Write-Host '模式: DRY-RUN（不下载、不启动、不写文件）' -ForegroundColor Yellow }
 switch ($Action) {
-  'setup'  { Invoke-Setup }
-  'start'  { Invoke-Start }
-  'stop'   { Invoke-Stop }
-  'status' { Invoke-Status }
+  'setup'       { Invoke-Setup }
+  'start'       { Invoke-Start }
+  'stop'        { Invoke-Stop }
+  'status'      { Invoke-Status }
+  'restart-ide' { Invoke-RestartIde }
 }

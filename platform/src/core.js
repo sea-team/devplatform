@@ -46,10 +46,15 @@ const config = {
   // 远程部署的容器则由 .env 显式注入宿主机地址，两种场景都不受影响。
   giteaUrl: env('GITEA_URL', 'http://localhost:3002').replace(/\/+$/, ''),
   giteaToken: env('GITEA_TOKEN'),
+  // v0.4.5：集成服务账号 / 口令由安装脚本生成，平台内可查看与修改（见 serviceCredentials.js）。
+  giteaAdminUser: env('GITEA_ADMIN_USER', 'admin'),
+  giteaAdminPassword: env('GITEA_ADMIN_PASSWORD'),
   codeServerUrl: env('CODE_SERVER_URL', 'http://localhost:8080').replace(/\/+$/, ''),
-  // v0.3.10：code-server 登录页提示的 $PASSWORD 就来自这个值（容器部署由 .env 注入）。
-  // 平台自身不启动 code-server，但要在控制台把「密码是什么、去哪改」讲清楚。
+  // 在线 IDE 访问口令：本机 VS Code serve-web 用 --connection-token-file 注入；
+  // 容器 / 外部 code-server 时由该服务的 PASSWORD 环境变量注入。
   codeServerPassword: env('CODE_SERVER_PASSWORD'),
+  // open = 免密（--without-connection-token）；token = 用上面口令做连接令牌。
+  ideAccessMode: env('IDE_ACCESS_MODE', 'open'),
   openlistUrl: env('OPENLIST_URL', 'http://localhost:5244').replace(/\/+$/, ''),
   openlistToken: env('OPENLIST_TOKEN'),
   openlistUser: env('OPENLIST_USER', 'admin'),

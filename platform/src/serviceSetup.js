@@ -122,17 +122,24 @@ function applyServiceEnv() {
   try { content = fs.readFileSync(file, 'utf8'); } catch { return []; }
   const map = {
     GITEA_URL: 'giteaUrl', GITEA_TOKEN: 'giteaToken',
+    GITEA_ADMIN_USER: 'giteaAdminUser', GITEA_ADMIN_PASSWORD: 'giteaAdminPassword',
     OPENLIST_URL: 'openlistUrl', OPENLIST_TOKEN: 'openlistToken',
     OPENLIST_PASSWORD: 'openlistPassword', OPENLIST_USER: 'openlistUser',
-    CODE_SERVER_URL: 'codeServerUrl',
+    CODE_SERVER_URL: 'codeServerUrl', CODE_SERVER_PASSWORD: 'codeServerPassword',
+    IDE_ACCESS_MODE: 'ideAccessMode',
   };
   const applied = [];
   for (const line of content.split(/\r?\n/)) {
     const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
     if (!m || !map[m[1]]) continue;
     const key = m[1];
-    const value = m[2].trim().replace(/^["']|["']$/g, '');
+    let value = m[2].trim().replace(/^["']|["']$/g, '');
     if (!value) continue;
+    // 下拉枚举由 envConfig.write 校验；这里是「读文件回填」，同样只接受合法值，
+    // 避免手工编辑 .env 写进非法模式让 IDE 启动参数被拼坏。
+    if (key === 'IDE_ACCESS_MODE') {
+      if (!['open', 'token'].includes(value)) continue;
+    }
     process.env[key] = value;
     const field = map[key];
     config[field] = field.endsWith('Url') ? value.replace(/\/+$/, '') : value;
@@ -147,13 +154,13 @@ function finish(status, extra = {}) {
   job.finishedAt = new Date().toISOString();
   Object.assign(job, extra);
   child = null;
-  if (status === 'success' && job.action === 'setup') {
+  if (status === 'success') {
     job.envApplied = applyServiceEnv();
     // 安装脚本会重写 OPENLIST_TOKEN，但 API 客户端缓存了旧 token 换出的会话；
     // 不清缓存会让「已安装成功」后所有存储接口继续用旧凭据报 401。
-    if (job.envApplied.length) openlistApi.resetToken();
+    if (job.action !== 'stop' && job.envApplied.length) openlistApi.resetToken();
     pushLog(`[平台] 已同步 .env 凭据到运行时${job.envApplied.length ? '：' + job.envApplied.join(', ') : '（未发现新增项）'}`);
-    pushLog('[平台] 一键安装完成，概览页连通性将在下次刷新时更新。');
+    if (job.action === 'setup') pushLog('[平台] 一键安装完成，概览页连通性将在下次刷新时更新。');
   }
   if (jobTimer) { clearTimeout(jobTimer); jobTimer = null; }
 }
@@ -218,4 +225,4 @@ function dispose() {
   if (jobTimer) clearTimeout(jobTimer);
 }
 
-module.exports = { status, run, currentJob, dispose, applyServiceEnv };
+module.exports = { status, run, currentJob, dispose, applyServiceEnv, scriptPath };
