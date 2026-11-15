@@ -297,7 +297,7 @@ async function api(path, options = {}) {
     err.code = json.code || '';
     err.hint = json.hint || '';
     err.rawError = json.error || '';
-    if (status === 401 && !path.startsWith('/auth/')) showLogin('登录状态已失效，请重新登录');
+    if (status === 401 && !path.startsWith('/auth/')) invalidateSession('登录状态已失效，请重新登录');
     throw err;
   }
   return json.data;
@@ -1826,7 +1826,7 @@ function renderMountList(items) {
   storageState.storages = items || [];
   $('#mount-list').innerHTML = items.length ? items.map((m) => `
     <div class="list-item">
-      <div><div class="title">${esc(m.mountPath)} ${m.disabled ? badge('已停用', 'gray') : badge('启用', 'green')}</div>
+      <div><div class="title">${esc(m.mountPath)} ${m.disabled ? badge('已停用', 'gray') : badge('启用', 'green')}${currentUser && currentUser.role === 'admin' && m.ownerName ? ` ${badge(`由 ${m.ownerName} 添加`, 'blue')}` : ''}</div>
         <div class="desc">${esc(m.driver)} · ${esc(m.status || '-')} · ${esc(m.remark || '')}</div></div>
       <div class="actions ext-actions">
         <button class="btn btn-sm" data-ol-storage-edit="${esc(m.id)}">编辑</button>
@@ -5093,13 +5093,16 @@ $('#git-runtime-form').addEventListener('submit', async (e) => {
 $('#git-runtime-refresh').addEventListener('click', refreshGitRuntime);
 
 /* --------------------------- v0.3.10 交互绑定 --------------------------- */
+const idePlainAllowed = () => Boolean(currentUser && currentUser.role === 'admin');
 const ideCredRevealBtn = $('#ide-cred-reveal');
 if (ideCredRevealBtn) ideCredRevealBtn.addEventListener('click', async () => {
+  if (!idePlainAllowed()) { toast('IDE 明文密码仅管理员可查看', true); return; }
   try { await revealIdePassword(); toast('已显示当前 IDE 登录密码'); }
   catch (e) { toast(e.message, true); }
 });
 const ideCredCopyBtn = $('#ide-cred-copy');
 if (ideCredCopyBtn) ideCredCopyBtn.addEventListener('click', async () => {
+  if (!idePlainAllowed()) { toast('IDE 明文密码仅管理员可查看', true); return; }
   try {
     const pwd = await revealIdePassword();
     if (!pwd) { toast('没有可复制的密码：请先在环境配置页设置', true); return; }
@@ -5821,9 +5824,15 @@ async function authFetch(path, options = {}) {
     init.body = JSON.stringify(options.body);
   }
   const response = await fetch(`/api${path}`, init);
-  let json = {};
-  try { json = await response.json(); } catch { /* 非 JSON 响应 */ }
-  if (!response.ok || json.ok === false) throw new Error(json.error || `HTTP ${response.status}`);
+  let json = null;
+  try { json = await response.json(); } catch { /* 非 JSON 响应，下面统一报错 */ }
+  // 旧写法只检查 !response.ok || json.ok === false：代理/网关偶发返回 200 + HTML
+  // 时 json = {}，会被当成「登录成功」继续走工作台；也可能把错误页吞成空对象。
+  if (!response.ok || !json || json.ok !== true) {
+    const message = (json && json.error)
+      || (json === null ? `服务端返回了非 JSON 响应（HTTP ${response.status}）` : `HTTP ${response.status}`);
+    throw new Error(message);
+  }
   return json.data || {};
 }
 
@@ -5834,9 +5843,41 @@ function setLoginError(selector, message) {
   box.hidden = !message;
 }
 
+/** 会话失效 / 登出后停掉所有后台轮询，避免每 1.5s 一次 401 反复打断登录界面。 */
+function stopBackgroundPolling() {
+  const timers = [
+    () => { if (typeof logTimer !== 'undefined' && logTimer) { clearInterval(logTimer); logTimer = null; } },
+    () => { if (typeof serverPollTimer !== 'undefined' && serverPollTimer) { clearInterval(serverPollTimer); serverPollTimer = null; } },
+    () => { if (typeof svcJobTimer !== 'undefined' && svcJobTimer) { clearInterval(svcJobTimer); svcJobTimer = null; } },
+    () => { if (typeof dockerPollTimer !== 'undefined' && dockerPollTimer) { clearInterval(dockerPollTimer); dockerPollTimer = null; } },
+  ];
+  for (const stop of timers) { try { stop(); } catch { /* 尚未初始化 */ } }
+}
+
+/**
+ * 401 统一入口：只在登录遮罩尚未显示时才重置表单。
+ * 旧实现每次 401 都调 showLogin()，会清空 pendingTotpToken 并隐藏 2FA 表单，
+ * 用户在二次验证过程中被后台轮询打断，永远无法完成登录。
+ */
+function invalidateSession(message = '登录状态已失效，请重新登录') {
+  const view = $('#login-view');
+  currentUser = null;
+  stopBackgroundPolling();
+  const box = $('#auth-wrap');
+  if (box) box.hidden = true;
+  if (view && !view.hidden) {
+    setLoginError('#login-error', message);
+    return;
+  }
+  showLogin(message);
+}
+
 function showLogin(message = '') {
   const view = $('#login-view');
   if (view) view.hidden = false;
+  // 登出 / 会话失效后不能残留上一个账号的身份，否则集成服务管理区仍按管理员渲染。
+  currentUser = null;
+  stopBackgroundPolling();
   const form = $('#login-form');
   const pass = $('#password-form');
   const twofa = $('#twofa-form');
@@ -5890,7 +5931,14 @@ function renderAuthBox(user) {
   currentUser = user || null;
   const box = $('#auth-wrap');
   if (!box) return;
-  if (!currentUser) { box.hidden = true; return; }
+  if (!currentUser) {
+    box.hidden = true;
+    ['#ide-cred-reveal', '#ide-cred-copy'].forEach((sel) => {
+      const el = $(sel);
+      if (el) el.hidden = true;
+    });
+    return;
+  }
   box.hidden = false;
   if (typeof window.__setAuthMenu === 'function') window.__setAuthMenu(false);
   const name = $('#auth-name');
@@ -5904,6 +5952,12 @@ function renderAuthBox(user) {
   if (flag2fa) flag2fa.hidden = !currentUser.totpEnabled;
   const navUsers = $('#nav-users');
   if (navUsers) navUsers.hidden = currentUser.role !== 'admin';
+  // IDE 明文密码（reveal）仅管理员可读；普通用户不展示「显示 / 复制」入口，
+  // 避免点了才吃到 403。是否已配置的脱敏状态仍对所有登录用户可见。
+  const ideReveal = $('#ide-cred-reveal');
+  if (ideReveal) ideReveal.hidden = currentUser.role !== 'admin';
+  const ideCopy = $('#ide-cred-copy');
+  if (ideCopy) ideCopy.hidden = currentUser.role !== 'admin';
 }
 
 const loginFormEl = $('#login-form');
@@ -5999,6 +6053,12 @@ if ($('#auth-logout')) $('#auth-logout').addEventListener('click', async () => {
   try { await authFetch('/auth/logout', { method: 'POST' }); } catch { /* 忽略 */ }
   renderAuthBox(null);
   showLogin('已登出');
+  // 只清会话 Cookie 是不够的：boot 会带上 localStorage.dp_token 重新判定为管理员，
+  // 刷新后等于没登出；dp_tabs 里还留着上一个账号的服务器文件 / 终端标签。
+  try {
+    localStorage.removeItem('dp_token');
+    localStorage.removeItem('dp_tabs');
+  } catch { /* 隐私模式下 localStorage 可能不可写 */ }
   if (typeof location !== 'undefined') location.reload();
 });
 
@@ -6291,15 +6351,25 @@ async function startWorkbench() {
 
 (async function boot() {
   let authStatus = null;
+  let reachable = false;
   try {
     // 令牌通道（localStorage.dp_token）与 Cookie 会话并列：boot 用原生 fetch，必须把令牌带上，
     // 否则后端判定「未登录」而弹出登录遮罩、工作台不启动，管理员也就看不到集成服务管理区。
     const token = localStorage.getItem('dp_token');
     const response = await fetch('/api/auth/status', token ? { headers: { Authorization: `Bearer ${token}` } } : {});
     const json = await response.json();
-    authStatus = json && json.data ? json.data : null;
-  } catch { /* 服务不可达或旧版本：仍启动工作台，由接口自行报错 */ }
-  authMode = (authStatus && authStatus.mode) || 'off';
+    if (json && json.ok === true) {
+      reachable = true;
+      authStatus = json.data || null;
+    }
+  } catch { /* 服务不可达 / 返回错误页：下面按「未认证」处理 */ }
+  authMode = (authStatus && authStatus.mode) || 'required';
+  if (!reachable) {
+    // 旧写法把请求失败静默当成 mode=off 继续启动工作台：网络抖动或代理返回 HTML
+    // 时会在未认证状态下恢复标签、拉起轮询，然后被一连串 401 打断。
+    showLogin('无法连接平台服务，请确认服务已启动后刷新页面');
+    return;
+  }
   if (authStatus && authStatus.mode === 'required' && authStatus.authenticated === false) {
     showLogin();
     return;

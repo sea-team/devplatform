@@ -12,7 +12,7 @@
  * 代理：OpenList 不属于 git/docker/server/ai 四个作用域，走全局代理 + NO_PROXY。
  */
 const path = require('path');
-const { config, state, update, uid } = require('./core');
+const { config, state, update, uid, currentUser, HttpError } = require('./core');
 const { openlistApi } = require('./integrations');
 const proxyModule = require('./proxy');
 
@@ -207,6 +207,10 @@ function addConnection(body = {}) {
   update((s) => {
     if (!Array.isArray(s.openlistConnections)) s.openlistConnections = [];
     s.openlistConnections.push(item);
+    // 产品语义就是「登记即设为当前」（前端提交后的提示也是这么写的），普通用户
+    // 添加自己的 OpenList 后要能立刻用它浏览/挂载，不能只登记不生效。
+    // 谁能把某条连接设为当前，由 /activate 与 guard() 的对象归属判定兜底：
+    // 无关用户既看不到别人的连接，也无法切换；write 协作者可切换被授权的连接。
     s.openlistActiveId = item.id;
   });
   applyConfig();
@@ -306,6 +310,84 @@ async function settings() {
 
 /* ---------------------------- 挂载存储管理 ---------------------------- */
 
+/* ---------------- 挂载归属：账号隔离（OpenList 服务仍是全站单例） ---------------- */
+/**
+ * 上游 OpenList 只有一份挂载表。平台侧另记「哪个挂载由哪个账号添加」，
+ * 列表 / 写操作 / 文件访问都按这份归属过滤：
+ *  - 管理员（含 token / CLI 通道）看全部、可管理全部；
+ *  - 普通用户只能看到并操作自己创建的挂载；
+ *  - 升级前已存在、没有归属记录的挂载视为历史数据，仅管理员可见可管。
+ */
+const isPrivileged = (user) => Boolean(user && (
+  user.role === 'admin' || ['cli', 'off', 'token'].includes(user.via)
+));
+
+function mountOwners() {
+  const raw = state().openlistMountOwners;
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+}
+
+function ownerNameOf(ownerId) {
+  if (!ownerId) return '';
+  const u = (state().users || []).find((x) => x && x.id === ownerId);
+  return u ? (u.displayName || u.username || '') : '';
+}
+
+/** 该用户可见挂载的根目录段（mountPath 的第一段），用于过滤根目录文件列表。 */
+function mountSegmentsFor(user) {
+  const out = new Set();
+  const uidValue = user && user.id;
+  for (const rec of Object.values(mountOwners())) {
+    if (!rec || !rec.ownerId || !uidValue || rec.ownerId !== uidValue) continue;
+    const seg = String(rec.mountPath || '').replace(/^\/+/, '').split('/')[0];
+    if (seg) out.add(seg);
+  }
+  return out;
+}
+
+function recordMountOwner(id, mountPath, user = currentUser()) {
+  const ownerId = user && user.id && !String(user.id).startsWith('__') ? user.id : '';
+  update((s) => {
+    if (!s.openlistMountOwners || typeof s.openlistMountOwners !== 'object') s.openlistMountOwners = {};
+    s.openlistMountOwners[String(id)] = {
+      ownerId, mountPath: String(mountPath || ''), createdAt: new Date().toISOString(),
+    };
+  });
+}
+
+function assertMountOwner(id, user = currentUser()) {
+  if (isPrivileged(user)) return;
+  const rec = mountOwners()[String(id)];
+  const uidValue = user && user.id;
+  if (!rec || !rec.ownerId || !uidValue || rec.ownerId !== uidValue) {
+    throw new HttpError(403, '无权管理该挂载：仅创建者或管理员可操作');
+  }
+}
+
+/** 挂载列表按归属裁剪，并补 ownerId / ownerName 供管理员区分是谁添加的。 */
+function visibleStorages(items, user = currentUser()) {
+  const owners = mountOwners();
+  const uidValue = user && user.id;
+  const privileged = isPrivileged(user);
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    if (privileged) return true;
+    const rec = owners[String(item && item.id)];
+    return Boolean(rec && rec.ownerId && uidValue && rec.ownerId === uidValue);
+  }).map((item) => {
+    const ownerId = (owners[String(item && item.id)] || {}).ownerId || '';
+    return { ...item, ownerId, ownerName: ownerNameOf(ownerId) };
+  });
+}
+
+/** 根目录只列出自己挂载对应的目录，避免「挂载列表看不到、文件页却能看到」。 */
+function filterRootContent(content, dir, user = currentUser()) {
+  if (dir !== '/' || isPrivileged(user)) return Array.isArray(content) ? content : [];
+  const allowed = mountSegmentsFor(user);
+  return (Array.isArray(content) ? content : []).filter(
+    (f) => allowed.has(String((f && f.name) || '').replace(/^\/+/, '')),
+  );
+}
+
 function normalizeStorage(s) {
   return {
     id: s.id,
@@ -321,18 +403,30 @@ function normalizeStorage(s) {
   };
 }
 
-async function listStorages() {
-  return asList(await openlistApi.mounts()).map(normalizeStorage);
+async function listStorages(user = currentUser()) {
+  return visibleStorages(asList(await openlistApi.mounts()).map(normalizeStorage), user);
 }
 
 async function listDrivers() {
   const raw = await openlistApi.drivers();
-  const items = asList(raw).map((d) => ({
-    driver: String(d.driver || d.name || ''),
-    name: String(d.name || d.driver || ''),
-    description: String(d.description || d.help || '').slice(0, 240),
-    config: d.config || d.addition || null,
-  }));
+  const d = unwrap(raw);
+  // OpenList 的 /api/admin/driver/list 返回的是「以驱动名为 key 的字典」（本机 93 项）：
+  // { "Local": { common: [...], additional: [...], config: {...} }, ... }
+  // 旧实现只走 asList()（仅认数组 / content / items），items 恒为空 → 前端
+  // 「新增 / 编辑挂载」的驱动下拉没有选项，任何账号都选不了驱动、也就加不了挂载。
+  const dict = (d && !Array.isArray(d) && typeof d === 'object') ? Object.entries(d) : [];
+  const items = (dict.length
+    ? dict.map(([name, spec]) => ({
+      driver: name,
+      name,
+      description: String((spec && spec.config && spec.config.alert) || '').slice(0, 240),
+    }))
+    : asList(raw).map((x) => ({
+      driver: String(x.driver || x.name || ''),
+      name: String(x.name || x.driver || ''),
+      description: String(x.description || x.help || '').slice(0, 240),
+      config: x.config || x.addition || null,
+    }))).filter((x) => x.driver);
   // v0.4.4：区分「上游真的没给数据」与「凭据 / 权限不足」。后者根本不会走到这里
   // （openlist() 把 code!=200 / 401 / 403 抛成上游错误，由 tolerant 降级并带 hint），
   // 所以这里把原始响应形态回传，前端不再笼统提示「需要管理员权限 Token」。
@@ -369,26 +463,70 @@ function storageBody(body = {}) {
   };
 }
 
-async function createStorage(body = {}) {
+/** 按 id 回查上游当前挂载（用于编辑保留状态、启停幂等判定）。 */
+async function currentStorageState(id) {
+  const list = asList(await openlistApi.mounts()).map(normalizeStorage);
+  return list.find((x) => String(x.id) === String(id)) || null;
+}
+
+async function createStorage(body = {}, user = currentUser()) {
+  const mountPath = safeDir(body.mountPath || body.mount_path || '/');
   await openlistApi.saveStorage(storageBody(body), false);
+  // 上游 create 不返回挂载 id：按路径回查一次，把归属落到平台侧 state.json。
+  // 回查失败不阻断创建（该挂载会成为「无归属的历史挂载」，仅管理员可见可管）。
+  try {
+    const created = asList(await openlistApi.mounts()).map(normalizeStorage)
+      .find((x) => x.mountPath === mountPath);
+    if (created && created.id !== undefined && created.id !== null) recordMountOwner(created.id, mountPath, user);
+  } catch { /* 归属记录失败不回滚上游（避免产生幽灵挂载） */ }
   return { created: true, mountPath: body.mountPath || body.mount_path };
 }
 
-async function updateStorage(body = {}) {
+async function updateStorage(body = {}, user = currentUser()) {
   if (!body.id && body.id !== 0) throw new Error('缺少存储 id');
+  assertMountOwner(body.id, user);
   const payload = { ...storageBody(body), id: Number(body.id) };
+  // 「新增 / 编辑挂载」表单没有停用字段：body 未带 disabled 时沿用上游现状，
+  // 否则只是改个备注 / 驱动配置，也会把已停用的挂载悄悄启用。
+  if (body.disabled === undefined) {
+    const current = await currentStorageState(body.id);
+    if (current) payload.disabled = Boolean(current.disabled);
+  }
   await openlistApi.saveStorage(payload, true);
+  // 挂载路径可能被改名，归属表里的路径要跟着更新，否则根目录过滤会按旧段计算。
+  update((s) => {
+    const rec = s.openlistMountOwners && s.openlistMountOwners[String(body.id)];
+    if (rec) rec.mountPath = payload.mount_path;
+  });
   return { updated: true, id: payload.id };
 }
 
-async function deleteStorage(id) {
+async function deleteStorage(id, user = currentUser()) {
+  assertMountOwner(id, user);
   await openlistApi.storageAction('delete', Number(id));
+  update((s) => { if (s.openlistMountOwners) delete s.openlistMountOwners[String(id)]; });
   return { removed: Number(id) };
 }
 
-async function setStorageEnabled(id, enabled) {
-  await openlistApi.storageAction(enabled ? 'enable' : 'disable', Number(id));
-  return { id: Number(id), disabled: !enabled };
+async function setStorageEnabled(id, enabled, user = currentUser()) {
+  assertMountOwner(id, user);
+  const target = Boolean(enabled);
+  // OpenList 对重复 enable / disable 会返回 code=500「this storage have enabled」。
+  // 先比对当前状态做成幂等操作，别把用户一次正常的重复点击报成 502 上游故障。
+  const current = await currentStorageState(id);
+  if (current && Boolean(current.disabled) === !target) {
+    return { id: Number(id), disabled: !target, unchanged: true };
+  }
+  try {
+    await openlistApi.storageAction(target ? 'enable' : 'disable', Number(id));
+  } catch (err) {
+    // 查询与写入之间状态被别处改动时，上游仍可能回「已经是该状态」，同样按幂等成功处理。
+    if (/have (enabled|disabled)|already (enabled|disabled)/i.test(String((err && err.message) || err))) {
+      return { id: Number(id), disabled: !target, unchanged: true };
+    }
+    throw err;
+  }
+  return { id: Number(id), disabled: !target };
 }
 
 async function reloadStorages() {
@@ -416,11 +554,12 @@ async function listFiles(p = '/', options = {}) {
   const dir = safeDir(p);
   const raw = await openlistApi.list(dir, options);
   const d = unwrap(raw) || {};
-  const content = Array.isArray(d.content) ? d.content : (Array.isArray(d) ? d : []);
+  const rawContent = Array.isArray(d.content) ? d.content : (Array.isArray(d) ? d : []);
+  const content = filterRootContent(rawContent.map(normalizeFile), dir, currentUser());
   return {
     path: dir,
     parent: dir === '/' ? '/' : `/${dir.split('/').filter(Boolean).slice(0, -1).join('/')}`,
-    content: content.map(normalizeFile),
+    content,
     total: Number(d.total || content.length),
     provider: d.provider || 'OpenList',
     write: d.write !== false,
@@ -492,6 +631,7 @@ module.exports = {
   status, settings,
   listStorages, listDrivers, driverInfo, createStorage, updateStorage,
   deleteStorage, setStorageEnabled, reloadStorages,
+  visibleStorages, filterRootContent, assertMountOwner, mountSegmentsFor,
   listFiles, mkdir, rename, remove, move, copy, upload, link, download,
   joinPath, safeDir, safeName, hintFor,
 };

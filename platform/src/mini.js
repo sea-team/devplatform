@@ -44,7 +44,10 @@ function matchPattern(pattern, pathname) {
   const found = pathname.match(new RegExp(`^${source}$`));
   if (!found) return null;
   const params = {};
-  keys.forEach((key, index) => { params[key] = decodeURIComponent(found[index + 1]); });
+  // 注意：dispatch 已经对整个 pathname 做过一次 decodeURIComponent，这里不能再解一次。
+  // 二次解码会 (1) 让 %25xx 被解释成路径分隔符/字面量，绕过路由与权限判定；
+  // (2) 遇到合法的「%」字面量时抛 URIError，而本函数在 try 之外，会直接打断进程。
+  keys.forEach((key, index) => { params[key] = found[index + 1]; });
   return params;
 }
 
@@ -132,7 +135,13 @@ function createApp({ adminToken = '', staticDir = '', errorStatus = null, authGa
     let parsed;
     try { parsed = new URL(req.url, `http://${req.headers.host || 'localhost'}`); }
     catch { return sendJSON(res, 400, { ok: false, error: '非法请求路径', status: 400 }); }
-    const pathname = decodeURIComponent(parsed.pathname);
+    let pathname;
+    try { pathname = decodeURIComponent(parsed.pathname); }
+    catch {
+      // 畸形 % 编码（如 /api/%ZZ）曾是未捕获的 URIError，会直接终止整个 Node 进程：
+      // 单个畸形 URL 就能让平台对所有用户不可用。必须在这里收敛成客户端错误。
+      return sendJSON(res, 400, { ok: false, error: '非法请求路径编码', status: 400 });
+    }
 
     if (!pathname.startsWith('/api/')) return serveStatic(staticRoot, pathname, res);
 
@@ -176,7 +185,9 @@ function createApp({ adminToken = '', staticDir = '', errorStatus = null, authGa
                 || (route.options.raw ? 100 * 1024 * 1024 : 2 * 1024 * 1024),
             })
           : {};
-        if (authGate && req.identity && !authGate.isPublic(pathname) && !authGate.authorize(req, pathname, route)) {
+        // 无论有没有解析出身份都要过 authorize：optional 灰度模式下未登录请求的
+        // req.identity 为 null，旧写法会整段跳过守卫，让匿名写请求直达配置/部署接口。
+        if (authGate && !authGate.isPublic(pathname) && !authGate.authorize(req, pathname, route)) {
           return sendJSON(res, req.user ? 403 : 401, {
             ok: false,
             error: req.user ? '无权操作：该资源不属于你，或你的协作权限不足（全局配置仅管理员可改）'

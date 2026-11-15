@@ -251,8 +251,11 @@ const openlistApi = {
   saveStorage: (body, isUpdate) => openlist(isUpdate ? '/api/admin/storage/update' : '/api/admin/storage/create', {
     method: 'POST', body, timeout: 30000,
   }),
-  storageAction: (action, id) => openlist(`/api/admin/storage/${action}`, {
-    method: 'POST', body: action === 'delete' ? { id } : { id }, timeout: 30000,
+  // OpenList 的 storage/delete、enable、disable 从 query string 读 id（strconv.Atoi），
+  // 只放 JSON body 会被解析成空串 → code=400 "parsing \"\": invalid syntax"，
+  // 挂载删不掉也启停不了。query 与 body 同时带，兼容不同上游版本。
+  storageAction: (action, id) => openlist(`/api/admin/storage/${action}?id=${encodeURIComponent(id)}`, {
+    method: 'POST', body: { id }, timeout: 30000,
   }),
   upload: openlistUpload,
   webdavUrl: () => `${config.openlistUrl.replace(/^http:\/\/openlist/, 'http://localhost')}/dav/`,

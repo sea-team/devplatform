@@ -2805,4 +2805,48 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 - IDE 健康探测改用根路径（VS Code `serve-web` 无 `/healthz`）；`hostInfo.js` 本机直跑且无 SSH 节点时填充本机 CPU / 内存 / 磁盘 / Git 信息（§37.2）。
 - PowerShell 安装日志 UTF-8 输出；480px 窄屏横向溢出与状态文案修正。
 - 回归：`npm run check`、前端自检全过，`smoke-auth` 42/42，`api-sweep --full` 178 项 0 个 500（4 个 502 为 OpenList / Docker 上游预期），浏览器管理员 / 普通用户 / 窄屏三视角无 JS 异常；`build.mjs --bundle-only` 同步发行目录。
-- 版本号升至 `0.4.5`，静态资源缓存戳升至 `?v=20261115a`；本轮打 tag `v0.4.5`，由 GitHub Actions 构建 Windows 发行包并发布 Release。
+- 版本号升至 `0.4.5`，静态资源缓存戳升至 `?v=20261115a`；发布说明与本地提交 `ec47b81` 已备好，但按使用者决定**尚未推送、未打 tag、未创建 GitHub Release**。待网络与凭据就绪后执行 `git push origin main`，再打 `v0.4.5` tag 即由 GitHub Actions 自动构建 Windows 发行包并发布。
+
+### 44.4 深度审计修复（本地已改，尚未提交 / 发布）
+
+在「提示让点按钮却找不到」之后又做了一轮全量审计，以下均为实测可复现的真实缺陷：
+
+- **进程级 DoS**：`mini.js` 的 `decodeURIComponent(parsed.pathname)` 位于 try 之外，一个 `GET /api/%ZZ` 就抛未捕获 `URIError` 并终止整个 Node 进程。现收敛为 400；同时去掉 `matchPattern` 的二次解码，避免 `%25xx` 被解释成路径分隔符、参数含 `%` 字面量时再次抛异常。
+- **鉴权短路**：`optional` 灰度模式下未登录请求没有 identity，分发层整段跳过 `authorize()`，匿名写请求可直达部署 / 配置接口。现守卫无条件执行，且 `optional` 仅放行匿名只读。
+- **站点级配置越权（按对象归属修正）**：`POST /api/openlist/connection/reset`、`PUT /api/openlist/connection`、`POST /api/ide/password` 这类**改全站状态 / 返回明文凭据**的动作必须受控，但**不能按路径一刀切**成「管理员专用」——OpenList 连接是可在「资源协作」页授权的归属资源，普通用户要能登记并启用自己的 OpenList。最终实现：`/connection`、`/connection/reset` 按目标连接对象的 `write` 权限判定（`.env` 默认连接无归属，仅管理员可动）；`/connections` 的新建 / 编辑 / 删除 / 设为当前交给 `collectIds` + `findResourceById` 按 owner / 协作者判定；`/openlist/storages/*` 是上游挂载、无平台归属对象，恢复对所有登录用户开放；`/ide/password` 仅 `reveal:true` 限管理员（前端按角色隐藏「显示 / 复制密码」），查询是否已配置不受限。
+- **自动部署越权**：构建 payload 里的 `body.deploy.serverId` 不参与权限收集，可借「构建成功后自动部署」在他人 SSH 主机上执行命令。`collectIds()` 现递归收集该字段。
+- **登记即设为当前**：`openlist.addConnection()` 的产品语义就是「连接已登记并设为当前」（前端提交后的提示文案如此），此前被误改成不自动激活，导致普通用户添加自己的 OpenList 后根本不生效。现已恢复；谁能把某条连接设为当前由对象归属兜底，无关用户既看不到别人的连接也无法切换。
+
+**OpenList 权限矩阵（管理员 / owner / read 协作者 / write 协作者 / 无关用户五类身份实测）**：owner 可看 / 编辑 / 设为当前 / 恢复默认；`read` 协作者只能看、不能写；`write` 协作者可编辑、设为当前、恢复默认；无关用户在列表里看不到该连接，编辑与切换均 403；管理员全权。五类身份都能新增自己的连接、新增存储挂载（业务参数错误为 400，不再是权限 403）。`POST /api/openlist/connections/:id/activate` 不再要求管理员角色，只要求对该连接对象有 `write` 权限。
+- **SSH 终端会话劫持**：终端只按 sid 索引，活跃终端列表把 sid 返回给任意登录用户，可订阅他人输出 / 注入命令。现会话带 `ownerId`，stream / input / resize / close / 列表逐入口校验；升级前无归属的历史会话不再开放。
+- **路径穿越**：兼容接口 `/api/storage/mkdir|remove|upload` 的 `joinPath` 只做字符串拼接，可把 `../` 传给 OpenList。现与 `openlist.js` 的 `safeDir/safeName` 同口径校验。
+- **安装后凭据缓存**：一键安装同步 `.env` 新 token 后未调用 `openlistApi.resetToken()`，存储接口会继续用旧凭据 401。
+- **前端**：非 JSON / 200 响应不再被 `authFetch` 当成登录成功；401 不再反复重置 2FA 表单（新增 `invalidateSession` 并停掉后台轮询）；登出清 `dp_token` / `dp_tabs`（此前刷新后令牌通道会让登出失效、标签跨账号残留）；`/api/auth/status` 不可达时不再静默按「免登录」启动工作台。
+
+验证：`npm run check`、前端自检、`smoke-auth` 42/42、`api-audit` 309 请求 0 个 500、全接口巡检无 500、浏览器管理员 / 普通用户 / 480px 三视角无 JS 异常；五类身份权限矩阵（见上）全部符合预期；`build.mjs --bundle-only` 已同步发行目录。
+
+**已知边界（本轮未改）**：`/api/deploy` 的 `command` 是产品设计上的自定义远端命令，现由服务器归属鉴权约束；`/api/docker/*` 与目标主机容器操作按项目既有边界（授权服务器后可见该主机资源）保持开放，本机 `target=local` 的授权粒度、公开 `/api/health` 返回工作区绝对路径、终端空闲回收限流、表单重复提交防护，留作后续加固项。
+
+### 44.5 OpenList 挂载链路（保持全局单例，每个账号都能添加挂载）
+
+- **架构确认**：`openlistActiveId` 保持**全站单例**，不改成按用户隔离。连接是平台可归属资源（owner / `read` / `write` 协作者），挂载是上游对象、**全局共享**：任何登录账号都能新增、查看、编辑、启停、删除挂载，三方看到的列表一致。这是刻意保留的产品语义。
+- **修复①驱动清单为空**：OpenList `/api/admin/driver/list` 返回以驱动名为 key 的**对象字典**（本机 93 项：`{"Local": {...}, "115 Cloud": {...}}`），而 `listDrivers()` 的 `asList()` 只认数组 → `items` 恒为空、诊断提示「响应结构未识别」→ 前端「新增 / 编辑挂载」的驱动下拉无选项，任何账号（含管理员）都选不了驱动、加不了挂载。现同时兼容字典与数组两种形态。
+- **修复②挂载删不掉 / 启停无效**：`/api/admin/storage/delete`、`enable`、`disable` 要求 id 在 **query string**（`?id=`），平台原先只放在 JSON body，上游报 `code=400 strconv.Atoi: parsing "": invalid syntax`。现 query 与 body 同时带，兼容不同上游版本。
+- **端到端实测**（两个普通账号 + 管理员，真实写入本机 OpenList）：驱动清单 93 项含 `Local`；两账号各自创建挂载 200；三方列表都能看到两条挂载（全局共享）；各自编辑 200、启停 200、删除 200；测试挂载已全部清空。
+- **权限口径**：`/api/openlist/storages/*` 是上游挂载、没有平台归属对象，对登录用户开放（业务参数错误为 400，不是权限 403）。`read` 协作者仍不能编辑 / 切换**连接对象**，但挂载本身不按协作者隔离；若后续要按账号隔离挂载，需要在平台侧给挂载记录补 `ownerId` 并按请求用户过滤，属于另一层改动。
+
+> **口径更新（见 44.6）**：44.5 里「挂载全局共享、三方列表一致」的约定随后按使用者要求调整为「共用同一个 OpenList 服务，但每个账号只看到 / 只管自己添加的挂载」。驱动字典与 query id 两项修复继续有效，权限口径以 44.6 为准。
+
+### 44.6 挂载按账号隔离（全局单例服务不变）
+
+- **架构**：`openlistActiveId` 仍是全站单例，所有账号通过同一个 OpenList 服务增删挂载。平台侧新增 `state.openlistMountOwners`，以**上游挂载 id** 为 key 记录 `ownerId / mountPath / createdAt`。`createStorage()` 创建后按 `mountPath` 回查上游 id 落归属；`updateStorage()` 改名时同步更新归属表；`deleteStorage()` 删除时清理记录。升级前没有归属记录的历史挂载**仅管理员可见可管**。
+- **列表与写操作**：`listStorages(user)` → `visibleStorages()` 按 ownerId 裁剪；管理员看全部，且每项带 `ownerName`，前端挂载卡片显示「由 XXX 添加」。`updateStorage / deleteStorage / setStorageEnabled` 先 `assertMountOwner()`，越权一律 403（含自己改自己 200、管理员改任意 200）。
+- **文件访问**：`permissions.guard()` 对 `/api/openlist/files/*` 与 `/api/storage/*` 校验 `query.path / body.path / srcDir / dstDir` 的第一段是否属于自己的挂载段，**GET 读文件内容、直链、下载同样受限**；根目录 `/` 放行列表，但内容由 `filterRootContent()` 只留自己的挂载目录。`move` / `copy` 的源与目标目录都校验，跨挂载一律 403。
+- **根目录写加固**：只传 `path:'/'` 再配一个别人挂载段名，就能用 `mkdir / remove / upload` 绕过目录级校验。写操作现额外把 `name / names / query.name` 拼成目标段再判归属；根目录且没有具体名称的请求直接拒绝。兼容接口 `/api/storage/mounts` 改走同一套归一化 + 归属过滤，并保留 `mount_path` 字段给旧客户端。
+- **顺带修掉三个真实缺陷**：
+  - **启停非幂等**：OpenList 对已启用的挂载再执行 `enable` 返回 `code=500 this storage have enabled`，平台把一次正常的重复点击报成 502 上游故障。现先回查当前状态，状态一致直接返回 `unchanged: true`，并兼容「查询与写入之间状态被别处改动」的上游竞态错误。
+  - **编辑误启用**：新增 / 编辑挂载表单没有停用字段，`storageBody()` 默认 `disabled:false`，改个备注就会把已停用的挂载悄悄启用。现 body 未带 `disabled` 时沿用上游现状。
+  - **兼容挂载列表漏过滤**：`/api/storage/mounts` 原先用 `Array.isArray(raw)`，上游返回 `{content:[]}` 时列表为空且未归一化。现统一走 `listStorages(req.user)`。
+- **多账号验证矩阵**（A / B 两个普通账号 + 管理员，真实写入本机 OpenList）：A 列表只见 A、B 只见 B、管理员见两条；A 编辑 / 启停 / 删除 B 的挂载全部 403，自己与管理员的操作 200；A 直接读、建目录、重命名、直链、下载、写内容、move / copy 到 B 挂载以及从根目录写 B 挂载段名全部 403；根目录列表 A 只含 A、B 只含 B、管理员两条都在；兼容 `/api/storage*` 同样的 403 / 裁剪结果；重复启停 200（第二次 `unchanged:true`）、停用状态下编辑仍保持停用；清理后挂载与归属表均清空。
+- **回归**：`npm run check`、前端自检（新增两条隔离 / 幂等静态护栏）、`smoke-auth` 42/42、`api-audit` 309 请求 0 个 500、`api-sweep --full` 176 项 0 个 500（4 个 502 为 Docker 未安装与 OpenList 空挂载的预期上游错误）；`build.mjs --bundle-only` 已同步发行目录。
+- **状态**：本轮改动仍在本地工作区未提交；按使用者此前决定，GitHub 推送 / tag / Release 均未执行。

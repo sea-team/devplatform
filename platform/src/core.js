@@ -155,6 +155,10 @@ function defaultState() {
     // openlistActiveId 指向当前生效项；切换时由 openlist.applyConfig() 写回运行时 config。
     openlistConnections: [],
     openlistActiveId: '',
+    // 挂载归属（账号隔离）：key 为上游挂载 id，value 记录创建者与挂载路径。
+    // OpenList 服务本身仍是全站单例，挂载列表 / 写操作 / 文件访问由平台侧按 ownerId
+    // 过滤；管理员看全部，升级前没有归属记录的历史挂载仅管理员可见可管。
+    openlistMountOwners: {},
     // v0.3.4 环境适配中心：档案、策略微调、自动处置结果与历史。
     // 默认全部留空 = 完全自动推导，换环境时不会被旧配置锁死。
     environment: {
@@ -190,6 +194,7 @@ function loadState() {
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
       aiSessions: Array.isArray(parsed.aiSessions) ? parsed.aiSessions : [],
       repoMeta: (parsed.repoMeta && typeof parsed.repoMeta === 'object' && !Array.isArray(parsed.repoMeta)) ? parsed.repoMeta : {},
+      openlistMountOwners: (parsed.openlistMountOwners && typeof parsed.openlistMountOwners === 'object' && !Array.isArray(parsed.openlistMountOwners)) ? parsed.openlistMountOwners : {},
       hiddenRepos: Array.isArray(parsed.hiddenRepos) ? parsed.hiddenRepos : [],
       // 嵌套对象要逐层补齐，避免旧 state.json 缺字段导致策略读取为 undefined。
       environment: { ...base.environment, ...(parsed.environment || {}) },

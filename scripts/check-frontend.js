@@ -23,6 +23,9 @@ const coreSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src',
 const engineSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'engine.js'), 'utf8');
 const sessionsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'aiSessions.js'), 'utf8');
 const miniSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'mini.js'), 'utf8');
+const remoteSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'remoteOps.js'), 'utf8');
+const openlistSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'openlist.js'), 'utf8');
+const integrationsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'integrations.js'), 'utf8');
 const errors = [];
 const note = (ok, label, extra = '') => {
   console.log(`${ok ? '✔' : '✖'} ${label}${extra ? ` · ${extra}` : ''}`);
@@ -180,6 +183,40 @@ note(html.includes('id="login-view"') && html.includes('id="login-form"')
   && app.includes("localStorage.getItem('dp_token')") && app.includes('Bearer ${token}')
   && app.includes("authFetch('/auth/login'") && css.includes('.login-view[hidden]'),
 '未登录遮罩、首次改密、登录状态检查与工作台延迟启动链路齐全');
+
+// 深度审计回归护栏：以下每一条都对应一个实测可复现的真实缺陷。
+note(miniSrc.includes('非法请求路径编码') && miniSrc.includes('try { pathname = decodeURIComponent')
+  && !miniSrc.includes('params[key] = decodeURIComponent')
+  && miniSrc.includes('if (authGate && !authGate.isPublic(pathname)'),
+'畸形 URL 编码收敛为 400、路由参数不再二次解码、未登录写请求不再跳过鉴权');
+note(authSrc.includes("['GET', 'HEAD'].includes") && permSrc.includes('越权收口')
+  && permSrc.includes('body.deploy.serverId') && permSrc.includes('findResourceById(targetId)')
+  && permSrc.includes('body.reveal !== true')
+  && permSrc.includes('普通用户能登记并启用自己的 OpenList'),
+'optional 模式仅匿名只读、嵌套部署目标参与鉴权、OpenList 权限下沉到对象归属');
+note(openlistSrc.includes('s.openlistActiveId = item.id') && app.includes('idePlainAllowed')
+  && app.includes('ideCredRevealBtn'),
+'普通用户登记 OpenList 后立即设为当前、IDE 明文入口按角色隐藏');
+note(openlistSrc.includes('Object.entries(d)') && integrationsSrc.includes('?id=${encodeURIComponent(id)}'),
+'OpenList 驱动字典能转成下拉选项、挂载删除/启停把 id 放进 query（上游 strconv.Atoi 要求）');
+note(coreSrc.includes('openlistMountOwners: {}') && openlistSrc.includes('function recordMountOwner')
+  && openlistSrc.includes('function assertMountOwner') && openlistSrc.includes('function visibleStorages')
+  && openlistSrc.includes('function filterRootContent')
+  && serverSrc.includes('openlist.listStorages(req.user)')
+  && permSrc.includes('function fileWriteScopeAllows') && permSrc.includes('mountFileScopeAllows')
+  && app.includes('m.ownerName'),
+'OpenList 服务保持全局单例，挂载按账号隔离（归属表 / 列表 / 写操作 / 根目录文件 / 管理员标注创建者）');
+note(openlistSrc.includes('currentStorageState') && openlistSrc.includes('unchanged: true')
+  && openlistSrc.includes('payload.disabled = Boolean(current.disabled)')
+  && openlistSrc.includes('have (enabled|disabled)')
+  && serverSrc.includes('items.map((x) => ({ ...x, mount_path: x.mountPath }))'),
+'挂载启停幂等不再误报 502、编辑保留停用状态、兼容 /api/storage/mounts 同步归一化过滤');
+note(remoteSrc.includes('canUseTerminal') && serverSrc.includes('remoteOps.activeTerminals(req.user)'),
+'SSH 终端会话按 ownerId 隔离（stream / input / resize / close / 列表逐入口校验）');
+note(app.includes('function invalidateSession') && app.includes('function stopBackgroundPolling')
+  && app.includes('json.ok !== true') && app.includes("localStorage.removeItem('dp_token')")
+  && app.includes('if (!reachable)'),
+'会话失效不打断 2FA、登出清理令牌与标签、非 JSON 响应不再误判成功');
 note(html.includes('id="view-users"') && html.includes('id="collab-modal"')
   && html.includes('id="collab-inline-servers"') && html.includes('id="collab-inline-aiProviders"')
   && app.includes('users: loadUsers') && app.includes('function renderCollabInline')

@@ -317,7 +317,12 @@ function identity(req, parsed) {
 
 function authorize(req, pathname) {
   const user = req.user;
-  if (!user) return mode() === 'optional';       // optional：未登录放行（灰度用）
+  // optional 是「未登录也能浏览」的灰度模式，只允许匿名只读。旧实现无条件返回
+  // true，配合分发层的守卫短路，等于把 /api/deploy、配置写入等写接口匿名开放。
+  if (!user) {
+    return mode() === 'optional'
+      && ['GET', 'HEAD'].includes(String((req && req.method) || 'GET').toUpperCase());
+  }
   if (user.via === 'cli') return CLI_PATHS.includes(pathname);
   if (user.via === 'off') return true;
   // 首次登录的初始密码必须改掉，后端也强制：除登录状态 / 改密 / 登出外一律 403。

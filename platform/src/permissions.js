@@ -46,6 +46,11 @@ const GLOBAL_WRITE_PATTERNS = [
   /^\/api\/ide\/config/,
   /^\/api\/extensions\/settings/,
   /^\/api\/extensions\/dbgate/,
+  // 深度审计修复 · 越权收口：只收「没有归属对象、改的是全站状态」的接口。
+  // OpenList 连接 / 存储挂载属于可归属资源或上游对象，权限必须落到具体对象上
+  // （见 guard() 里的对象级分支），不能用路径级白名单一刀切，否则普通用户
+  // 无法登记并启用自己的 OpenList、write 协作者也无法编辑被授权的连接。
+  /^\/api\/services\/setup(?:\/|$)/,                 // 一键安装（后端已 requireAdmin，双保险）
 ];
 
 const isAdmin = (user) => Boolean(user && user.role === 'admin');
@@ -113,8 +118,57 @@ function collectIds(req, pathname) {
     'buildId', 'deployId', 'templateId', 'providerId', 'backupId']) {
     add(query[key]); add(body[key]);
   }
+  // 构建接口把「构建成功后自动部署」的目标服务器藏在 body.deploy.serverId 里，
+  // 顶层扫描不到。不收集它，普通用户就能借自动部署在他人的 SSH 主机上执行任意命令。
+  if (body.deploy && typeof body.deploy === 'object') add(body.deploy.serverId);
   for (const segment of String(pathname || '').split('/')) add(segment);
   return ids;
+}
+
+/**
+ * 挂载按账号隔离后的文件范围校验：挂载列表被裁剪了，但文件接口若仍能直接输入
+ * 别人的挂载路径，隔离就等于没做。根路径 '/' 放行（列表内容由 listFiles 按归属
+ * 过滤），其余路径要求第一段是该用户自己挂载的目录段；管理员不受限。
+ */
+function mountFileScopeAllows(p, user) {
+  if (isAdmin(user) || ['cli', 'off', 'token'].includes(user && user.via)) return true;
+  const dir = String(p || '').trim();
+  if (dir === '/') return true;
+  if (!dir.startsWith('/')) return false;
+  const seg = dir.replace(/^\/+/, '').split('/')[0];
+  if (!seg) return false;
+  const owners = state().openlistMountOwners;
+  const table = owners && typeof owners === 'object' && !Array.isArray(owners) ? owners : {};
+  const uidValue = user && user.id;
+  return Object.values(table).some((rec) => rec && rec.ownerId && uidValue
+    && rec.ownerId === uidValue
+    && String(rec.mountPath || '').replace(/^\/+/, '').split('/')[0] === seg);
+}
+
+/**
+ * 写操作的目标名称校验：目录写成 '/' 对「读根目录列表」是合法的，但 mkdir / remove /
+ * upload 若也只传 '/'，普通账号就能用 names 指向别人的挂载目录名，绕过挂载隔离。
+ * 因此凡目录落在根，必须同时给出具体的 name / names / query.name，且拼出来的
+ * 第一段必须属于该用户自己的挂载段。
+ */
+function fileWriteScopeAllows(req, user) {
+  const body = req.body && !Buffer.isBuffer(req.body) && typeof req.body === 'object' ? req.body : {};
+  const query = req.query || {};
+  const dirs = [query.path, body.path, body.srcDir, body.dstDir]
+    .filter((v) => typeof v === 'string' && v.length);
+  if (!dirs.length) return true; // 如 /api/storage/mounts：不带路径参数
+  if (dirs.every((d) => String(d).trim() !== '/' && mountFileScopeAllows(d, user))) return true;
+  const names = [];
+  const add = (v) => {
+    if (Array.isArray(v)) v.forEach(add);
+    else if (typeof v === 'string' && v.trim()) names.push(v.trim());
+  };
+  add(body.name); add(body.names); add(query.name);
+  if (!names.length) return false;
+  return names.every((n) => {
+    const seg = String(n).replace(/^\/+/, '').split('/')[0];
+    return seg && seg !== '.' && seg !== '..' && mountFileScopeAllows(`/${seg}`, user);
+  });
 }
 
 /**
@@ -146,7 +200,37 @@ function guard(req, pathname) {
     const found = findResourceById(targetId);
     return found ? can(user, found.item, 'write') : true;
   }
+  // OpenList 连接是平台可归属资源（可在「资源协作」里授予 read / write）。
+  // 新建连接、按 id 编辑 / 删除 / 设为当前，都交给下面的 collectIds +
+  // findResourceById 按 owner / 协作者判定：普通用户能登记并启用自己的 OpenList，
+  // write 协作者能编辑 / 启用被授权的连接，read 协作者只读，无关用户被拒。
+  // 只有旧接口 PUT /connection 与 /connection/reset 直接改全局活动连接，
+  // 这里按目标连接对象的 write 权限兜底；.env 默认连接无归属，仅管理员可动。
+  if (action !== 'read' && /^\/api\/openlist\/connection(?:\/reset)?$/.test(String(pathname || ''))) {
+    const body = req.body && !Buffer.isBuffer(req.body) && typeof req.body === 'object' ? req.body : {};
+    const targetId = String(body.id || state().openlistActiveId || '');
+    const found = findResourceById(targetId);
+    return found ? can(user, found.item, 'write') : false;
+  }
+  // IDE 明文密码：查询「是否已配置」所有登录用户可用，只有 reveal 明文限管理员，
+  // 避免把 CODE_SERVER_PASSWORD 泄露给任意账号。
+  if (action !== 'read' && /^\/api\/ide\/password$/.test(String(pathname || ''))) {
+    const body = req.body && !Buffer.isBuffer(req.body) && typeof req.body === 'object' ? req.body : {};
+    return body.reveal !== true;
+  }
   if (action !== 'read' && isGlobalConfigPath(pathname)) return false;
+  // OpenList 文件 / 兼容存储接口：路径必须落在该用户自己添加的挂载内。
+  // GET 也要校验，否则「读文件内容」能绕过挂载列表隔离；写操作额外校验目标名称，
+  // 否则从根目录 '/' 提交别人的挂载目录名就能越权删改。
+  if (/^\/api\/(?:openlist\/files|storage)(?:\/|$)/.test(String(pathname || ''))) {
+    if (action === 'read') {
+      const query = req.query || {};
+      const body = req.body && !Buffer.isBuffer(req.body) && typeof req.body === 'object' ? req.body : {};
+      const paths = [query.path, body.path, body.srcDir, body.dstDir]
+        .filter((v) => typeof v === 'string' && v.length);
+      if (paths.length && !paths.every((p) => mountFileScopeAllows(p, user))) return false;
+    } else if (!fileWriteScopeAllows(req, user)) return false;
+  }
   for (const id of collectIds(req, pathname)) {
     const found = findResourceById(id);
     if (found && !can(user, found.item, action)) return false;

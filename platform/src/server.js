@@ -631,13 +631,26 @@ app.post('/api/ide/open', wrap(async (req, res) => {
 
 /* ------------------------------ 存储文件管理 ----------------------------- */
 
-const joinPath = (parent, name) => `${String(parent || '/').replace(/\/+$/, '')}/${String(name).replace(/^\/+/, '')}`;
+// 与 openlist.js 的 safeDir / safeName 保持同一口径：旧版这里只做了字符串拼接，
+// 传入 ../ 或绝对路径名就能越出目标目录。/api/storage/* 是仍被外部客户端使用的兼容接口。
+const storageDir = (p) => {
+  const value = String(p || '/').trim();
+  if (!value.startsWith('/')) throw badRequest('目录必须以 / 开头');
+  if (value.includes('..') || /[\0\r\n]/.test(value)) throw badRequest('路径不合法');
+  return `/${value.split('/').filter(Boolean).join('/')}` || '/';
+};
+const joinPath = (parent, name) => {
+  const clean = String(name || '').trim().replace(/^\/+/, '');
+  if (!clean || clean === '.' || clean === '..' || /[/\\\0\r\n]/.test(clean)) throw badRequest('文件名不合法');
+  return `${storageDir(parent).replace(/\/$/, '')}/${clean}` || '/';
+};
 
 app.get('/api/storage', tolerant(async (req, res) => {
   const p = String(req.query.path || '/');
   const raw = await openlistApi.list(p);
   const d = raw.data || raw;
-  ok(res, { path: p, content: d.content || [], total: d.total || 0, provider: d.provider, write: d.write });
+  ok(res, { path: p, content: openlist.filterRootContent(d.content || [], p, req.user),
+    total: d.total || 0, provider: d.provider, write: d.write });
 }, (req) => ({ path: String(req.query.path || '/'), content: [], total: 0, provider: 'OpenList', write: false })));
 
 app.post('/api/storage/mkdir', wrap(async (req, res) => {
@@ -649,8 +662,15 @@ app.post('/api/storage/mkdir', wrap(async (req, res) => {
 
 app.post('/api/storage/remove', wrap(async (req, res) => {
   requireBody(req.body, ['path', 'names']);
-  const names = Array.isArray(req.body.names) ? req.body.names : [req.body.names];
-  await openlistApi.remove(req.body.path, names);
+  const rawNames = Array.isArray(req.body.names) ? req.body.names : [req.body.names];
+  const dir = storageDir(req.body.path);
+  const names = rawNames.map((n) => {
+    const clean = String(n || '').trim();
+    if (!clean || clean === '.' || clean === '..' || /[/\\\0\r\n]/.test(clean)) throw badRequest('文件名不合法');
+    return clean;
+  });
+  if (!names.length) throw badRequest('请指定要删除的文件名');
+  await openlistApi.remove(dir, names);
   ok(res, { removed: names });
 }));
 
@@ -665,9 +685,13 @@ app.put('/api/storage/upload', wrap(async (req, res) => {
 }), { raw: true });
 
 app.get('/api/storage/mounts', tolerant(async (req, res) => {
-  const raw = await openlistApi.mounts();
-  const data = raw.data || raw;
-  ok(res, { items: Array.isArray(data) ? data : [], webdav: openlistApi.webdavUrl() });
+  // 与 /api/openlist/storages 走同一套归一化 + 归属过滤，避免上游返回
+  // {content:[]} / 字典结构时兼容接口漏过滤；保留 mount_path 字段兼容旧客户端。
+  const items = await openlist.listStorages(req.user);
+  ok(res, {
+    items: items.map((x) => ({ ...x, mount_path: x.mountPath })),
+    webdav: openlistApi.webdavUrl(),
+  });
 }, { items: [], webdav: openlistApi.webdavUrl() }));
 
 /* -------------------- OpenList 管理（存储 / 文件页） -------------------- */
@@ -692,14 +716,14 @@ app.get('/api/openlist/settings', tolerant(
 ));
 
 app.get('/api/openlist/storages', tolerant(
-  async (req, res) => ok(res, { items: await openlist.listStorages() }),
+  async (req, res) => ok(res, { items: await openlist.listStorages(req.user) }),
   { items: [] },
 ));
-app.post('/api/openlist/storages', wrap(async (req, res) => ok(res, await openlist.createStorage(req.body || {}))));
+app.post('/api/openlist/storages', wrap(async (req, res) => ok(res, await openlist.createStorage(req.body || {}, req.user))));
 app.post('/api/openlist/storages/reload', wrap(async (req, res) => ok(res, await openlist.reloadStorages())));
-app.put('/api/openlist/storages/:id', wrap(async (req, res) => ok(res, await openlist.updateStorage({ ...(req.body || {}), id: req.params.id }))));
-app.post('/api/openlist/storages/:id/toggle', wrap(async (req, res) => ok(res, await openlist.setStorageEnabled(req.params.id, req.body && req.body.enabled !== false))));
-app.delete('/api/openlist/storages/:id', wrap(async (req, res) => ok(res, await openlist.deleteStorage(req.params.id))));
+app.put('/api/openlist/storages/:id', wrap(async (req, res) => ok(res, await openlist.updateStorage({ ...(req.body || {}), id: req.params.id }, req.user))));
+app.post('/api/openlist/storages/:id/toggle', wrap(async (req, res) => ok(res, await openlist.setStorageEnabled(req.params.id, req.body && req.body.enabled !== false, req.user))));
+app.delete('/api/openlist/storages/:id', wrap(async (req, res) => ok(res, await openlist.deleteStorage(req.params.id, req.user))));
 
 app.get('/api/openlist/drivers', tolerant(
   async (req, res) => ok(res, await openlist.listDrivers()),
@@ -1053,21 +1077,21 @@ app.get('/api/servers/:id/terminal/stream', (req, res) => {
 
 app.post('/api/servers/:id/terminal/input', wrap(async (req, res) => {
   requireBody(req.body, ['sid', 'input']);
-  ok(res, remoteOps.terminalInput(String(req.body.sid), String(req.body.input)));
+  ok(res, remoteOps.terminalInput(String(req.body.sid), String(req.body.input), req.user));
 }));
 
 app.post('/api/servers/:id/terminal/resize', wrap(async (req, res) => {
   requireBody(req.body, ['sid']);
-  ok(res, remoteOps.terminalResize(String(req.body.sid), req.body.cols, req.body.rows));
+  ok(res, remoteOps.terminalResize(String(req.body.sid), req.body.cols, req.body.rows, req.user));
 }));
 
 app.post('/api/servers/:id/terminal/close', wrap(async (req, res) => {
   requireBody(req.body, ['sid']);
-  ok(res, remoteOps.closeTerminal(String(req.body.sid)));
+  ok(res, remoteOps.closeTerminal(String(req.body.sid), req.user));
 }));
 
 app.get('/api/servers/:id/terminals', (req, res) => ok(res, {
-  items: remoteOps.activeTerminals().filter((t) => t.serverId === req.params.id),
+  items: remoteOps.activeTerminals(req.user).filter((t) => t.serverId === req.params.id),
 }));
 
 /* ------------------------------- AI 服务配置 ----------------------------- */

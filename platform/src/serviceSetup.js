@@ -19,6 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const net = require('net');
 const { config, appRoot, resolveEnvFile, HttpError } = require('./core');
+const { openlistApi } = require('./integrations');
 
 const LOG_LIMIT = 500;
 const JOB_TIMEOUT_MS = 30 * 60 * 1000;   // 30 分钟兜底：下载极慢也不至于永久挂起
@@ -148,6 +149,9 @@ function finish(status, extra = {}) {
   child = null;
   if (status === 'success' && job.action === 'setup') {
     job.envApplied = applyServiceEnv();
+    // 安装脚本会重写 OPENLIST_TOKEN，但 API 客户端缓存了旧 token 换出的会话；
+    // 不清缓存会让「已安装成功」后所有存储接口继续用旧凭据报 401。
+    if (job.envApplied.length) openlistApi.resetToken();
     pushLog(`[平台] 已同步 .env 凭据到运行时${job.envApplied.length ? '：' + job.envApplied.join(', ') : '（未发现新增项）'}`);
     pushLog('[平台] 一键安装完成，概览页连通性将在下次刷新时更新。');
   }

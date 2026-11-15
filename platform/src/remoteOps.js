@@ -7,6 +7,7 @@
 const crypto = require('crypto');
 const path = require('path');
 const { sshConnect } = require('./integrations');
+const { currentUser, HttpError } = require('./core');
 const fileTypes = require('./fileTypes');
 
 let Client = null;
@@ -288,14 +289,33 @@ function broadcast(session, chunk) {
   }
 }
 
+/**
+ * 终端会话归属校验（深度审计修复）：sid 只出现在活跃终端列表里，任何登录用户都能读到，
+ * 旧实现仅凭 sid 就能订阅输出 / 注入命令，等于把别人的 SSH 会话开放给全站账号。
+ * 升级前创建的无 ownerId 会话一律不再开放，避免历史会话成为绕过入口。
+ */
+function canUseTerminal(session, user) {
+  if (!session || session.closed || !user) return false;
+  if (user.role === 'admin' || user.via === 'cli' || user.via === 'off') return true;
+  return Boolean(session.ownerId) && session.ownerId === user.id;
+}
+
+function ownedSession(sid, user) {
+  const session = sessions.get(String(sid || ''));
+  if (!canUseTerminal(session, user)) throw new HttpError(403, '无权使用该终端会话');
+  return session;
+}
+
 async function openTerminal(server, options = {}) {
   requireSSH();
   const cols = Math.min(240, Math.max(40, Number(options.cols) || 100));
   const rows = Math.min(80, Math.max(10, Number(options.rows) || 30));
   const sid = crypto.randomBytes(10).toString('hex');
   const conn = new Client();
+  const user = currentUser();
   const session = {
     sid, conn, stream: null, serverId: server.id, serverName: server.name,
+    ownerId: (user && user.id) || '',
     subscribers: new Set(), pending: [], closed: false,
     lastActive: Date.now(), timer: null, cols, rows,
   };
@@ -333,18 +353,31 @@ async function openTerminal(server, options = {}) {
 }
 
 function attachStream(sid, req, res) {
-  const session = sessions.get(sid);
+  const session = sessions.get(String(sid || ''));
+  const writeClosed = () => {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      'connection': 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    res.write('event: closed\ndata: {"reason":"会话不存在或已关闭"}\n\n');
+    res.end();
+  };
+  if (!session || session.closed) return writeClosed();
+  // SSE 是长连接，不能用 wrap() 的错误兜底：直接以 403 结束，
+  // 让 EventSource 明确报错，而不是挂着一条永远不输出的连接。
+  if (!canUseTerminal(session, req && req.user)) {
+    res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(JSON.stringify({ ok: false, error: '无权订阅该终端会话', status: 403 }));
+    return;
+  }
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache, no-transform',
     'connection': 'keep-alive',
     'x-accel-buffering': 'no',
   });
-  if (!session || session.closed) {
-    res.write('event: closed\ndata: {"reason":"会话不存在或已关闭"}\n\n');
-    res.end();
-    return;
-  }
   res.write(': connected\n\n');
   for (const frame of session.pending) res.write(frame);
   session.pending = [];
@@ -362,18 +395,18 @@ function attachStream(sid, req, res) {
   res.on('close', cleanup);
 }
 
-function terminalInput(sid, input) {
-  const session = sessions.get(sid);
-  if (!session || session.closed || !session.stream) throw new Error('终端会话不存在或已关闭');
+function terminalInput(sid, input, user) {
+  const session = ownedSession(sid, user);
+  if (!session.stream) throw new Error('终端会话不存在或已关闭');
   if (typeof input !== 'string' || !input.length) return { sent: 0 };
   session.stream.write(input);
   session.lastActive = Date.now();
   return { sent: input.length };
 }
 
-function terminalResize(sid, cols, rows) {
-  const session = sessions.get(sid);
-  if (!session || session.closed || !session.stream) throw new Error('终端会话不存在或已关闭');
+function terminalResize(sid, cols, rows, user) {
+  const session = ownedSession(sid, user);
+  if (!session.stream) throw new Error('终端会话不存在或已关闭');
   session.cols = Math.min(240, Math.max(40, Number(cols) || 100));
   session.rows = Math.min(80, Math.max(10, Number(rows) || 30));
   if (typeof session.stream.setWindow === 'function') {
@@ -383,14 +416,16 @@ function terminalResize(sid, cols, rows) {
   return { cols: session.cols, rows: session.rows };
 }
 
-function closeTerminal(sid) {
-  const session = sessions.get(sid);
-  if (!session) return { closed: false };
+function closeTerminal(sid, user) {
+  const session = sessions.get(String(sid || ''));
+  if (!canUseTerminal(session, user)) return { closed: false };
   closeSession(session, '用户已断开');
   return { closed: true };
 }
 
-const activeTerminals = () => Array.from(sessions.values()).map((s) => ({
+const activeTerminals = (user) => Array.from(sessions.values())
+  .filter((s) => canUseTerminal(s, user))
+  .map((s) => ({
   sid: s.sid, serverId: s.serverId, serverName: s.serverName,
   cols: s.cols, rows: s.rows, lastActive: new Date(s.lastActive).toISOString(),
 }));

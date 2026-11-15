@@ -226,6 +226,12 @@
   1) core.js 源码直跑启动时自动加载 .env（此前配置重启即丢）；
   2) openlist.applyConfig 不再用面板里的空凭据覆盖 .env 有效凭据（曾致重启后 OpenList 未配置）；
   3) PowerShell 安装日志按 UTF-8 输出，修复中文乱码；前端 480px 窄屏横向溢出与多处状态文案修正。
+  4) 深度审计：畸形 URL 不再打挂进程、optional 模式匿名写被拦、部署嵌套 serverId 参与鉴权、
+     SSH 终端会话按 ownerId 隔离、兼容存储接口补路径穿越校验、一键安装后重置 OpenList 凭据缓存；
+     OpenList 连接权限下沉到对象归属，普通用户可登记并启用自己的 OpenList，协作者按 read / write 生效。
+  5) OpenList 挂载链路：驱动字典解析、启停 / 删除 id 放进 query（上游 strconv.Atoi 要求）；
+     全局单例服务不变，挂载改为按账号隔离（归属表 + 列表 / 写操作 / 文件访问 / 根目录写过滤）；
+     启停做成幂等、编辑保留停用状态、兼容 /api/storage/mounts 同步归一化。详见 README §44.4-§44.6。
 
 下载哪个：
   1) devplatform-windows.zip       推荐 · 全量包：控制台 + 三项集成服务程序。
