@@ -2805,9 +2805,9 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 - IDE 健康探测改用根路径（VS Code `serve-web` 无 `/healthz`）；`hostInfo.js` 本机直跑且无 SSH 节点时填充本机 CPU / 内存 / 磁盘 / Git 信息（§37.2）。
 - PowerShell 安装日志 UTF-8 输出；480px 窄屏横向溢出与状态文案修正。
 - 回归：`npm run check`、前端自检全过，`smoke-auth` 42/42，`api-sweep --full` 178 项 0 个 500（4 个 502 为 OpenList / Docker 上游预期），浏览器管理员 / 普通用户 / 窄屏三视角无 JS 异常；`build.mjs --bundle-only` 同步发行目录。
-- 版本号升至 `0.4.5`，静态资源缓存戳升至 `?v=20261115a`；发布说明与本地提交 `ec47b81` 已备好，但按使用者决定**尚未推送、未打 tag、未创建 GitHub Release**。待网络与凭据就绪后执行 `git push origin main`，再打 `v0.4.5` tag 即由 GitHub Actions 自动构建 Windows 发行包并发布。
+- 版本号升至 `0.4.5`，静态资源缓存戳升至 `?v=20261115a`。该版本后续已推送并打 `v0.4.5` tag 由 GitHub Actions 发布（远程 tag 指向 `3a540d7`）；再之后的凭据 / IDE 修正见 §45，随 `v0.4.6` 发布。
 
-### 44.4 深度审计修复（本地已改，尚未提交 / 发布）
+### 44.4 深度审计修复
 
 在「提示让点按钮却找不到」之后又做了一轮全量审计，以下均为实测可复现的真实缺陷：
 
@@ -2849,7 +2849,7 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
   - **兼容挂载列表漏过滤**：`/api/storage/mounts` 原先用 `Array.isArray(raw)`，上游返回 `{content:[]}` 时列表为空且未归一化。现统一走 `listStorages(req.user)`。
 - **多账号验证矩阵**（A / B 两个普通账号 + 管理员，真实写入本机 OpenList）：A 列表只见 A、B 只见 B、管理员见两条；A 编辑 / 启停 / 删除 B 的挂载全部 403，自己与管理员的操作 200；A 直接读、建目录、重命名、直链、下载、写内容、move / copy 到 B 挂载以及从根目录写 B 挂载段名全部 403；根目录列表 A 只含 A、B 只含 B、管理员两条都在；兼容 `/api/storage*` 同样的 403 / 裁剪结果；重复启停 200（第二次 `unchanged:true`）、停用状态下编辑仍保持停用；清理后挂载与归属表均清空。
 - **回归**：`npm run check`、前端自检（新增两条隔离 / 幂等静态护栏）、`smoke-auth` 42/42、`api-audit` 309 请求 0 个 500、`api-sweep --full` 176 项 0 个 500（4 个 502 为 Docker 未安装与 OpenList 空挂载的预期上游错误）；`build.mjs --bundle-only` 已同步发行目录。
-- **状态**：本轮改动已随 `3a540d7` 提交到本地；按使用者此前决定，GitHub 推送 / tag / Release 均未执行。
+- **状态**：本轮改动随 `3a540d7` 提交并推送，已包含在 `v0.4.5` tag 对应的 Release 中。
 
 ## 45. 集成服务账号 / 口令：自动配置、平台内管理与 IDE 修正
 
@@ -2886,5 +2886,5 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 - 端到端（真实改上游服务再恢复）：Gitea 改密后新密码 Basic Auth 200、旧密码 401；OpenList 改密后新密码登录 `code=200`、旧密码 `code=401`，平台 `/api/openlist/storages` 仍 200、`state.json` 连接对象同步、令牌自动刷新；IDE 切到口令保护后访问根路径 403、token 文件内容与 `.env` 一致，切回免密后 200，三项服务始终 running。
 - 重启 IDE 的坑：serve-web 会 fork `cmd.exe → node.exe` 持有监听 socket，`netstat` 的 OwningProcess 却是已退出的父进程，原重启逻辑误判「非本平台进程」而跳过，留下端口开着却无人应答的僵死状态，新进程又因 10048 端口占用秒退。现按 `--server-data-dir <runtime\ide>` 精确结束整棵进程树、等端口释放后强制启动，并在平台侧用真实 HTTP 响应（含 token 模式的 403）确认重启成功，不再只看脚本 exit code。
 - 回归：`npm run check`（已把 `serviceSetup.js` / `serviceCredentials.js` 纳入语法检查）、前端自检（新增 3 条护栏）、`smoke-auth` 42/42、`api-audit` 312 请求 0 个 500（200=171 / 4xx=135 / 502=6）、`api-sweep --full` 181 项 0 个 500（4 个 502 为 Docker 未安装与空挂载的预期上游错误）、无头浏览器管理员 / 普通用户 / 480px 三视角（凭据面板 3 张卡片、普通用户隐藏、无横向溢出、`runtimeErrors=[]`）；`build.mjs --bundle-only` 已同步发行目录 `bundle.cjs` 与 12 个前端文件。
-- **状态**：本节改动已提交到本地仓库；GitHub 推送 / tag / Release 仍按使用者决定暂停。
+- **状态**：本节改动随 `f041c6b` 推送到 `main`，版本号升至 `0.4.6`，由 `v0.4.6` tag 触发 GitHub Actions 构建发行包并发布 Release。
 
