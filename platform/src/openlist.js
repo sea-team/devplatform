@@ -634,4 +634,6 @@ module.exports = {
   visibleStorages, filterRootContent, assertMountOwner, mountSegmentsFor,
   listFiles, mkdir, rename, remove, move, copy, upload, link, download,
   joinPath, safeDir, safeName, hintFor,
+  // v0.4.7：内嵌后台同源代理需要把当前连接的 token 注入到 OpenList SPA 的 localStorage。
+  getToken: () => openlistApi.token(),
 };

@@ -102,7 +102,7 @@ note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
 // 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
-const CACHE_STAMP = '20261115b';
+const CACHE_STAMP = '20261116a';
 const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
 note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
 
@@ -237,6 +237,22 @@ note(app.includes('function invalidateSession') && app.includes('function stopBa
   && app.includes('json.ok !== true') && app.includes("localStorage.removeItem('dp_token')")
   && app.includes('if (!reachable)'),
 '会话失效不打断 2FA、登出清理令牌与标签、非 JSON 响应不再误判成功');
+// v0.4.7：启动构建目录浏览、文件浏览新建文件 / AI 会话 / 图标操作列、内嵌后台同源代理、驱动清单可操作化。
+note(html.includes('id="build-path-browse"') && html.includes('id="build-repo-path"')
+  && app.includes("openIdeDirPicker('build-repo-path')") && app.includes('dirPickerTarget'),
+'启动构建项目目录支持浏览选择（复用工作区目录选择器，IDE / 构建部署共用）');
+note(html.includes('id="newfile-form"') && html.includes('id="ol-ai-session"')
+  && app.includes('ACT_ICONS') && app.includes('icon-btn')
+  && app.includes("#newfile-form').addEventListener") && app.includes("#ol-ai-session').addEventListener")
+  && app.includes("/openlist/files/content', { method: 'PUT'") && css.includes('.icon-btn'),
+'文件浏览新增新建文件 / AI 会话入口，操作列改图标按钮不再换行错位');
+note(app.includes("'/api/openlist/admin'") && serverSrc.includes("app.get('/api/openlist/admin'")
+  && serverSrc.includes('proxyOpenlistApi') && serverSrc.includes('localStorage.setItem')
+  && openlistSrc.includes('getToken: () => openlistApi.token()') && miniSrc.includes('starCount'),
+'内嵌后台走同源代理自动登录（注入 token、代理 assets / api、通配路由支持）');
+note(app.includes('data-ol-driver-template') && app.includes('function showDriverTemplate')
+  && app.includes("switchView('storage-mounts')") && html.includes('点「模板」可查看'),
+'驱动清单可操作化：选用自动跳挂载页带入模板、模板按钮可复制 / 带入表单');
 note(html.includes('id="view-users"') && html.includes('id="collab-modal"')
   && html.includes('id="collab-inline-servers"') && html.includes('id="collab-inline-aiProviders"')
   && app.includes('users: loadUsers') && app.includes('function renderCollabInline')

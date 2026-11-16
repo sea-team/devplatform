@@ -37,10 +37,14 @@ function decorateResponse(res) {
 
 function matchPattern(pattern, pathname) {
   const keys = [];
-  const source = pattern.replace(/:([A-Za-z0-9_]+)/g, (_, key) => {
+  let source = pattern.replace(/:([A-Za-z0-9_]+)/g, (_, key) => {
     keys.push(key);
     return '([^/]+)';
   });
+  // v0.4.7：支持 * 通配（匹配任意路径含 /），用于 OpenList 后台同源代理的多段路径。
+  // 捕获按出现顺序存到 params[0]、params[1]…，与 Express 风格一致。
+  const starCount = (source.match(/\*/g) || []).length;
+  source = source.replace(/\*/g, '(.*)');
   const found = pathname.match(new RegExp(`^${source}$`));
   if (!found) return null;
   const params = {};
@@ -48,6 +52,7 @@ function matchPattern(pattern, pathname) {
   // 二次解码会 (1) 让 %25xx 被解释成路径分隔符/字面量，绕过路由与权限判定；
   // (2) 遇到合法的「%」字面量时抛 URIError，而本函数在 try 之外，会直接打断进程。
   keys.forEach((key, index) => { params[key] = found[index + 1]; });
+  for (let i = 0; i < starCount; i++) params[i] = found[keys.length + i + 1];
   return params;
 }
 

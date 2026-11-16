@@ -2888,3 +2888,39 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 - 回归：`npm run check`（已把 `serviceSetup.js` / `serviceCredentials.js` 纳入语法检查）、前端自检（新增 3 条护栏）、`smoke-auth` 42/42、`api-audit` 312 请求 0 个 500（200=171 / 4xx=135 / 502=6）、`api-sweep --full` 181 项 0 个 500（4 个 502 为 Docker 未安装与空挂载的预期上游错误）、无头浏览器管理员 / 普通用户 / 480px 三视角（凭据面板 3 张卡片、普通用户隐藏、无横向溢出、`runtimeErrors=[]`）；`build.mjs --bundle-only` 已同步发行目录 `bundle.cjs` 与 12 个前端文件。
 - **状态**：本节改动随 `f041c6b` 推送到 `main`，版本号升至 `0.4.6`，由 `v0.4.6` tag 触发 GitHub Actions 构建发行包并发布 Release。
 
+---
+
+## §46 文件浏览与内嵌后台体验改进（v0.4.7）
+
+### 46.1 启动构建：项目目录浏览选择
+
+「构建部署 → 启动构建」的项目目录（相对工作区）输入框旁新增「浏览…」按钮，点击弹出工作区目录树选择器，选中后自动回填相对路径，不再需要手输。该选择器与「IDE 工作台」的项目目录选择器共用同一套逻辑（`/api/ide/dirs` 列目录），标题随调用方切换为「选择构建项目目录」/「选择项目目录」。
+
+### 46.2 文件浏览：新建文件 / AI 会话 / 图标操作列
+
+- **新建文件**：文件浏览底部新增「新建文件」表单，输入文件名后用 `PUT /api/openlist/files/content`（空内容）创建，等价于上传空 buffer；后缀决定编辑器语法高亮（如 `app.py` / `config.yaml`）。
+- **AI 会话**：工具栏新增「✦ AI 会话」按钮，点击后以当前目录路径为标题新建一段 AI 运维会话（`POST /api/ai/sessions`），并自动切到「AI 运维」对话页选中该会话，便于在当前目录上下文下提问。
+- **图标操作列**：文件行的操作按钮由文字改为图标（编辑 ✎ / 下载 ⬇ / 直链 🔗 / 重命名 / 删除 🗑），`icon-actions` 容器 `nowrap`，`icon-btn` 固定 28×26px，hover 高亮，解决原 270px 宽列里 5 个文字按钮换行错位的问题。
+
+### 46.3 连接管理：内嵌后台自动登录
+
+原来「内嵌后台」iframe 直接加载 OpenList `/@manage`，存在跨域 + 需手动登录两个问题。现改为**平台同源反向代理**：
+
+- `GET /api/openlist/admin`：代理 OpenList `/@manage` 的 SPA 入口 HTML，在 `</head>` 前注入 `<script>`：设置 `window.__dynamic_base__='/api/openlist/admin'`（资源前缀）、`window.OPENLIST_CONFIG.api='/api/openlist/admin'`（API 前缀，SPA 自身会拼 `/api/`）、`localStorage.setItem('token', <管理员token>)`（SPA 自动登录）。
+- `GET /api/openlist/admin/assets/*`：透传 OpenList 静态资源（JS / CSS）。
+- `GET/POST/PUT/DELETE /api/openlist/admin/api/*`：透传 OpenList API，后端注入 `Authorization: <token>` 头。
+- `mini.js` 的 `matchPattern` 新增 `*` 通配支持（匹配含 `/` 的多段路径，捕获存到 `params[0]`），用于代理路由。
+
+安全：HTML / assets / api 代理不额外 `requireAdmin`（iframe.src 与 `<script src>` 不带 Authorization 头，requireAdmin 会全部 401）；由平台 `authGate` 登录检查 + OpenList 上游 token 鉴权两层保证。真实用户登录后有 `dp_session` cookie，同源 iframe 请求自动带 cookie。
+
+### 46.4 WebDAV / 驱动：可操作化
+
+- 「可用驱动清单」说明改为明确：点「选用」自动跳到「挂载存储」页并带入该驱动的 addition 配置模板（`switchView('storage-mounts')`）；点「模板」弹出该驱动的 addition JSON，可复制或直接带到新增挂载表单。
+- 原「点查看配置带出字段模板」文案与实际按钮（选用）不一致已修正。
+
+### 46.5 验证
+
+- 浏览器实测：启动构建目录选择器弹出（dirCount=2）、文件浏览图标按钮 2 个不溢出（scrollWidth=clientWidth）、驱动清单 93 项选用 / 模板按钮、内嵌后台 iframe `src=/api/openlist/admin`、SPA 渲染 `rootChildren=3`、`title=admin | OpenList`、`hasToken=true`、`runtimeErrors=[]`。
+- 回归：`npm run check`、前端自检（+4 护栏、缓存戳 `20261116a`）、`smoke-auth` 42/42、`api-audit` 319 请求 0×500（3 项「问题」为代理透传 OpenList 原始 manifest / 通配字面量测试的预期行为）；`build.mjs --bundle-only` 已同步 `dist`。
+- **状态**：本节改动在本地工作区，尚未提交；GitHub 推送 / tag / Release 待决定。
+

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261115b" />
+  <link rel="stylesheet" href="/style.css?v=20261116a" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -750,12 +750,18 @@
               <button class="btn btn-sm" data-ol-action="link">获取直链</button>
               <button class="btn btn-sm" data-ol-action="download">下载</button>
               <button class="btn btn-sm btn-danger" data-ol-action="remove">删除所选</button>
+              <span class="flex-spacer"></span>
+              <button class="btn btn-sm" type="button" id="ol-ai-session" title="以当前目录为上下文开始一段 AI 运维会话">✦ AI 会话</button>
             </div>
             <div id="file-list" class="table-wrap"></div>
             <div class="row gap wrap" style="margin-top:12px">
               <form id="mkdir-form" class="row">
                 <input name="name" placeholder="新目录名" required />
                 <button class="btn btn-sm" type="submit">新建目录</button>
+              </form>
+              <form id="newfile-form" class="row">
+                <input name="name" placeholder="新文件名（如 app.py / config.yaml）" required />
+                <button class="btn btn-sm" type="submit">新建文件</button>
               </form>
               <label class="file-btn">上传文件<input type="file" id="upload-input" multiple /></label>
             </div>
@@ -885,8 +891,8 @@
             <p class="muted small">rclone：<code>rclone config → webdav → url: http://localhost:5244/dav/</code>；外部连接请使用上方显示的实际地址。</p>
           </div>
           <div class="card">
-            <div class="card-head"><h2>可用驱动清单</h2><span class="muted">点「查看配置」带出字段模板</span></div>
-            <div class="hint">不同 OpenList 版本支持的驱动不同；这里显示的是当前激活连接返回的清单。</div>
+            <div class="card-head"><h2>可用驱动清单</h2><span class="muted">当前激活连接支持的全部存储驱动</span></div>
+            <div class="hint">这里是当前激活的 OpenList 返回的驱动清单，用于<b>新增挂载</b>时选择驱动并填写配置。点「选用」会自动跳到「挂载存储」页并带入该驱动的配置模板；点「模板」可查看 / 复制该驱动的 addition 配置 JSON。</div>
             <div id="storage-driver-list" class="list" style="margin-top:12px;max-height:420px;overflow:auto"></div>
           </div>
         </section>
@@ -931,7 +937,12 @@
             <div class="card-head"><h2>启动构建</h2><span class="muted" id="executor-label"></span></div>
             <form id="build-form" class="form">
               <div class="grid-2">
-                <label>项目目录（相对工作区）<input name="repoPath" placeholder="my-project" required /></label>
+                <label>项目目录（相对工作区）
+                  <div class="row gap" style="align-items:center">
+                    <input name="repoPath" id="build-repo-path" placeholder="my-project" required style="flex:1;min-width:0" />
+                    <button class="btn btn-ghost btn-sm" type="button" id="build-path-browse" title="从工作区目录树中选择">浏览…</button>
+                  </div>
+                </label>
                 <label>构建类型<select name="profile" id="profile-select"></select></label>
               </div>
               <label>编译环境 / 构建后端<select name="backend" id="build-backend"></select></label>
@@ -1754,6 +1765,6 @@
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
   <script src="/vendor/qrcode.js"></script>
-  <script src="/app.js?v=20261115b"></script>
+  <script src="/app.js?v=20261116a"></script>
 </body>
 </html>

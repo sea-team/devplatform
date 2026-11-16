@@ -101,6 +101,14 @@ function fmtSize(bytes) {
 
 /* ---------------- v0.3.11 · 文件浏览排序与目录 / 文件区分 ---------------- */
 const FOLDER_SVG = '<svg viewBox="0 0 20 16" width="18" height="15" aria-hidden="true"><path d="M1.5 2.5h6l2 2.2h9v9.3a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1z" fill="#f7bd4b" stroke="#d99a20" stroke-width=".8"/></svg>';
+// v0.4.7：文件操作列改用图标按钮，避免文字按钮在窄列里换行错位。
+const ACT_ICONS = {
+  edit: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M11.5 1.5l3 3-9 9H2.5v-3z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  download: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 2v8m0 0l-3-3m3 3l3-3M3 13h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  link: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M6.5 9.5a2.5 2.5 0 0 1 0-3.5l1.5-1.5a2.5 2.5 0 0 1 3.5 3.5M9.5 6.5a2.5 2.5 0 0 1 0 3.5L8 11.5a2.5 2.5 0 0 1-3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  rename: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 13l3-1 7-7-2-2-7 7zM11 4l2 2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg>',
+  del: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 4h10M6 4V2.5h4V4M5 4l.8 9h4.4L11 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
 const EXT_COLORS = {
   js: 'amber', ts: 'blue', json: 'amber', php: 'purple', py: 'blue', go: 'cyan', rs: 'orange',
   java: 'orange', css: 'blue', scss: 'pink', html: 'orange', xml: 'orange', sh: 'green',
@@ -1468,8 +1476,10 @@ async function openIde() {
   } catch (e) { toast(e.message, true); }
 }
 
-/* ------------- v0.3.11 · IDE 项目目录浏览选择器 ------------- */
+/* ------------- v0.3.11 · 工作区目录浏览选择器（IDE / 构建部署共用） ------------- */
 const ideDirState = { path: '/', parent: '/', bound: false };
+// 当前选择器的目标输入框 id：IDE 用 'ide-path'，构建部署用 'build-repo-path'。
+let dirPickerTarget = 'ide-path';
 
 async function loadIdeDirs(path) {
   const box = $('#ide-dir-list');
@@ -1505,8 +1515,9 @@ async function loadIdeDirs(path) {
 
 function selectIdeDir(path) {
   const rel = String(path || '/').replace(/^\/+/, '').replace(/\/+$/, '');
-  const input = $('#ide-path');
+  const input = $('#' + dirPickerTarget);
   if (input) input.value = rel;
+  // IDE 页有已选提示，构建页没有，按存在性渲染。
   const picked = $('#ide-picked');
   if (picked) {
     picked.hidden = false;
@@ -1517,10 +1528,14 @@ function selectIdeDir(path) {
   toast(rel ? `已选择项目目录 ${rel}` : '已选择工作区根目录');
 }
 
-function openIdeDirPicker() {
-  const current = String(($('#ide-path') && $('#ide-path').value) || '').trim();
+function openIdeDirPicker(targetInputId) {
+  if (targetInputId) dirPickerTarget = targetInputId;
+  const current = String(($('#' + dirPickerTarget) && $('#' + dirPickerTarget).value) || '').trim();
   const modal = $('#ide-dir-modal');
   if (modal) modal.hidden = false;
+  // 标题随调用方调整：构建部署时强调「选择构建项目目录」。
+  const title = $('#ide-dir-title');
+  if (title) title.textContent = dirPickerTarget === 'build-repo-path' ? '选择构建项目目录' : '选择项目目录';
   loadIdeDirs(current ? `/${current.replace(/^\/+/, '')}` : '/');
   if (ideDirState.bound) return;
   ideDirState.bound = true;
@@ -1578,7 +1593,8 @@ function renderOpenlistStatus(status) {
   $('#openlist-open').href = (status && status.manageUrl) || '#';
   $('#webdav-url').textContent = (status && status.webdav) || '-';
   if (online && !$('#openlist-frame-card').hidden) {
-    $('#openlist-frame').src = status.manageUrl;
+    // v0.4.7：走平台同源代理，自动注入 token 登录，避免跨域 / 手动登录。
+    $('#openlist-frame').src = '/api/openlist/admin';
   }
   $('#storage-current-conn').textContent = online
     ? `当前连接：${label || status.url} ${status.url}${status.admin ? '' : ' · 管理权限不可用（挂载 / 驱动接口会报错，请到连接管理修复凭据）'}`
@@ -1745,14 +1761,14 @@ function renderFileList(d) {
       <td style="width:110px">${f.isDir ? '-' : fmtSize(f.size)}</td>
       <td style="width:120px">${esc(fileTypeLabel(f))}</td>
       <td class="muted" style="width:170px">${esc(fmtTime(f.modified))}</td>
-      <td class="actions" style="width:270px"><div class="ext-actions">
+      <td class="actions"><div class="ext-actions icon-actions">
         ${f.isDir
           ? ''
-          : `<button class="btn btn-sm btn-primary" data-ol-edit="${esc(full)}" data-ol-edit-name="${esc(f.name)}">编辑</button>
-             <button class="btn btn-sm" data-ol-get="${esc(full)}">下载</button>
-             <button class="btn btn-sm" data-ol-link="${esc(full)}">直链</button>`}
-        <button class="btn btn-sm" data-ol-one-rename="${esc(full)}">重命名</button>
-        <button class="btn btn-sm btn-danger" data-ol-one-del="${esc(f.name)}">删除</button>
+          : `<button class="icon-btn" data-ol-edit="${esc(full)}" data-ol-edit-name="${esc(f.name)}" title="编辑">${ACT_ICONS.edit}</button>
+             <button class="icon-btn" data-ol-get="${esc(full)}" title="下载">${ACT_ICONS.download}</button>
+             <button class="icon-btn" data-ol-link="${esc(full)}" title="直链">${ACT_ICONS.link}</button>`}
+        <button class="icon-btn" data-ol-one-rename="${esc(full)}" title="重命名">${ACT_ICONS.rename}</button>
+        <button class="icon-btn icon-btn-danger" data-ol-one-del="${esc(f.name)}" title="删除">${ACT_ICONS.del}</button>
       </div></td>
     </tr>`);
   });
@@ -1762,7 +1778,7 @@ function renderFileList(d) {
     ${sortHeader('大小', 'size', sort, 'data-ol-sort')}
     ${sortHeader('类型', 'type', sort, 'data-ol-sort')}
     ${sortHeader('修改时间', 'mtime', sort, 'data-ol-sort')}
-    <th style="width:270px">操作</th>
+    <th style="width:150px">操作</th>
   </tr></thead><tbody>${rows.join('') || '<tr><td colspan="6" class="muted">目录为空</td></tr>'}</tbody></table>`;
   renderBreadcrumb(d.path || currentStoragePath);
   // 表头即排序控件：同列再点一次切换升 / 降序，目录始终优先分组。
@@ -2021,7 +2037,10 @@ function renderDriverList(data) {
   $('#storage-driver-list').innerHTML = items.length ? items.slice(0, 120).map((d) => `
     <div class="list-item"><div><div class="title">${esc(d.name || d.driver)}</div>
       <div class="desc">${esc(d.driver)}${d.description ? ` · ${esc(d.description)}` : ''}</div></div>
-      <button class="btn btn-sm" data-ol-driver="${esc(d.driver)}">选用</button>
+      <div class="row gap">
+        <button class="btn btn-sm btn-primary" data-ol-driver="${esc(d.driver)}" title="带入新增挂载表单并跳转">选用</button>
+        <button class="btn btn-sm" data-ol-driver-template="${esc(d.driver)}" title="查看 / 复制该驱动的 addition 配置模板">模板</button>
+      </div>
     </div>`).join('') : empty;
   $$('[data-ol-driver]').forEach((b) => b.addEventListener('click', async () => {
     const d = storageState.drivers.find((x) => x.driver === b.dataset.olDriver);
@@ -2038,8 +2057,72 @@ function renderDriverList(data) {
       const addition = info && (info.addition || info.config || info.common);
       if (addition) form.elements.addition.value = JSON.stringify(addition, null, 2);
     } catch { /* 驱动详情接口可能不存在，保留清单里的模板 */ }
-    toast(`已选用驱动 ${b.dataset.olDriver}`);
+    // v0.4.7：选用后自动切到「挂载存储」页，让用户直接看到已带入的表单。
+    switchView('storage-mounts');
+    toast(`已选用驱动 ${b.dataset.olDriver}，配置模板已带入下方表单`);
   }));
+  // v0.4.7：「模板」按钮 —— 拉取该驱动的 addition 配置模板，可复制后粘贴到任意挂载表单。
+  $$('[data-ol-driver-template]').forEach((b) => b.addEventListener('click', async () => {
+    const drv = b.dataset.olDriverTemplate;
+    const d = storageState.drivers.find((x) => x.driver === drv);
+    let tpl = d && d.config ? (typeof d.config === 'string' ? d.config : JSON.stringify(d.config, null, 2)) : '';
+    try {
+      const info = await api(`/openlist/drivers/info?driver=${encodeURIComponent(drv)}`);
+      const addition = info && (info.addition || info.config || info.common);
+      if (addition) tpl = JSON.stringify(addition, null, 2);
+    } catch { /* 保留清单模板 */ }
+    if (!tpl) { toast(`驱动 ${drv} 未返回配置模板`, true); return; }
+    showDriverTemplate(drv, tpl);
+  }));
+}
+
+// v0.4.7：驱动配置模板预览弹窗 —— 可复制 JSON 后粘贴到挂载表单或外部工具。
+function showDriverTemplate(driver, tpl) {
+  const old = document.getElementById('driver-template-modal');
+  if (old) old.remove();
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'driver-template-modal';
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('role', 'dialog');
+  modal.innerHTML = `
+    <div class="modal-mask" data-close></div>
+    <div class="modal-panel modal-narrow">
+      <div class="modal-head">
+        <div><h2>${esc(driver)} 配置模板</h2><span class="muted">addition 字段模板，可复制后粘贴到新增挂载的「驱动配置 addition」</span></div>
+        <button class="btn btn-ghost btn-sm" type="button" data-close>✕ 关闭</button>
+      </div>
+      <div class="modal-body">
+        <pre class="log" style="max-height:50vh;overflow:auto;margin:0">${esc(tpl)}</pre>
+        <div class="form-actions" style="margin-top:12px">
+          <button class="btn btn-primary btn-sm" type="button" data-copy>复制 JSON</button>
+          <button class="btn btn-ghost btn-sm" type="button" data-jump>带到「挂载存储」新增</button>
+          <span class="flex-spacer"></span>
+          <button class="btn btn-sm" type="button" data-close>关闭</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.hidden = false;
+  const close = () => modal.remove();
+  modal.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
+  modal.querySelector('[data-copy]').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(tpl); toast('已复制配置模板到剪贴板'); }
+    catch { toast('复制失败，请手动选择文本复制', true); }
+  });
+  modal.querySelector('[data-jump]').addEventListener('click', () => {
+    const form = $('#storage-add-form');
+    if (form) {
+      form.hidden = false;
+      form.elements.driver.value = driver;
+      form.elements.addition.value = tpl;
+      $('#ol-storage-id').value = '';
+      storageState.editId = '';
+    }
+    close();
+    switchView('storage-mounts');
+    toast(`已带入 ${driver} 模板到新增挂载表单`);
+  });
 }
 
 async function loadStorage() {
@@ -5358,7 +5441,10 @@ document.addEventListener('click', async (e) => {
 
 $('#ide-open').addEventListener('click', openIde);
 const ideBrowseBtn = $('#ide-browse');
-if (ideBrowseBtn) ideBrowseBtn.addEventListener('click', openIdeDirPicker);
+if (ideBrowseBtn) ideBrowseBtn.addEventListener('click', () => openIdeDirPicker('ide-path'));
+// v0.4.7：构建部署「启动构建」项目目录复用同一个工作区目录选择器。
+const buildPathBrowseBtn = $('#build-path-browse');
+if (buildPathBrowseBtn) buildPathBrowseBtn.addEventListener('click', () => openIdeDirPicker('build-repo-path'));
 const ideGotoConfigBtn = $('#ide-goto-config');
 if (ideGotoConfigBtn) ideGotoConfigBtn.addEventListener('click', () => switchView('ide-config'));
 const ideConfigGotoBtn = $('#ide-config-goto');
@@ -5396,6 +5482,29 @@ $('#mkdir-form').addEventListener('submit', async (e) => {
     toast('目录已创建'); e.target.reset(); loadStorage();
   } catch (err) { toast(err.message, true); }
 });
+// v0.4.7：新建空文件 —— 用 PUT content 写入空内容创建文件，等价于上传空 buffer。
+$('#newfile-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = String(e.target.elements.name.value || '').trim();
+  if (!name) return;
+  if (name.includes('/')) { toast('文件名不能包含 /', true); return; }
+  try {
+    await api('/openlist/files/content', { method: 'PUT', body: { path: olJoin(currentStoragePath, name), content: '' } });
+    toast('文件已创建'); e.target.reset(); loadStorage();
+  } catch (err) { toast(err.message, true); }
+});
+// v0.4.7：以当前目录为上下文新建 AI 运维会话。
+$('#ol-ai-session').addEventListener('click', async () => {
+  const path = currentStoragePath;
+  try {
+    const s = await api('/ai/sessions', { method: 'POST', body: { title: `文件 · ${path === '/' ? '根目录' : path}` } });
+    switchView('ops');
+    // openModuleTab 会异步触发 loadOps，等它初始化后再选中新建的会话。
+    await new Promise((r) => setTimeout(r, 80));
+    await loadOpsSessions(s.id);
+    toast(`已新建会话，上下文目录：${path}`);
+  } catch (e) { toast(e.message, true); }
+});
 $('#upload-input').addEventListener('change', (e) => uploadFiles(e.target.files));
 $('#ol-conn-new').addEventListener('click', () => fillOpenlistConnectionForm(null));
 $('#ol-conn-cancel').addEventListener('click', closeOpenlistConnectionForm);
@@ -5403,8 +5512,9 @@ $('#ol-conn-reload').addEventListener('click', () => loadStorage());
 $('#openlist-embed-toggle').addEventListener('click', () => {
   const card = $('#openlist-frame-card');
   card.hidden = !card.hidden;
-  if (!card.hidden && storageState.connection) {
-    $('#openlist-frame').src = storageState.connection.manageUrl || '#';
+  if (!card.hidden) {
+    // v0.4.7：走平台同源代理，后端注入 token，SPA 自动登录进入管理后台。
+    $('#openlist-frame').src = '/api/openlist/admin';
   }
 });
 $('#openlist-frame-close').addEventListener('click', () => {

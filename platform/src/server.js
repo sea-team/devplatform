@@ -862,6 +862,72 @@ app.put('/api/openlist/files/upload', wrap(async (req, res) => {
   ok(res, await openlist.upload(p, name, buffer));
 }), { raw: true });
 
+/* --------- v0.4.7 · OpenList 后台同源代理（内嵌后台自动登录） --------- */
+// 「连接管理」的「内嵌后台」iframe 直接加载 OpenList /@manage 会遇到跨域 + 需手动登录。
+// 这里把后台 SPA、静态资源、API 全部代理到平台同源路径下，并在 HTML 里注入 token，
+// 让 SPA 从 localStorage 读到 token 自动登录；API 请求也由后端注入 Authorization。
+app.get('/api/openlist/admin', wrap(async (req, res) => {
+  // HTML 入口不 requireAdmin：iframe.src 导航请求不带 Authorization 头，requireAdmin 会 401。
+  // 安全由 authGate 登录检查 + OpenList 上游 token 鉴权保证；普通用户即便打开也只看到
+  // 自己有权的内容（OpenList 后台管理操作仍需管理员 token，已由代理注入）。
+  const token = await openlist.getToken();
+  const resp = await fetch(`${config.openlistUrl}/@manage`, { headers: { Authorization: token } });
+  let html = await resp.text();
+  // 资源路径不在这里重写：preloads 脚本会用 window.__dynamic_base__ 拼接资源 src，
+  // 若再重写 HTML 里的 /assets/ 会产生双重前缀。只靠注入的 __dynamic_base__ 即可让
+  // 资源请求落到 /api/openlist/admin/assets/* 代理上。
+  // 在 </head> 前注入独立 script：设置资源前缀、API 前缀，并把 token 写入 localStorage
+  // 让 SPA 自动登录。必须放在 OPENLIST_CONFIG 定义之后、preloads 脚本（body 内）执行之前。
+  const inject = `<script>window.__dynamic_base__='/api/openlist/admin';if(window.OPENLIST_CONFIG){window.OPENLIST_CONFIG.api='/api/openlist/admin';}try{localStorage.setItem('token',${JSON.stringify(token)});}catch(e){}</script>`;
+  html = html.replace('</head>', `${inject}</head>`);
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(html);
+}));
+
+async function proxyOpenlistStatic(req, res, upstream) {
+  const r = await fetch(`${config.openlistUrl}${upstream}`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  const headers = {};
+  r.headers.forEach((v, k) => { if (!/content-encoding|transfer-encoding|connection/i.test(k)) headers[k] = v; });
+  res.writeHead(r.status, headers);
+  res.end(buf);
+}
+
+// 静态资源与 API 代理不额外 requireAdmin：浏览器加载 SPA 的 <script src> 不会带
+// Authorization 头，requireAdmin 会把它们全部 401 导致后台白屏。安全由两层保证 ——
+// 平台 authGate 已要求登录；OpenList 上游用注入的管理员 token 自行鉴权。
+app.get('/api/openlist/admin/assets/*', wrap(async (req, res) => {
+  await proxyOpenlistStatic(req, res, `/assets/${req.params[0]}`);
+}));
+app.get('/api/openlist/admin/manifest.json', wrap(async (req, res) => {
+  await proxyOpenlistStatic(req, res, '/manifest.json');
+}));
+
+async function proxyOpenlistApi(req, res) {
+  const token = await openlist.getToken();
+  const upstream = `/api/${req.params[0]}`;
+  const qs = req.url.includes('?') ? '?' + req.url.split('?').slice(1).join('?') : '';
+  const url = `${config.openlistUrl}${upstream}${qs}`;
+  const headers = { Authorization: token };
+  const ct = req.headers && req.headers['content-type'];
+  if (ct) headers['content-type'] = ct;
+  const init = { method: req.method, headers };
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.body !== undefined) {
+    init.body = (req.body && typeof req.body === 'object') ? JSON.stringify(req.body) : String(req.body);
+  }
+  const r = await fetch(url, init);
+  const buf = Buffer.from(await r.arrayBuffer());
+  const respHeaders = {};
+  r.headers.forEach((v, k) => { if (!/content-encoding|transfer-encoding|connection|content-length/i.test(k)) respHeaders[k] = v; });
+  res.writeHead(r.status, respHeaders);
+  res.end(buf);
+}
+// app 不支持 app.all，按 SPA 实际用到的 method 分别注册。
+app.get('/api/openlist/admin/api/*', wrap(proxyOpenlistApi));
+app.post('/api/openlist/admin/api/*', wrap(proxyOpenlistApi));
+app.put('/api/openlist/admin/api/*', wrap(proxyOpenlistApi));
+app.delete('/api/openlist/admin/api/*', wrap(proxyOpenlistApi));
+
 /* ------------------------- 分层代理配置（§27） ------------------------- */
 // 优先级：单项代理 > (Git Host 匹配规则) > 分组代理 > 全局代理。
 // 凭据只落 state.json（600），所有输出 URL 均脱敏。
