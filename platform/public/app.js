@@ -34,7 +34,7 @@ const VIEW_META = {
   ai: ['配置 AI 服务', 'API 服务、宿主机 / WSL 本地 AI 程序与代理'],
   'ai-list': ['已配置服务', '查看、编辑、删除已保存的 AI 服务'],
   'ai-test': ['连通性测试', '向已保存的服务发起真实请求验证可用性'],
-  ops: ['AI 运维', '多轮对话式运维助手，支持文件 / 图片与会话留存'],
+  ops: ['AI 终端', 'DeepSeek Harness 驱动的命令行式 AI 助手，工具调用实时可见'],
   users: ['账号管理', '管理员新增账号、调整角色、禁用与重置密码'],
 };
 const MODULE_ICONS = {
@@ -3382,407 +3382,158 @@ async function loadAI() {
   } catch (e) { if ($('#provider-list')) $('#provider-list').innerHTML = errorBlock(e.message); }
 }
 
-/* ------------------------ AI 运维 · 对话模式（v0.4.3） ------------------------ */
-// 会话由后端持久化（state.aiSessions），按账号隔离；消息里保留附件与工具调用轨迹，
-// 刷新 / 换设备后可恢复继续对话。图片走 vision，文本文件读内容；不支持时后端自动降级。
-const opsState = {
-  sessions: [], currentId: '', attachments: [], sending: false, bound: false,
-  suggestion: '',           // AI 回复给出的下一步提示词，Tab 可填入输入框
-  serverScope: 'all',       // 'all' | 服务器 id 数组（多台 / 单台 / 空）
-  servers: [],
-};
+/* --------------------- AI 终端（DeepSeek Harness） ----------------------- */
+// xterm.js 交互式 REPL：SSE 收输出、POST 送输入，复用 SSH 终端的终端组件。
+const aiTerm = { sid: null, term: null, fit: null, source: null, resizeHandler: null, bound: false, busy: false };
 
-/* ---------- v0.4.4：会话服务器范围 + 输入框 ghost-text 建议 ---------- */
-const OPS_PROMPT_PLACEHOLDER = '检查所有服务器负载，找出最近失败的构建并分析原因…（Ctrl/⌘ + Enter 发送）';
-
-function opsScopeLabel(scope) {
-  if (!Array.isArray(scope)) return '服务器：全部';
-  if (!scope.length) return '服务器：不选';
-  return `服务器：${scope.length} 台`;
+function aiTermWrite(text) {
+  if (aiTerm.term) { try { aiTerm.term.write(text); } catch { /* noop */ } }
 }
 
-function renderOpsScope() {
-  const btn = $('#ops-server-btn');
-  if (btn) btn.textContent = `🖥 ${opsScopeLabel(opsState.serverScope)}`;
-  const boxes = $$('#ops-server-list input[type="checkbox"]');
-  const scope = opsState.serverScope;
-  boxes.forEach((b) => { b.checked = !Array.isArray(scope) || scope.includes(b.value); });
+function aiTermStatus(text, cls = '') {
+  const el = $('#ait-status');
+  if (!el) return;
+  el.textContent = text;
+  el.className = cls || 'muted';
 }
 
-function renderOpsServerList() {
-  const box = $('#ops-server-list');
-  if (!box) return;
-  box.innerHTML = opsState.servers.length ? opsState.servers.map((s) => `
-    <label class="check ops-scope-item" title="${esc(s.host || '')}">
-      <input type="checkbox" value="${esc(s.id)}" /> ${esc(s.name || s.host || s.id)}
-    </label>`).join('') : '<div class="empty">还没有登记服务器，默认按「全部」处理</div>';
-  renderOpsScope();
+function aiTermNotice(text, isError = false) {
+  const el = $('#ait-notice');
+  if (!el) return;
+  if (!text) { el.hidden = true; el.textContent = ''; return; }
+  el.hidden = false;
+  el.className = isError ? 'notice error' : 'notice';
+  el.innerHTML = text;
 }
 
-async function applyOpsScope(scope) {
-  opsState.serverScope = Array.isArray(scope) ? scope.slice() : 'all';
-  renderOpsScope();
-  const panel = $('#ops-server-panel');
-  if (panel) panel.hidden = true;
-  if (opsState.currentId) {
+async function loadAITerminal() {
+  // 填 AI 服务下拉（只列 API 类型）
+  let items = [];
+  try {
+    const r = await api('/ai/providers');
+    items = (r.items || []).filter((p) => p.kind !== 'cli' && p.enabled !== false);
+  } catch (e) { toast(e.message, true); }
+  const sel = $('#ait-provider');
+  if (sel) {
+    const prev = sel.value;
+    sel.innerHTML = items.length
+      ? items.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} · ${esc(p.model || '')}</option>`).join('')
+      : '<option value="">（无可用 AI 服务）</option>';
+    if (prev && items.some((p) => p.id === prev)) sel.value = prev;
+  }
+  if (!items.length) {
+    aiTermNotice('尚未配置可用的 AI 服务。请先在「AI 服务配置」页添加一个 <b>API 类型</b>的服务（填写 Base URL、模型与 API Key）后重试。', true);
+    aiTermStatus('未连接');
+    return;
+  }
+  aiTermNotice('');
+
+  if (aiTerm.bound) return;
+  aiTerm.bound = true;
+
+  const connect = async () => {
+    const providerId = sel ? sel.value : '';
+    if (!providerId) { toast('请先选择一个 AI 服务', true); return; }
+    // 断开旧会话
+    if (aiTerm.sid) {
+      api('/ai/terminal/close', { method: 'POST', body: { sid: aiTerm.sid } }).catch(() => {});
+      aiTerm.sid = null;
+    }
+    if (aiTerm.source) { try { aiTerm.source.close(); } catch { /* noop */ } aiTerm.source = null; }
+    if (aiTerm.term) { try { aiTerm.term.dispose(); } catch { /* noop */ } aiTerm.term = null; }
+    aiTerm.busy = false;
     try {
-      await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}`, {
-        method: 'PUT', body: { serverScope: opsState.serverScope },
+      const s = await api('/ai/terminal/open', { method: 'POST', body: { providerId } });
+      aiTerm.sid = s.sid;
+      if (typeof Terminal === 'undefined') throw new Error('终端组件未加载：请确认 /vendor/xterm.min.js 已部署');
+      const wrap = $('#ait-term-wrap');
+      aiTerm.term = new Terminal({
+        cols: 100, rows: 26, cursorBlink: true, fontSize: 13, scrollback: 8000,
+        fontFamily: 'Consolas, "SF Mono", Menlo, monospace',
+        theme: { background: '#0f172a', foreground: '#e2e8f0', cursor: '#60a5fa', selectionBackground: '#1d4ed855' },
       });
-    } catch (e) { toast(e.message, true); }
-  }
-  toast(`范围已更新：${opsScopeLabel(opsState.serverScope)}`);
-}
+      if (typeof FitAddon !== 'undefined' && FitAddon.FitAddon) {
+        aiTerm.fit = new FitAddon.FitAddon();
+        aiTerm.term.loadAddon(aiTerm.fit);
+      }
+      aiTerm.term.open(wrap);
+      try { aiTerm.fit && aiTerm.fit.fit(); } catch { /* noop */ }
+      aiTerm.term.writeln(s.greeting || '已连接 AI 终端');
+      aiTerm.term.focus();
 
-function renderOpsGhost() {
-  const ghost = $('#ops-ghost');
-  const input = $('#ops-prompt');
-  if (!ghost || !input) return;
-  const show = Boolean(opsState.suggestion) && !input.value;
-  ghost.hidden = !show;
-  input.placeholder = show ? '' : OPS_PROMPT_PLACEHOLDER;
-  if (show) {
-    ghost.innerHTML = `${esc(opsState.suggestion)}<span class="ops-ghost-tag">Tab 填入 · Esc 忽略</span>`;
-  }
-}
-
-function acceptOpsSuggestion() {
-  const input = $('#ops-prompt');
-  if (!input || !opsState.suggestion || input.value) return false;
-  input.value = opsState.suggestion;
-  opsState.suggestion = '';
-  renderOpsGhost();
-  input.focus();
-  return true;
-}
-
-function opsStatus(text) { const el = $('#ops-status'); if (el) el.textContent = text || ''; }
-
-/* 附件读取：图片转 dataURL、文本转纯文本；过大文件直接拒绝。 */
-function readOpsAttachment(file) {
-  return new Promise((resolve, reject) => {
-    const name = file.name || 'file';
-    const mime = file.type || '';
-    const isImage = /^image\//.test(mime) || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
-    if (file.size > 3 * 1024 * 1024) return reject(new Error(`「${name}」超过 3MB，请压缩后再附加`));
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`读取「${name}」失败`));
-    if (isImage) {
-      reader.onload = () => compressOpsImage(String(reader.result), mime)
-        .then((data) => resolve({ name, mime: mime || 'image/png', size: file.size, kind: 'image', data }))
-        .catch(reject);
-      reader.readAsDataURL(file);
-    } else {
-      reader.onload = () => resolve({
-        name, mime: mime || 'text/plain', size: file.size, kind: 'text',
-        data: String(reader.result || '').slice(0, 200000),
+      // 键盘输入 -> 后端。回车提交整行；Ctrl+C 走中断。
+      let lineBuf = '';
+      aiTerm.term.onData((data) => {
+        if (!aiTerm.sid) return;
+        if (data === '\r' || data === '\n') {
+          const line = lineBuf.trim();
+          lineBuf = '';
+          if (!line) { aiTermWrite('\r\n'); return; }
+          aiTermWrite('\r\n');
+          api('/ai/terminal/input', { method: 'POST', body: { sid: aiTerm.sid, input: line } })
+            .then((r) => { if (!r.accepted && r.reason === 'busy') toast('上一任务尚未完成，请稍候或先中断', true); })
+            .catch((err) => toast(err.message, true));
+          return;
+        }
+        if (data === '\u0003') { // Ctrl+C
+          lineBuf = '';
+          aiTermWrite('^C\r\n');
+          api('/ai/terminal/interrupt', { method: 'POST', body: { sid: aiTerm.sid } }).catch(() => {});
+          return;
+        }
+        if (data === '\u007f') { // Backspace
+          if (lineBuf.length) { lineBuf = lineBuf.slice(0, -1); aiTermWrite('\b \b'); }
+          return;
+        }
+        if (data >= ' ' && data !== '\t') { lineBuf += data; aiTermWrite(data); }
       });
-      reader.readAsText(file);
+
+      // SSE 接收输出
+      aiTerm.source = new EventSource(`/api/ai/terminal/stream?sid=${encodeURIComponent(s.sid)}${streamToken()}`);
+      aiTerm.source.onmessage = (ev) => {
+        try {
+          const bin = atob(ev.data);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+          aiTermWrite(bytes);
+        } catch { /* 忽略坏帧 */ }
+      };
+      aiTerm.source.addEventListener('closed', (ev) => {
+        let reason = '会话已关闭';
+        try { reason = JSON.parse(ev.data).reason || reason; } catch { /* noop */ }
+        aiTermWrite(`\r\n\x1b[90m[${reason}]\x1b[0m\r\n`);
+        aiTermStatus('已断开', 'muted');
+        aiTerm.sid = null;
+      });
+      aiTerm.source.onerror = () => { if (aiTerm.sid) aiTermStatus('连接中断', 'muted'); };
+      aiTermStatus(`已连接 · ${s.provider?.name || ''}`, 'chip-green');
+
+      // 自适应宽度
+      if (aiTerm.resizeHandler) window.removeEventListener('resize', aiTerm.resizeHandler);
+      aiTerm.resizeHandler = () => { try { aiTerm.fit && aiTerm.fit.fit(); } catch { /* noop */ } };
+      window.addEventListener('resize', aiTerm.resizeHandler);
+    } catch (e) {
+      aiTermNotice(`连接失败：${esc(e.message)}`, true);
+      aiTermStatus('连接失败');
     }
+  };
+
+  const disconnect = () => {
+    if (aiTerm.sid) {
+      api('/ai/terminal/close', { method: 'POST', body: { sid: aiTerm.sid } }).catch(() => {});
+      aiTerm.sid = null;
+    }
+    if (aiTerm.source) { try { aiTerm.source.close(); } catch { /* noop */ } aiTerm.source = null; }
+    if (aiTerm.term) { aiTerm.term.writeln('\r\n\x1b[90m[已断开]\x1b[0m'); }
+    aiTermStatus('已断开');
+  };
+
+  $('#ait-connect').addEventListener('click', connect);
+  $('#ait-interrupt').addEventListener('click', () => {
+    if (aiTerm.sid) api('/ai/terminal/interrupt', { method: 'POST', body: { sid: aiTerm.sid } }).catch(() => {});
   });
-}
-
-/* 图片等比压缩到最长边 1600px、JPEG 0.82，避免 base64 撑爆请求体与 state.json。 */
-function compressOpsImage(dataUrl, mime) {
-  return new Promise((resolve) => {
-    if (/svg/i.test(mime)) return resolve(dataUrl);   // SVG 直接透传
-    const img = new Image();
-    img.onerror = () => resolve(dataUrl);
-    img.onload = () => {
-      try {
-        const max = 1600;
-        const scale = Math.min(1, max / Math.max(img.width, img.height));
-        const w = Math.max(1, Math.round(img.width * scale));
-        const h = Math.max(1, Math.round(img.height * scale));
-        const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
-        ctx.drawImage(img, 0, 0, w, h);
-        const out = canvas.toDataURL('image/jpeg', 0.82);
-        resolve(out.length < dataUrl.length ? out : dataUrl);
-      } catch { resolve(dataUrl); }
-    };
-    img.src = dataUrl;
-  });
-}
-
-function renderOpsAttachments() {
-  const box = $('#ops-attachments');
-  if (!box) return;
-  box.hidden = !opsState.attachments.length;
-  box.innerHTML = opsState.attachments.map((a, i) => `
-    <div class="ops-attach-item">
-      ${a.kind === 'image' && /^data:image\//.test(a.data)
-        ? `<img src="${esc(a.data)}" alt="${esc(a.name)}" class="ops-attach-thumb" />`
-        : '<span class="ops-attach-ico">▤</span>'}
-      <span class="ops-attach-name" title="${esc(a.name)}">${esc(a.name)}</span>
-      <button class="btn btn-ghost btn-sm" type="button" data-ops-attach-del="${i}" title="移除">✕</button>
-    </div>`).join('');
-  box.querySelectorAll('[data-ops-attach-del]').forEach((b) => b.addEventListener('click', () => {
-    opsState.attachments.splice(Number(b.dataset.opsAttachDel), 1);
-    renderOpsAttachments();
-  }));
-}
-
-function opsMessageHtml(m) {
-  const mine = m.role === 'user';
-  const attachments = (m.attachments || []).map((a) => {
-    if (a.kind === 'image' && a.data && /^data:image\//.test(a.data)) {
-      return `<a href="${esc(a.data)}" target="_blank" rel="noopener" class="ops-msg-image"><img src="${esc(a.data)}" alt="${esc(a.name)}" /></a>`;
-    }
-    return `<div class="ops-msg-file"><span>▤</span><span>${esc(a.name)}</span><span class="muted small">${esc(fmtSize(a.size || 0))}</span></div>`;
-  }).join('');
-
-  let trace = '';
-  if (m.role === 'assistant' && Array.isArray(m.trace) && m.trace.length) {
-    trace = `<details class="ops-trace"><summary>工具调用轨迹 · ${m.trace.length} 步</summary>
-      <pre class="log">${esc(JSON.stringify(m.trace, null, 2))}</pre></details>`;
-  }
-  const meta = m.role === 'assistant'
-    ? `<div class="ops-msg-meta muted small">${esc(fmtTime(m.at))}${m.provider ? ' · ' + esc(m.provider) : ''}${m.model ? ' · ' + esc(m.model) : ''}${m.attachmentMode === 'text-fallback' ? ' · 图片已降级为文字' : ''}${m.mode === 'context-injection' ? ' · 上下文注入模式' : ''}</div>`
-    : `<div class="ops-msg-meta muted small">${esc(fmtTime(m.at))}</div>`;
-  const body = m.error
-    ? `<div class="ops-msg-error">失败：${esc(m.error)}</div>`
-    : `<div class="ops-msg-text">${esc(m.content || '(空)')}</div>`;
-  return `<div class="ops-msg ${mine ? 'mine' : 'ai'}">
-    <div class="ops-msg-avatar">${mine ? '我' : 'AI'}</div>
-    <div class="ops-msg-body">
-      ${attachments ? `<div class="ops-msg-attachments">${attachments}</div>` : ''}
-      ${body}${trace}${meta}
-    </div>
-  </div>`;
-}
-
-function renderOpsMessages(messages, scroll = true) {
-  const box = $('#ops-messages');
-  if (!box) return;
-  box.innerHTML = messages && messages.length
-    ? messages.map(opsMessageHtml).join('')
-    : '<div class="empty">还没有消息，输入问题或附加日志 / 截图开始分析</div>';
-  if (scroll) box.scrollTop = box.scrollHeight;
-}
-
-function renderOpsSessions() {
-  const box = $('#ops-session-list');
-  if (!box) return;
-  box.innerHTML = opsState.sessions.length ? opsState.sessions.map((s) => `
-    <div class="ops-session ${s.id === opsState.currentId ? 'active' : ''}" data-ops-session="${esc(s.id)}">
-      <div class="ops-session-title">${esc(s.title || '新会话')}</div>
-      <div class="ops-session-meta muted small">${esc(fmtTime(s.updatedAt))} · ${s.messageCount || 0} 条</div>
-    </div>`).join('') : '<div class="empty">还没有会话，点「＋ 新建」开始</div>';
-  box.querySelectorAll('[data-ops-session]').forEach((b) => b.addEventListener('click', () => openOpsSession(b.dataset.opsSession)));
-}
-
-async function loadOpsSessions(preferId = '') {
-  try {
-    const d = await api('/ai/sessions');
-    opsState.sessions = d.items || [];
-    const wanted = preferId || opsState.currentId;
-    if (wanted && opsState.sessions.some((s) => s.id === wanted)) {
-      if (wanted === opsState.currentId) { renderOpsSessions(); return; }
-      return openOpsSession(wanted);
-    }
-    if (opsState.sessions.length) return openOpsSession(opsState.sessions[0].id);
-    opsState.currentId = '';
-    renderOpsSessions();
-    renderOpsMessages([]);
-    const t = $('#ops-chat-title'); if (t) t.textContent = 'AI 运维';
-    const sub = $('#ops-chat-sub'); if (sub) sub.textContent = '点「＋ 新建」开始一段新对话';
-  } catch (e) { toast(e.message, true); }
-}
-
-async function openOpsSession(id) {
-  try {
-    const s = await api(`/ai/sessions/${encodeURIComponent(id)}`);
-    opsState.currentId = s.id;
-    opsState.attachments = [];
-    renderOpsAttachments();
-    const t = $('#ops-chat-title'); if (t) t.textContent = s.title || '新会话';
-    const sub = $('#ops-chat-sub'); if (sub) sub.textContent = s.messageCount ? `${s.messageCount} 条消息 · 会话已留存，可继续对话` : '新会话';
-    const prov = $('#ops-provider'); if (prov && s.providerId) prov.value = s.providerId;
-    const w = $('#ops-write'); if (w) w.checked = Boolean(s.allowWrite);
-    opsState.serverScope = Array.isArray(s.serverScope) ? s.serverScope : (s.serverScope || 'all');
-    renderOpsScope();
-    const last = [...(s.messages || [])].reverse().find((m) => m && m.role === 'assistant' && m.suggestion);
-    opsState.suggestion = last ? String(last.suggestion) : '';
-    renderOpsGhost();
-    renderOpsSessions();
-    renderOpsMessages(s.messages);
-  } catch (e) { toast(e.message, true); }
-}
-
-async function createOpsSession() {
-  try {
-    const s = await api('/ai/sessions', { method: 'POST', body: {
-      providerId: ($('#ops-provider') || {}).value || '',
-      allowWrite: Boolean(($('#ops-write') || {}).checked),
-      serverScope: opsState.serverScope,
-    } });
-    await loadOpsSessions(s.id);
-    toast('已新建会话');
-  } catch (e) { toast(e.message, true); }
-}
-
-async function deleteOpsSession() {
-  if (!opsState.currentId) return;
-  if (!await confirmDialog({ message: '确认删除当前会话？其中的消息与附件将无法恢复。' })) return;
-  try {
-    await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}`, { method: 'DELETE' });
-    opsState.currentId = '';
-    toast('会话已删除');
-    await loadOpsSessions();
-  } catch (e) { toast(e.message, true); }
-}
-
-async function clearOpsSession() {
-  if (!opsState.currentId) return;
-  if (!await confirmDialog({ message: '确认清空当前会话的全部消息？（会话本身保留）' })) return;
-  try {
-    const s = await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}/clear`, { method: 'POST' });
-    renderOpsMessages(s.messages);
-    const sub = $('#ops-chat-sub'); if (sub) sub.textContent = '消息已清空，可继续对话';
-    await loadOpsSessions(opsState.currentId);
-    toast('已清空消息');
-  } catch (e) { toast(e.message, true); }
-}
-
-async function renameOpsSession() {
-  if (!opsState.currentId) return;
-  const title = await promptDialog('会话标题', ($('#ops-chat-title') || {}).textContent || '新会话');
-  if (!title || !title.trim()) return;
-  try {
-    await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}`, { method: 'PUT', body: { title: title.trim() } });
-    const t = $('#ops-chat-title'); if (t) t.textContent = title.trim();
-    await loadOpsSessions(opsState.currentId);
-    toast('已重命名');
-  } catch (e) { toast(e.message, true); }
-}
-
-async function sendOpsMessage() {
-  if (opsState.sending) return;
-  const input = $('#ops-prompt');
-  const content = (input ? input.value : '').trim();
-  const attachments = opsState.attachments.slice();
-  if (!content && !attachments.length) { toast('请输入内容或附加文件', true); return; }
-  if (!opsState.currentId) {
-    try {
-      const s = await api('/ai/sessions', { method: 'POST', body: {
-        providerId: ($('#ops-provider') || {}).value || '',
-        allowWrite: Boolean(($('#ops-write') || {}).checked),
-        serverScope: opsState.serverScope,
-      } });
-      opsState.currentId = s.id;
-    } catch (e) { toast(e.message, true); return; }
-  }
-
-  opsState.sending = true;
-  const sendBtn = $('#ops-send');
-  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '分析中…'; }
-  if (input) input.value = '';
-  opsState.attachments = [];
-  opsState.suggestion = '';
-  renderOpsGhost();
-  renderOpsAttachments();
-  const box = $('#ops-messages');
-  if (box) {
-    if (box.querySelector('.empty')) box.innerHTML = '';
-    box.insertAdjacentHTML('beforeend', opsMessageHtml({ role: 'user', content, attachments, at: new Date().toISOString() }));
-    box.insertAdjacentHTML('beforeend', '<div class="ops-msg ai" id="ops-pending"><div class="ops-msg-avatar">AI</div><div class="ops-msg-body"><div class="ops-msg-text ops-typing">正在分析平台状态与日志…</div></div></div>');
-    box.scrollTop = box.scrollHeight;
-  }
-  opsStatus('AI 正在调用工具分析，可能需要几十秒');
-
-  try {
-    const d = await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}/messages`, {
-      method: 'POST',
-      body: {
-        content, attachments,
-        providerId: ($('#ops-provider') || {}).value || '',
-        allowWrite: Boolean(($('#ops-write') || {}).checked),
-        serverScope: opsState.serverScope,
-      },
-    });
-    const pending = $('#ops-pending');
-    if (pending) {
-      pending.outerHTML = opsMessageHtml(d.assistantMessage);
-    } else if (box) {
-      box.insertAdjacentHTML('beforeend', opsMessageHtml(d.assistantMessage));
-    }
-    if (box) box.scrollTop = box.scrollHeight;
-    if (d.assistantMessage && d.assistantMessage.error) toast(d.assistantMessage.error, true);
-    if (d.assistantMessage && d.assistantMessage.attachmentMode === 'text-fallback') {
-      toast('当前服务不支持图像识别，图片已降级为文字说明');
-    }
-    const sub = $('#ops-chat-sub'); if (sub) sub.textContent = '会话已留存，可继续追问或稍后恢复';
-    opsState.suggestion = String((d.assistantMessage && d.assistantMessage.suggestion) || '');
-    renderOpsGhost();
-    await loadOpsSessions(opsState.currentId);
-    opsStatus('');
-  } catch (e) {
-    const pending = $('#ops-pending');
-    if (pending) pending.outerHTML = opsMessageHtml({ role: 'assistant', content: '', error: e.message, at: new Date().toISOString() });
-    toast(e.message, true);
-    opsStatus('发送失败');
-  } finally {
-    opsState.sending = false;
-    if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = '发送'; }
-  }
-}
-
-async function loadOps() {
-  try {
-    const [tools, providers, servers] = await Promise.all([
-      api('/ai/tools'), api('/ai/providers'), api('/servers'),
-    ]);
-    const hint = $('#ops-hint');
-    if (hint) hint.textContent = `只读：${(tools.readCommands || []).join(' · ')}`;
-    fillProviderSelects(providers.items || []);
-    opsState.servers = servers.items || [];
-    renderOpsServerList();
-  } catch (e) { toast(e.message, true); }
-  await loadOpsSessions();
-
-  if (opsState.bound) return;
-  opsState.bound = true;
-  $('#ops-form').addEventListener('submit', (e) => { e.preventDefault(); sendOpsMessage(); });
-  const promptEl = $('#ops-prompt');
-  if (promptEl) {
-    promptEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Tab' && acceptOpsSuggestion()) { e.preventDefault(); }
-      else if (e.key === 'Escape' && opsState.suggestion) { opsState.suggestion = ''; renderOpsGhost(); }
-      else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendOpsMessage(); }
-    });
-    promptEl.addEventListener('input', renderOpsGhost);
-  }
-  $('#ops-server-btn').addEventListener('click', () => {
-    const panel = $('#ops-server-panel');
-    if (!panel) return;
-    panel.hidden = !panel.hidden;
-    if (!panel.hidden) renderOpsScope();
-  });
-  $('#ops-scope-all').addEventListener('click', () => applyOpsScope('all'));
-  $('#ops-scope-none').addEventListener('click', () => applyOpsScope([]));
-  $('#ops-scope-apply').addEventListener('click', () => {
-    const boxes = $$('#ops-server-list input[type="checkbox"]');
-    const checked = boxes.filter((b) => b.checked).map((b) => b.value);
-    applyOpsScope(boxes.length && checked.length === boxes.length ? 'all' : checked);
-  });
-  $('#ops-new').addEventListener('click', createOpsSession);
-  $('#ops-delete').addEventListener('click', deleteOpsSession);
-  $('#ops-clear').addEventListener('click', clearOpsSession);
-  $('#ops-rename').addEventListener('click', renameOpsSession);
-  $('#ops-file').addEventListener('change', async (e) => {
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
-    if (opsState.attachments.length + files.length > 6) { toast('每条消息最多 6 个附件', true); e.target.value = ''; return; }
-    for (const file of files) {
-      try { opsState.attachments.push(await readOpsAttachment(file)); }
-      catch (err) { toast(err.message, true); }
-    }
-    e.target.value = '';
-    renderOpsAttachments();
-  });
+  $('#ait-clear').addEventListener('click', () => { if (aiTerm.term) aiTerm.term.clear(); });
+  $('#ait-close').addEventListener('click', disconnect);
 }
 
 /* ----------------------------- 扩展 / 数据库 ----------------------------- */
@@ -4353,7 +4104,7 @@ const loaders = {
   'docker-volumes': loadDocker, 'docker-networks': loadDocker, 'docker-compose': loadDocker,
   proxy: loadProxy,
   dbgate: loadExtExtras, backups: loadExtExtras,
-  ai: loadAI, 'ai-list': loadAI, 'ai-test': loadAI, ops: loadOps,
+  ai: loadAI, 'ai-list': loadAI, 'ai-test': loadAI, ops: loadAITerminal,
   environment: loadEnvironment, envcfg: loadEnvConfig,
   users: loadUsers,
 };
@@ -5493,17 +5244,11 @@ $('#newfile-form').addEventListener('submit', async (e) => {
     toast('文件已创建'); e.target.reset(); loadStorage();
   } catch (err) { toast(err.message, true); }
 });
-// v0.4.7：以当前目录为上下文新建 AI 运维会话。
-$('#ol-ai-session').addEventListener('click', async () => {
-  const path = currentStoragePath;
-  try {
-    const s = await api('/ai/sessions', { method: 'POST', body: { title: `文件 · ${path === '/' ? '根目录' : path}` } });
-    switchView('ops');
-    // openModuleTab 会异步触发 loadOps，等它初始化后再选中新建的会话。
-    await new Promise((r) => setTimeout(r, 80));
-    await loadOpsSessions(s.id);
-    toast(`已新建会话，上下文目录：${path}`);
-  } catch (e) { toast(e.message, true); }
+// v0.4.8：切到 AI 终端（DeepSeek Harness）。新终端以工作区为上下文，
+// 当前目录可在对话中直接引用。
+$('#ol-ai-session').addEventListener('click', () => {
+  switchView('ops');
+  toast(`已打开 AI 终端，可在对话中引用目录：${currentStoragePath}`);
 });
 $('#upload-input').addEventListener('change', (e) => uploadFiles(e.target.files));
 $('#ol-conn-new').addEventListener('click', () => fillOpenlistConnectionForm(null));
@@ -5746,9 +5491,6 @@ $('#chat-form').addEventListener('submit', async (e) => {
     $('#chat-result').textContent = `[${d.provider} / ${d.model}]\n${d.answer}`;
   } catch (err) { $('#chat-result').textContent = `失败：${err.message}`; toast(err.message, true); }
 });
-
-/* AI 运维对话的 submit / 新建 / 删除 / 附件等交互统一在 loadOps() 中绑定。
-   旧的单轮 #ops-answer / #ops-trace 界面已移除。 */
 
 /* ------------------- v0.3.6 · Docker 分区交互增强 ------------------- */
 const DK_TPL = {

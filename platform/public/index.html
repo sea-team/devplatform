@@ -1257,66 +1257,28 @@
           </div>
         </section>
 
-        <!-- AI 运维 · 对话模式（会话留存 / 文件图片输入 / 工具调用轨迹） -->
+        <!-- AI 终端（v0.4.8）：用 xterm.js 交互式运行 DeepSeek Harness -->
         <section class="page" id="view-ops">
-          <div class="ops-layout">
-            <!-- 左：会话列表 -->
-            <div class="card ops-side">
-              <div class="card-head">
-                <h2>会话</h2>
-                <button class="btn btn-primary btn-sm" type="button" id="ops-new">＋ 新建</button>
-              </div>
-              <div class="hint">会话自动保存，可随时恢复继续，或手动删除。</div>
-              <div id="ops-session-list" class="ops-sessions"></div>
+          <div class="ws-panel ai-term-panel">
+            <div class="ws-head">
+              <h2><span class="tab-ico">✦</span>AI 终端 · DeepSeek Harness</h2>
+              <span class="muted" id="ait-status">未连接</span>
             </div>
-
-            <!-- 右：对话主区 -->
-            <div class="card ops-main">
-              <div class="ops-head">
-                <div class="ops-head-title">
-                  <h2 id="ops-chat-title">AI 运维</h2>
-                  <span class="muted small" id="ops-chat-sub">选择一个会话，或新建会话开始对话</span>
+            <div class="ws-body">
+              <div class="term-toolbar">
+                <label class="muted small">AI 服务</label>
+                <select id="ait-provider" title="选择平台已配置的 AI 服务（API 类型）"></select>
+                <div class="row gap">
+                  <button class="btn btn-sm btn-primary" type="button" id="ait-connect">连接 / 新会话</button>
+                  <button class="btn btn-sm" type="button" id="ait-interrupt" title="中断当前任务 (Ctrl+C)">中断</button>
+                  <button class="btn btn-sm" type="button" id="ait-clear" title="清屏">清屏</button>
+                  <button class="btn btn-sm btn-danger" type="button" id="ait-close" title="断开会话">断开</button>
                 </div>
-                <div class="ops-head-tools">
-                  <select id="ops-provider" title="AI 服务"></select>
-                  <div class="ops-scope-wrap">
-                    <button class="btn btn-sm" type="button" id="ops-server-btn" title="选择本次会话要诊断 / 巡检的服务器">🖥 服务器：全部</button>
-                    <div class="ops-scope-panel" id="ops-server-panel" hidden>
-                      <div class="ops-scope-head">
-                        <strong>诊断 / 巡检范围</strong>
-                        <button class="btn btn-ghost btn-sm" type="button" id="ops-scope-all">全部</button>
-                        <button class="btn btn-ghost btn-sm" type="button" id="ops-scope-none">清空</button>
-                      </div>
-                      <div id="ops-server-list" class="ops-scope-list"></div>
-                      <div class="hint">全部 / 多台 / 单台均可；一台都不选时 AI 只分析构建记录。</div>
-                      <div class="form-actions"><button class="btn btn-primary btn-sm" type="button" id="ops-scope-apply">应用范围</button></div>
-                    </div>
-                  </div>
-                  <label class="check" title="允许 AI 触发部署"><input type="checkbox" id="ops-write" /> 写授权</label>
-                  <button class="btn btn-sm" type="button" id="ops-rename" title="重命名会话">重命名</button>
-                  <button class="btn btn-sm" type="button" id="ops-clear" title="清空当前会话消息">清空</button>
-                  <button class="btn btn-sm btn-danger" type="button" id="ops-delete" title="删除当前会话">删除</button>
-                </div>
+                <span class="muted small">命令行式交互：输入问题回车发送；思考与工具调用实时显示；上下文在同一会话内自动续接</span>
               </div>
-
-              <div id="ops-messages" class="ops-messages">
-                <div class="empty">还没有消息，输入问题或附加日志 / 截图开始分析</div>
-              </div>
-
-              <form id="ops-form" class="ops-compose">
-                <div id="ops-attachments" class="ops-attach" hidden></div>
-                <div class="ops-input-wrap">
-                  <textarea id="ops-prompt" rows="2" placeholder="检查所有服务器负载，找出最近失败的构建并分析原因…（Ctrl/⌘ + Enter 发送）"></textarea>
-                  <div class="ops-ghost" id="ops-ghost" hidden aria-hidden="true"></div>
-                </div>
-                <div class="ops-compose-bar">
-                  <label class="file-btn btn-sm" title="附加图片或文本文件">📎 附加文件 / 图片<input type="file" id="ops-file" multiple accept="image/*,.txt,.log,.json,.yaml,.yml,.md,.xml,.csv,.js,.ts,.py,.sh,.conf,.ini,.env,.sql,.html,.css" /></label>
-                  <span class="muted small" id="ops-hint">默认只读：状态查询、日志、白名单诊断命令</span>
-                  <span class="ops-spacer"></span>
-                  <span class="muted small" id="ops-status"></span>
-                  <button class="btn btn-primary" type="submit" id="ops-send">发送</button>
-                </div>
-              </form>
+              <div id="ait-notice" class="notice" hidden></div>
+              <div class="term-wrap" id="ait-term-wrap"></div>
+              <div class="term-hint">由 DeepSeek Harness 驱动 · 模型与密钥取自「AI 服务配置」· 容器内独立 Node 24 运行时</div>
             </div>
           </div>
         </section>

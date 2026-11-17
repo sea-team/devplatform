@@ -2924,3 +2924,33 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 - 回归：`npm run check`、前端自检（+4 护栏、缓存戳 `20261116a`）、`smoke-auth` 42/42、`api-audit` 319 请求 0×500（3 项「问题」为代理透传 OpenList 原始 manifest / 通配字面量测试的预期行为）；`build.mjs --bundle-only` 已同步 `dist`。
 - **状态**：本节改动在本地工作区，尚未提交；GitHub 推送 / tag / Release 待决定。
 
+
+## §47 AI 终端：DeepSeek Harness 驱动（v0.4.8）
+
+### 47.1 改造内容
+
+原「AI 运维」对话页（多轮气泡 + 附件 + 工具轨迹）**替换为 xterm.js 交互式 AI 终端**，底层由 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）驱动，交互形态接近命令行 coding agent：
+
+- 侧栏「AI 运维」入口更名为「AI 终端」，指向同一 `view-ops` 页面（新终端 UI）。
+- 终端支持：输入一行回车发送、思考与工具调用实时回显、`Ctrl+C` 中断、清屏、断开；同一会话内通过 dsh `--session-id` 自动续接上下文。
+- 模型与密钥**复用平台「AI 服务配置」**：终端选中一个已启用的 API 类型服务，后端把其 `baseURL` / `model` / `apiKey` 实时渲染成 dsh 的 `cordis.patch.yml`（自定义 OpenAI-compatible provider），无需在 dsh 侧重复配置。
+
+### 47.2 运行时架构（重要）
+
+`dsh` 要求 **Node >= 24.9**，而平台本体运行在 `node:20-alpine` 容器、宿主（10.0.0.246）为 Debian 9 / glibc 2.24，两者都无法直接跑 node24 的 glibc 版。采用的方案：
+
+- 在 246 上准备独立运行时目录 `/data/dsh-runtime`：内含 **node24 musl 静态二进制**与全局安装的 `@deepseek-ai/dsh`。musl 版不依赖宿主 glibc；已验证在 `node:20-alpine` 容器内可正常运行（`v24.22.3`）。
+- 平台容器无 docker CLI、但有 `/var/run/docker.sock`。`dshTerminal.js` 通过 Docker Engine API（`dockerApi.js`，unix socket）**按需创建一次性容器**：`node:20-alpine` + 挂载 `/data/dsh-runtime`（只读）+ 会话目录，以 `--entrypoint` 直接跑 node24 的 dsh headless；任务结束自动删除容器。
+- 输出为 dsh 的 NDJSON 事件流（session / status / final），后端做多路复用流 demux 后经 SSE 推给 xterm；reasoning 走 stderr。
+- 终端会话按 `ownerId` 隔离，与 SSH 终端同款权限模型；空闲 15 分钟回收。
+
+### 47.3 前置条件（使用必读）
+
+1. **先在「AI 服务配置」页添加一个 API 类型的服务并启用**（如 DeepSeek：Base URL `https://api.deepseek.com/v1`、模型 `deepseek-chat`、API Key）。未配置时终端页会给出明确提示，不会发起空请求。
+2. **246 上需存在 `/data/dsh-runtime`**（node24 + dsh）。部署脚本会在收尾阶段确保该目录就绪；若缺失，AI 终端会报"无法启动容器"类错误，可按 §47.2 手动准备或重新部署。
+3. 该能力依赖 246 的 Docker（已挂载 docker.sock）；无 Docker 的部署形态下 AI 终端不可用，原「AI 服务配置 / 连通性测试」仍可正常使用。
+
+### 47.4 验证
+
+- 技术链路逐环验证：node24 musl 在 alpine 容器内 `v24.22.3` 运行 OK；`dsh headless --json` 事件流格式确认；`cordis.patch.yml` 注入自定义 provider 生效（错误来自自定义 baseURL）；自定义 session-id 首次需省略（已按此实现）；Engine API create/start/attach demux 流式拿到全部事件并正常删除容器。
+- 自检：`npm run check`（含 `dshTerminal.js`）、前端自检 103 项全通过。

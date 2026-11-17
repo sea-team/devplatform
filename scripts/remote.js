@@ -397,6 +397,55 @@ async function bootstrapRemote(host, server, token = '') {
   }
 }
 
+// v0.4.8：AI 终端依赖的 dsh 运行时（node24 + @deepseek-ai/dsh）。
+// 平台本体是 node:20 容器、宿主 glibc 2.24，直接跑 node24 glibc 版会失败；
+// 用 node24 musl 静态二进制在 node:20-alpine 容器里执行，装到持久卷 /data/dsh-runtime。
+const DSH_RUNTIME_DIR = '/data/dsh-runtime';
+const DSH_NODE_VERSION = 'v24.22.3';
+const DSH_SETUP_SCRIPT = `#!/bin/bash
+set -u
+RUNTIME=${DSH_RUNTIME_DIR}
+NODE_VERSION=${DSH_NODE_VERSION}
+if [ -x "$RUNTIME/node/bin/node" ] && [ -e "$RUNTIME/bin/dsh" ]; then
+  echo "DSH_RUNTIME_READY"
+  exit 0
+fi
+echo "▶ 准备 dsh 运行时（node $NODE_VERSION + @deepseek-ai/dsh）..."
+mkdir -p "$RUNTIME"
+cd /tmp
+if [ ! -f node24.tar.xz ]; then
+  curl -fsSL -o node24.tar.xz "https://nodejs.org/dist/$NODE_VERSION/node-$NODE_VERSION-linux-x64-musl.tar.xz" || {
+    echo "DSH_SETUP_FAIL: 下载 node24 失败"; exit 1; }
+fi
+mkdir -p "$RUNTIME/node"
+tar -xJf node24.tar.xz -C "$RUNTIME/node" --strip-components=1
+# 用 alpine 容器把 dsh 全局装到持久卷（宿主 glibc 太老，不能直接在宿主跑 node24）
+docker run --rm -v "$RUNTIME:/opt/dsh" node:20-alpine sh -c '
+  export HOME=/opt/dsh/home
+  mkdir -p $HOME
+  cd /opt/dsh
+  npm i -g @deepseek-ai/dsh@latest --prefix /opt/dsh 2>&1 | tail -6
+' || { echo "DSH_SETUP_FAIL: 安装 dsh 失败"; exit 1; }
+if [ -e "$RUNTIME/bin/dsh" ]; then echo "DSH_RUNTIME_OK"; else echo "DSH_SETUP_FAIL: dsh 未就位"; exit 1; }
+`;
+
+async function ensureDshRuntime(server) {
+  try {
+    const localTmp = path.join(os.tmpdir(), 'dp_dsh_setup.sh');
+    const remotePath = '/tmp/dp_dsh_setup.sh';
+    fs.writeFileSync(localTmp, DSH_SETUP_SCRIPT.replace(/\r\n/g, '\n'), { encoding: 'utf8', mode: 0o700 });
+    await sftpPut(server, localTmp, remotePath);
+    const result = await run(server, `chmod +x ${remotePath} && bash ${remotePath}`, 600000, '准备 AI 终端运行时');
+    const out = result.stdout || '';
+    if (/DSH_SETUP_FAIL/.test(out)) console.log('⚠ AI 终端运行时准备失败（不影响平台主体）：' + out.trim().split('\n').slice(-2).join(' '));
+    else if (/DSH_RUNTIME_READY/.test(out)) console.log('✔ AI 终端运行时已就绪（复用现有）');
+    else if (/DSH_RUNTIME_OK/.test(out)) console.log('✔ AI 终端运行时已安装（node24 + dsh）');
+    else console.log('ℹ AI 终端运行时准备返回：' + out.trim().split('\n').slice(-1)[0]);
+  } catch (e) {
+    console.log(`⚠ AI 终端运行时准备跳过（不影响平台主体）：${e.message}`);
+  }
+}
+
 async function cmdDeploy(host, rawTarget = '/data/platform') {
   const target = normalizeTarget(rawTarget);
   const server = loadServer(host);
@@ -446,6 +495,9 @@ async function cmdDeploy(host, rawTarget = '/data/platform') {
     await run(server, `docker logs --tail 30 ${SERVICE_NAME} 2>&1 | tail -30`, 30000, '容器日志');
     throw new Error('远端健康检查未通过，详见上方容器日志');
   }
+
+  // v0.4.8：AI 终端依赖的 dsh 运行时（Docker 环境才需要；无 Docker 时跳过）。
+  if (hasDocker) await ensureDshRuntime(server);
 
   await bootstrapRemote(host, server, adminToken);
 

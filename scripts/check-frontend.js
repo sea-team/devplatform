@@ -22,6 +22,7 @@ const serverSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src
 const coreSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'core.js'), 'utf8');
 const engineSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'engine.js'), 'utf8');
 const sessionsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'aiSessions.js'), 'utf8');
+const dshSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'dshTerminal.js'), 'utf8');
 const miniSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'mini.js'), 'utf8');
 const remoteSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'remoteOps.js'), 'utf8');
 const openlistSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'openlist.js'), 'utf8');
@@ -338,21 +339,23 @@ note(['id="view-ai"', 'id="view-ai-list"', 'id="view-ai-test"'].every((s) => htm
   && app.includes("switchView('ai-list')"),
 'AI 服务配置拆成「配置 / 已配置服务 / 连通性测试」三个独立子页并共享 subnav');
 
-// 2) AI 运维对话模式：会话留存 + 文件图片 + 工具轨迹。
-note(['id="ops-session-list"', 'id="ops-messages"', 'id="ops-attachments"', 'id="ops-file"',
-  'id="ops-new"', 'id="ops-delete"', 'id="ops-clear"', 'id="ops-rename"']
+// 2) AI 终端（v0.4.8）：xterm.js 交互式运行 DeepSeek Harness，替换旧对话模式。
+note(['id="view-ops"', 'id="ait-provider"', 'id="ait-connect"', 'id="ait-interrupt"',
+  'id="ait-clear"', 'id="ait-close"', 'id="ait-term-wrap"', 'id="ait-status"']
   .every((s) => html.includes(s))
-  && ['function loadOpsSessions', 'function openOpsSession', 'function sendOpsMessage',
-    'function readOpsAttachment', 'function compressOpsImage', 'function opsMessageHtml',
-    "api('/ai/sessions'", '/ai/sessions/${encodeURIComponent'].every((s) => app.includes(s)),
-'AI 运维对话 UI：会话列表 / 消息气泡 / 附件预览 / 新建删除清空重命名均已接线');
-note(app.includes('ops-trace') && app.includes('工具调用轨迹')
-  && sessionsSrc.includes('trace: Array.isArray(result.trace)')
-  && coreSrc.includes('aiSessions: []')
-  && sessionsSrc.includes('ownerId: user.id')
-  && serverSrc.includes("app.delete('/api/ai/sessions/:id'")
-  && serverSrc.includes("app.post('/api/ai/sessions/:id/clear'"),
-'会话按 ownerId 隔离持久化、保留工具调用轨迹、支持删除与清空');
+  && ['function loadAITerminal', 'new Terminal(', 'new EventSource(', '/ai/terminal/open',
+    '/ai/terminal/input', '/ai/terminal/stream', '/ai/terminal/interrupt', '/ai/terminal/close']
+    .every((s) => app.includes(s)),
+'AI 终端 UI：xterm.js + SSE 输出 + POST 输入 + 连接/中断/清屏/断开均已接线');
+note(dshSrc.includes("app.post") === false
+  && ['function openSession', 'function attachStream', 'function submit', 'function interrupt',
+    'function close', 'function active', 'cordis.patch.yml', '--session-id', 'agent-default-model',
+    'canUse(session, user)', 'function renderPatch']
+    .every((s) => dshSrc.includes(s))
+  && ['/api/ai/terminal/open', '/api/ai/terminal/stream', '/api/ai/terminal/input',
+    '/api/ai/terminal/interrupt', '/api/ai/terminal/close', '/api/ai/terminal/active']
+    .every((s) => serverSrc.includes(s)),
+'AI 终端后端：dsh headless 会话按 ownerId 隔离、patch 注入 AI 服务、session-id 续接、路由齐全');
 note(['image_url', 'function buildUserContent', 'function buildPrompt', 'function historyTurns',
   'visionFallback', 'text-fallback'].every((s) => engineSrc.includes(s))
   && miniSrc.includes('route.options.bodyLimit')
@@ -380,18 +383,16 @@ note(html.includes('id="confirm-modal"') && html.includes('id="confirm-ok"')
   && html.includes('id="prompt-modal"') && html.includes('id="prompt-input"')
   && css.includes('.modal-panel.confirm-panel') && css.includes('.prompt-field')
   && app.includes('function confirmDialog') && app.includes('function promptDialog')
-  && app.includes('await confirmDialog({') && (app.match(/await promptDialog\(/g) || []).length >= 11
+  && app.includes('await confirmDialog({') && (app.match(/await promptDialog\(/g) || []).length >= 10
   && !/\b(confirm|prompt|alert)\(/.test(appCode),
 '平台统一确认 / 输入弹窗已接线，原生 confirm / prompt / alert 全部替换');
 
-// 2) AI：编辑取消 / 输入框 Tab 建议 / 会话服务器范围（诊断 · 巡检 · 运维）。
-note(html.includes('id="provider-cancel"') && html.includes('id="ops-ghost"')
-  && html.includes('id="ops-server-panel"') && html.includes('id="ops-scope-apply"')
-  && app.includes('function acceptOpsSuggestion') && app.includes('function renderOpsGhost')
-  && app.includes('function applyOpsScope') && app.includes('serverScope')
-  && engineSrc.includes('extractSuggestion') && engineSrc.includes('scopedServers')
-  && sessionsSrc.includes('normalizeScope'),
-'AI 服务编辑取消 / 输入框 Tab 填入建议 / 会话服务器范围（全部·多台·单台）已接线');
+// 2) AI：编辑取消按钮保留；旧对话的 Tab 建议 / 服务器范围随对话页下线，改由 xterm 终端承接。
+note(html.includes('id="provider-cancel"')
+  && app.includes('function loadAITerminal') && app.includes('onData(')
+  && html.includes('DeepSeek Harness') && !html.includes('id="ops-ghost"')
+  && !html.includes('id="ops-server-panel"'),
+'AI 服务编辑取消保留；运维对话由 xterm AI 终端替换（旧对话 UI 已下线）');
 
 // 3) 构建记录批量删除、驱动清单空态不再误报平台账号权限。
 note(serverSrc.includes("app.delete('/api/builds'") && html.includes('id="build-select-all"')

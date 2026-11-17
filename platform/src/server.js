@@ -34,6 +34,7 @@ const fileTypes = require('./fileTypes');
 const auth = require('./auth');
 const permissions = require('./permissions');
 const aiSessions = require('./aiSessions');
+const dshTerminal = require('./dshTerminal');
 
 // 面板里保存过的 OpenList 连接优先于 .env（不改文件、重启后仍然生效）。
 openlist.applyConfig();
@@ -1384,6 +1385,37 @@ app.post('/api/ai/sessions/:id/clear', wrap(async (req, res) => ok(res, aiSessio
 app.post('/api/ai/sessions/:id/messages', wrap(async (req, res) => {
   ok(res, await aiSessions.send(req.user, req.params.id, req.body || {}));
 }), { bodyLimit: 20 * 1024 * 1024 });
+
+/* ------------------- AI 终端（DeepSeek Harness REPL） --------------------- */
+// 用 xterm.js 交互式跑 dsh headless；SSE 推输出，POST 提交输入/中断。
+// dsh 运行在独立 node24 容器；provider 配置实时取自平台「AI 服务」。
+
+app.post('/api/ai/terminal/open', wrap(async (req, res) => {
+  ok(res, await dshTerminal.openSession(state(), String(req.body?.providerId || ''), req.user));
+}));
+
+app.get('/api/ai/terminal/stream', (req, res) => {
+  dshTerminal.attachStream(String(req.query.sid || ''), req, res);
+});
+
+app.post('/api/ai/terminal/input', wrap(async (req, res) => {
+  requireBody(req.body, ['sid', 'input']);
+  ok(res, dshTerminal.submit(state(), String(req.body.sid), String(req.body.input), req.user));
+}));
+
+app.post('/api/ai/terminal/interrupt', wrap(async (req, res) => {
+  requireBody(req.body, ['sid']);
+  ok(res, dshTerminal.interrupt(String(req.body.sid), req.user));
+}));
+
+app.post('/api/ai/terminal/close', wrap(async (req, res) => {
+  requireBody(req.body, ['sid']);
+  ok(res, dshTerminal.close(String(req.body.sid), req.user));
+}));
+
+app.get('/api/ai/terminal/active', (req, res) => ok(res, {
+  items: dshTerminal.active(req.user),
+}));
 
 /* ----------------------- 扩展 / 数据库（manifest v1） ----------------------- */
 // 三类运行形态统一由这一组接口管理：
