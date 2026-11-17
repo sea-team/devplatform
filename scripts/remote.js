@@ -331,6 +331,9 @@ async function startInContainer(server, target, host) {
     // 平台通过 docker.sock 直接调 Docker Engine API 做隔离构建，不需要宿主机 docker CLI。
     '-v /var/run/docker.sock:/var/run/docker.sock',
     '-e PORT=9000 -e DATA_DIR=/app/data -e WORKSPACE_DIR=/workspace',
+    // v0.4.8：dsh 终端通过宿主机 Docker daemon 创建一次性容器并 bind mount 会话目录，
+    // 需把容器内 /app/data 换算成宿主机真实路径，否则 patch 落在宿主机空目录里不生效。
+    `-e HOST_DATA_DIR=${target}/data`,
     // v0.3.4：把「平台跑在这个镜像的容器里」作为环境事实告诉平台，
     // 环境适配中心据此生成指纹、自动推导档案，换机器时无需手工改配置。
     `-e DP_RUNTIME_KIND=container -e DP_RUNTIME_IMAGE=${image}`,

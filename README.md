@@ -2954,3 +2954,13 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 
 - 技术链路逐环验证：node24 musl 在 alpine 容器内 `v24.22.3` 运行 OK；`dsh headless --json` 事件流格式确认；`cordis.patch.yml` 注入自定义 provider 生效（错误来自自定义 baseURL）；自定义 session-id 首次需省略（已按此实现）；Engine API create/start/attach demux 流式拿到全部事件并正常删除容器。
 - 自检：`npm run check`（含 `dshTerminal.js`）、前端自检 103 项全通过。
+
+### 47.5 v0.4.9 修复：会话目录挂载路径映射
+
+问题：v0.4.8 端到端实测时，dsh 仍走默认 `deepseek-official` 路由并报 `no API key`。根因是**路径视角不一致**——平台进程跑在容器内，把会话目录建在 `os.tmpdir()`（容器内 `/tmp`），再通过宿主机 Docker daemon 创建 dsh 容器并用该路径做 bind mount；宿主机 `/tmp` 下并无此目录，等于挂了个空目录，`cordis.patch.yml` 对 dsh 不可见，于是回退默认路由。之前在宿主机直接跑的探测脚本路径一致，故未暴露。
+
+修复：
+
+- 会话目录改到容器内已挂载到宿主机的 `data` 目录下（`<dataDir>/dsh-sessions/dp-dsh-<sid>`）。
+- 新增 `HOST_DATA_DIR` 配置（部署脚本注入 `<部署目录>/data`，与 `-v <部署目录>/data:/app/data` 对应），`dshTerminal.js` 的 `toHostPath()` 把容器内 dataDir 前缀换算成宿主机路径后，才用于 Engine API 的 `Binds`。本机模式未配置时容器路径即宿主机路径，行为不变。
+- 端到端实测：选中平台已配置的 AI 服务、提交问题，dsh 正常走自定义 baseURL 并返回答案；`deepseek-official no API key` 错误消失。

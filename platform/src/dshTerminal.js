@@ -13,11 +13,10 @@
  */
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const dockerApi = require('./dockerApi');
-const { HttpError } = require('./core');
+const { HttpError, config } = require('./core');
 
 // dsh 运行时配置（可用环境变量覆盖，便于非 246 环境/测试调整）
 const DSH_RUNTIME = process.env.DSH_RUNTIME_DIR || '/data/dsh-runtime';
@@ -25,6 +24,23 @@ const DSH_IMAGE = process.env.DSH_IMAGE || 'node:20-alpine';
 const SESSION_IDLE_MS = 15 * 60 * 1000;
 const MAX_SESSIONS = 30;
 const TASK_TIMEOUT_MS = 6 * 60 * 1000;
+
+/**
+ * 容器内路径 -> 宿主机路径。
+ * 平台本体跑在容器里，通过 docker.sock 让宿主机 Docker daemon 创建 dsh 容器，
+ * 因此 Binds 里的路径必须是宿主机视角，否则挂的是宿主机 /tmp 下的空目录，
+ * cordis.patch.yml 对 dsh 不可见，agent 会回退到默认 deepseek-official 路由。
+ * 本机模式未配置 HOST_DATA_DIR 时，容器路径 == 宿主机路径，原样返回。
+ */
+function toHostPath(containerPath) {
+  const dataDir = String(config.dataDir || '').replace(/\/+$/, '');
+  const hostDataDir = String(config.hostDataDir || '').replace(/\/+$/, '');
+  const p = String(containerPath || '');
+  if (hostDataDir && dataDir && (p === dataDir || p.startsWith(dataDir + '/'))) {
+    return hostDataDir + p.slice(dataDir.length);
+  }
+  return p;
+}
 
 const sessions = new Map();
 function now() { return Date.now(); }
@@ -66,6 +82,12 @@ function closeSession(session, reason = '') {
   for (const res of session.subscribers) { try { res.end(); } catch { /* noop */ } }
   session.subscribers.clear();
   sessions.delete(session.sid);
+  // 会话目录含 patch 与 dsh 会话数据，关闭后清理，避免长期堆积在 data 下。
+  // 延迟一点给容器删除让出时间，失败则忽略（下次部署/重启也能重生）。
+  const dir = session.dir;
+  if (dir && /[\\/]dsh-sessions[\\/]dp-dsh-/.test(dir)) {
+    setTimeout(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ } }, 1500).unref?.();
+  }
 }
 
 async function abortCurrent(session) {
@@ -177,8 +199,8 @@ async function runTask(session, task, patch) {
       ],
       HostConfig: {
         Binds: [
-          `${DSH_RUNTIME}:/opt/dsh:ro`,
-          `${session.dir}:/session`,
+          `${toHostPath(DSH_RUNTIME)}:/opt/dsh:ro`,
+          `${toHostPath(session.dir)}:/session`,
         ],
         AutoRemove: false,
       },
@@ -271,7 +293,9 @@ async function openSession(state, providerId, user) {
   }
   const provider = pickProvider(state, providerId);
   const sid = crypto.randomBytes(10).toString('hex');
-  const dir = path.join(os.tmpdir(), `dp-dsh-${sid}`);
+  // 会话目录必须放在「容器内已挂载到宿主机」的 data 目录下，
+  // 这样它既能被平台进程写入，也能以宿主机路径 bind mount 给 dsh 容器。
+  const dir = path.join(String(config.dataDir || ''), 'dsh-sessions', `dp-dsh-${sid}`);
   fs.mkdirSync(path.join(dir, 'home', '.dsh'), { recursive: true });
   const session = {
     sid, dir,

@@ -39,6 +39,10 @@ const config = {
   port: Number(env('PORT', '9000')),
   publicDir: PUBLIC_DIR,
   dataDir: DATA_DIR,
+  // 平台跑在容器里时，dataDir 是容器内路径（如 /app/data），通过 docker.sock 让
+  // 宿主机 Docker daemon 创建 dsh 构建/终端容器时要把挂载路径换算成宿主机视角。
+  // 未配置时（本机模式）容器路径 == 宿主机路径，映射函数原样返回。
+  hostDataDir: env('HOST_DATA_DIR'),
   // 账号体系：.env 里的机器令牌仍作为管理员应急通道。
   adminToken: env('ADMIN_TOKEN'),
   // 默认值必须是「本机 / 源码直跑 / 单文件 exe」可解析的地址。
