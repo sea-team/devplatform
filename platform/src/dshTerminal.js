@@ -184,9 +184,10 @@ async function runTask(session, task, patch) {
   const sessionArg = session.dshSessionId ? ` --session-id '${String(session.dshSessionId).replace(/'/g, '')}'` : '';
   const shellCmd = `echo '${taskB64}' | base64 -d | /opt/dsh/node/bin/node /opt/dsh/bin/dsh headless --json${sessionArg} -`;
 
-  let finalText = '';
-  let errored = false;
-  let lastErr = '';
+    let finalText = '';
+    let sawText = false; // 是否已收到 text 增量（收到则 final 不再重复输出全文）
+    let errored = false;
+    let lastErr = '';
 
   try {
     const spec = {
@@ -234,6 +235,13 @@ async function runTask(session, task, patch) {
           session.dshSessionId = ev.sessionId;
         } else if (ev.type === 'status' && ev.phase === 'turn_start') {
           sysLine(session, `\r\n\x1b[36m▸ 第 ${ev.turn} 轮\x1b[0m`);
+        } else if (ev.type === 'text' || ev.type === 'reasoning') {
+          // dsh 的 text/reasoning 增量实时回显，final 到达后不再重复输出全文。
+          const piece = String(ev.text || '');
+          if (piece) {
+            sawText = sawText || ev.type === 'text';
+            frame(session, piece);
+          }
         } else if (ev.type === 'final') {
           finalText = String(ev.text || '');
           if (ev.reason && ev.reason.kind === 'error') {
@@ -241,7 +249,8 @@ async function runTask(session, task, patch) {
             const msg = (ev.reason.error && ev.reason.error.message) || '未知错误';
             lastErr = msg;
             sysLine(session, `\r\n\x1b[31m✖ ${msg}\x1b[0m`);
-          } else if (finalText) {
+          } else if (finalText && !sawText) {
+            // 没有 text 增量的兜底：直接输出 final 全文。
             frame(session, `\r\n${finalText}\r\n`);
           }
         }
