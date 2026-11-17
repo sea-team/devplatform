@@ -179,15 +179,18 @@ async function runTask(session, task, patch) {
   session.current = cur;
   const sid = crypto.randomBytes(6).toString('hex');
   const containerName = `dp-dsh-${sid}`;
-  const taskB64 = Buffer.from(task.endsWith('\n') ? task : task + '\n', 'utf8').toString('base64');
-  // dsh 入口是 ESM；用 node 直接执行。task 通过 base64|base64 -d 管道送入 stdin。
+  const taskB64 = Buffer.from(task, 'utf8').toString('base64');
+  // dsh 入口是 ESM；用 node 直接执行。
+  // 关键：task 必须作为「位置参数」传入，不能走 stdin 管道。实测 stdin 快速 EOF 会让
+  // dsh 的多步 agent 在写 session 日志时报 "flush on a closed handle"，拿不到 final/text。
+  // 用 base64 解码到变量再以 "$TASK" 单参数传递，规避任务文本里的引号/换行转义问题。
   const sessionArg = session.dshSessionId ? ` --session-id '${String(session.dshSessionId).replace(/'/g, '')}'` : '';
-  const shellCmd = `echo '${taskB64}' | base64 -d | /opt/dsh/node/bin/node /opt/dsh/bin/dsh headless --json${sessionArg} -`;
+  const shellCmd = `TASK=$(echo '${taskB64}' | base64 -d) && /opt/dsh/node/bin/node /opt/dsh/bin/dsh headless --json${sessionArg} "$TASK"`;
 
-    let finalText = '';
-    let sawText = false; // 是否已收到 text 增量（收到则 final 不再重复输出全文）
-    let errored = false;
-    let lastErr = '';
+  let finalText = '';
+  let sawText = false; // 是否已收到 text 增量（收到则 final 不再重复输出全文）
+  let errored = false;
+  let lastErr = '';
 
   try {
     const spec = {
