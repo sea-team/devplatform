@@ -2966,3 +2966,4 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 - 端到端实测：选中平台已配置的 AI 服务、提交问题，dsh 正常走自定义 baseURL 并返回答案；`deepseek-official no API key` 错误消失。
 - 新增 dsh `text` / `reasoning` 增量的实时回显：模型流式输出时逐段显示在终端，`final` 到达后不重复全文；兜底仍兼容只有 `final.text` 的模型。
 - 用本地 mock OpenAI 流式网关完整验证了链路：patch 注入生效（请求携带自定义模型）、`session → turn_start → step_start → text(PONG) → step_end → turn_end(completed) → final(text=PONG)` 全套事件正常、后端可正确解析并回显。平台配置的两个上游网关（cli-proxy / deepseek 代理）当前响应超时，属模型服务自身可用性问题，与终端代码无关。
+- task 传递方式：由 stdin 管道改为「base64 解码到变量 + 位置参数」。实测 stdin 快速 EOF 会让 dsh 多步 agent 在写 session 日志时报 `flush on a closed handle`，导致 `text`/`final` 事件丢失；改位置参数后用 Docker API create/start/attach + 8 字节帧 demux 复刻验证，`text(PONG-OK)` 与 `final(completed, text=PONG-OK)` 均完整产出。
