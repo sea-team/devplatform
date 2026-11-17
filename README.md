@@ -2967,3 +2967,33 @@ code-server 登录页提示「Please log in below. Password was set from $PASSWO
 - 新增 dsh `text` / `reasoning` 增量的实时回显：模型流式输出时逐段显示在终端，`final` 到达后不重复全文；兜底仍兼容只有 `final.text` 的模型。
 - 用本地 mock OpenAI 流式网关完整验证了链路：patch 注入生效（请求携带自定义模型）、`session → turn_start → step_start → text(PONG) → step_end → turn_end(completed) → final(text=PONG)` 全套事件正常、后端可正确解析并回显。平台配置的两个上游网关（cli-proxy / deepseek 代理）当前响应超时，属模型服务自身可用性问题，与终端代码无关。
 - task 传递方式：由 stdin 管道改为「base64 解码到变量 + 位置参数」。实测 stdin 快速 EOF 会让 dsh 多步 agent 在写 session 日志时报 `flush on a closed handle`，导致 `text`/`final` 事件丢失；改位置参数后用 Docker API create/start/attach + 8 字节帧 demux 复刻验证，`text(PONG-OK)` 与 `final(completed, text=PONG-OK)` 均完整产出。
+
+---
+
+## §48 AI 会话 + AI 运维两页并存（v0.4.10）
+
+v0.4.8 把「AI 运维」对话页整体替换成了 xterm 终端，误删了已实现的会话管理、服务器范围、写授权、文件/图片附件、Tab 建议、工具轨迹等功能。v0.4.10 纠正这一做法：**只新增一种 AI 对话方式，不删除任何已实现功能**，两页并存。
+
+### 48.1 两页职责
+
+- **AI 运维**（`view-ops`）：原样恢复 v0.4.7 的全部功能，底层仍是 `aiSessions` + `engine.js opsAgent`——先采集平台上下文（服务器状态 / 构建记录 / 日志）再提问。会话管理 / 服务器范围（全部·多台·单台）/ 写授权 / 图片文本附件 / 回复建议 Tab 填入 / 工具调用轨迹全部保留。侧栏入口不变。
+- **AI 会话**（`view-aichat`，新）：DeepSeek Harness 驱动的会话式界面，布局仿主流 AI 助手——左侧会话列表 + 工作区，主区「对话 / 轨迹」tab、用户气泡居右、AI 回答居左带模型名、模型选择、发送框（可附加文件/图片）、底部轮/步统计。OpenList 文件浏览的「✦ AI 会话」按钮改指此页，并以当前目录为上下文提示。
+
+### 48.2 AI 会话的会话式后端
+
+在 v0.4.8 的 dsh 网关上扩展**结构化事件通道**，与原有 xterm 字节流通道并存、互不干扰：
+
+- `dshTerminal.js`：新增 `attachEventStream` / `submitWithEvents` / `sessionInfo`，把 dsh 的 NDJSON 事件（`session` / `echo` / `status` / `text` / `reasoning` / `final` / `done`）原样经 SSE 推送。持久会话保留 `dsh-sessions` 目录与 `dshSessionId`，刷新后可用 `--session-id` 续接上下文。
+- `aiChat.js`（新）：会话落库到 `state.aiChats`，按 `ownerId` 隔离（与 `aiSessions` 同款、不参与资源协作）。`send()` 先落用户消息，调用 dsh 引擎并等待完成，再把完整文本 + 轨迹 + 统计写回助手消息；实时增量由前端订阅 SSE 获取，落库与展示分离，刷新/换设备后可恢复。
+- 会话目录用稳定名 `dp-dsh-chat-<chatId>`，删除/清空会话时关闭引擎并重置 `dshSessionId` 以彻底丢弃上下文。
+- 路由（`/api/ai/chats*`）：列表 / 新建 / 详情 / 改名 / 删除 / 清空 / `open`（建或续接引擎并返回 `engineSid`）/ `stream`（结构化 SSE，置于 `:id` 之前避免路由抢占）/ `send` / `interrupt`。
+- 运行时完全复用 §47 的成果：`/data/dsh-runtime`（node24 musl + dsh）、Docker Engine API 起一次性容器、`cordis.patch.yml` 注入平台 AI 服务、会话目录路径映射 `HOST_DATA_DIR`、task 位置参数传递——均未改动，零回归。
+
+### 48.3 前置条件
+
+与 §47.3 相同：需先在「AI 服务配置」页添加并启用一个 **API 类型**服务，且 246 上 `/data/dsh-runtime` 就绪（部署脚本自动确保）。两个入口独立：想诊断平台服务器/构建用「AI 运维」，想让 dsh 在工作区读写文件、多步执行用「AI 会话」。
+
+### 48.4 验证
+
+- 自检：`npm run check`（含 `aiChat.js` / `dshTerminal.js`）、前端自检 104 项全通过，0 失败。
+- 双页 DOM/JS/CSS/路由断言齐全：AI 运维 6 项能力、AI 会话气泡 + 轨迹 + 统计 + SSE 均已接线。

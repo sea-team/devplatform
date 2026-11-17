@@ -142,6 +142,8 @@ function defaultState() {
     sessions: [],
     // AI 运维对话会话（v0.4.3）：按 ownerId 隔离，独立于登录会话 sessions。
     aiSessions: [],
+    // AI 会话（v0.4.10）：DeepSeek Harness 驱动的会话式对话，含 text / trace 结构化事件。
+    aiChats: [],
     servers: [],
     aiProviders: [],
     builds: [],
@@ -202,6 +204,7 @@ function loadState() {
       users: Array.isArray(parsed.users) ? parsed.users : [],
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
       aiSessions: Array.isArray(parsed.aiSessions) ? parsed.aiSessions : [],
+      aiChats: Array.isArray(parsed.aiChats) ? parsed.aiChats : [],
       repoMeta: (parsed.repoMeta && typeof parsed.repoMeta === 'object' && !Array.isArray(parsed.repoMeta)) ? parsed.repoMeta : {},
       openlistMountOwners: (parsed.openlistMountOwners && typeof parsed.openlistMountOwners === 'object' && !Array.isArray(parsed.openlistMountOwners)) ? parsed.openlistMountOwners : {},
       hiddenRepos: Array.isArray(parsed.hiddenRepos) ? parsed.hiddenRepos : [],

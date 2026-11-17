@@ -34,6 +34,7 @@ const fileTypes = require('./fileTypes');
 const auth = require('./auth');
 const permissions = require('./permissions');
 const aiSessions = require('./aiSessions');
+const aiChatStore = require('./aiChat');
 const dshTerminal = require('./dshTerminal');
 
 // 面板里保存过的 OpenList 连接优先于 .env（不改文件、重启后仍然生效）。
@@ -1415,6 +1416,41 @@ app.post('/api/ai/terminal/close', wrap(async (req, res) => {
 
 app.get('/api/ai/terminal/active', (req, res) => ok(res, {
   items: dshTerminal.active(req.user),
+}));
+
+/* ------------------- AI 会话（DeepSeek Harness 会话式，v0.4.10） -------------- */
+// 与 AI 运维两页并存：这里由 dsh 在工作区多步执行，text / 轨迹结构化回显。
+// 会话归属由 aiChat 模块逐入口校验（不在 OWNED_COLLECTIONS 中）。
+
+app.get('/api/ai/chats', wrap(async (req, res) => ok(res, { items: aiChatStore.list(req.user) })));
+
+app.post('/api/ai/chats', wrap(async (req, res) => ok(res, aiChatStore.create(req.user, req.body || {}))));
+
+// 结构化事件流放在 :id 之前，避免 'stream' 被当作会话 id。
+app.get('/api/ai/chats/stream', (req, res) => {
+  dshTerminal.attachEventStream(String(req.query.sid || ''), req, res);
+});
+
+app.get('/api/ai/chats/:id', wrap(async (req, res) => ok(res, aiChatStore.detail(req.user, req.params.id))));
+
+app.put('/api/ai/chats/:id', wrap(async (req, res) => ok(res, aiChatStore.modify(req.user, req.params.id, req.body || {}))));
+
+app.delete('/api/ai/chats/:id', wrap(async (req, res) => ok(res, aiChatStore.remove(req.user, req.params.id))));
+
+app.post('/api/ai/chats/:id/clear', wrap(async (req, res) => ok(res, aiChatStore.clearMessages(req.user, req.params.id))));
+
+// 打开 / 续接会话引擎，返回 engineSid 供前端订阅结构化事件流。
+app.post('/api/ai/chats/:id/open', wrap(async (req, res) => {
+  ok(res, await aiChatStore.open(state(), req.user, req.params.id, String(req.body?.providerId || '')));
+}));
+
+// 发送消息：同步落库并等待 dsh 完成，增量文本由上面的 stream 实时推送。
+app.post('/api/ai/chats/:id/send', wrap(async (req, res) => {
+  ok(res, await aiChatStore.send(state(), req.user, req.params.id, req.body || {}));
+}));
+
+app.post('/api/ai/chats/:id/interrupt', wrap(async (req, res) => {
+  ok(res, await aiChatStore.interrupt(req.user, req.params.id));
 }));
 
 /* ----------------------- 扩展 / 数据库（manifest v1） ----------------------- */

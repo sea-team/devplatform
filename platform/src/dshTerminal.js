@@ -69,6 +69,23 @@ function frame(session, payload) {
 }
 function sysLine(session, text) { frame(session, `${text}\r\n`); }
 
+/**
+ * 结构化事件通道（v0.4.10）：把 dsh 的 NDJSON 事件原样推给「AI 会话」页，
+ * 与上面的字节流通道并存，互不干扰。终端模式不订阅事件通道时仅轻量缓冲。
+ */
+function emitEvent(session, ev) {
+  if (!session.eventSubscribers || !session.eventSubscribers.size) {
+    if (!session.eventPending) session.eventPending = [];
+    session.eventPending.push(JSON.stringify(ev));
+    if (session.eventPending.length > 2000) session.eventPending.splice(0, session.eventPending.length - 2000);
+    return;
+  }
+  const data = `data: ${JSON.stringify(ev)}\n\n`;
+  for (const res of session.eventSubscribers) {
+    try { res.write(data); } catch { session.eventSubscribers.delete(res); }
+  }
+}
+
 function closeSession(session, reason = '') {
   if (session.closed) return;
   session.closed = true;
@@ -81,11 +98,13 @@ function closeSession(session, reason = '') {
   }
   for (const res of session.subscribers) { try { res.end(); } catch { /* noop */ } }
   session.subscribers.clear();
+  for (const res of (session.eventSubscribers || [])) { try { res.end(); } catch { /* noop */ } }
+  if (session.eventSubscribers) session.eventSubscribers.clear();
   sessions.delete(session.sid);
-  // 会话目录含 patch 与 dsh 会话数据，关闭后清理，避免长期堆积在 data 下。
-  // 延迟一点给容器删除让出时间，失败则忽略（下次部署/重启也能重生）。
+  // 会话目录含 patch 与 dsh 会话数据。持久会话（AI 会话页）需保留目录以便
+  // 用 dshSessionId 续接上下文；仅一次性终端会话在关闭后清理，避免堆积。
   const dir = session.dir;
-  if (dir && /[\\/]dsh-sessions[\\/]dp-dsh-/.test(dir)) {
+  if (!session.persistent && dir && /[\\/]dsh-sessions[\\/]dp-dsh-/.test(dir)) {
     setTimeout(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ } }, 1500).unref?.();
   }
 }
@@ -191,6 +210,8 @@ async function runTask(session, task, patch) {
   let sawText = false; // 是否已收到 text 增量（收到则 final 不再重复输出全文）
   let errored = false;
   let lastErr = '';
+  const trace = [];        // 结构化轨迹：status / reasoning 事件（AI 会话页"轨迹"tab）
+  const textParts = [];    // text 增量累积，供 aiChat 落库完整回答
 
   try {
     const spec = {
@@ -234,15 +255,19 @@ async function runTask(session, task, patch) {
         if (!raw) continue;
         let ev;
         try { ev = JSON.parse(raw); } catch { frame(session, raw + '\r\n'); continue; }
+        // 结构化事件通道：所有 NDJSON 事件原样转发给「AI 会话」页。
+        emitEvent(session, ev);
         if (ev.type === 'session' && ev.sessionId) {
           session.dshSessionId = ev.sessionId;
-        } else if (ev.type === 'status' && ev.phase === 'turn_start') {
-          sysLine(session, `\r\n\x1b[36m▸ 第 ${ev.turn} 轮\x1b[0m`);
+        } else if (ev.type === 'status') {
+          trace.push({ phase: ev.phase, turn: ev.turn, step: ev.step, at: ev.at || '' });
+          if (ev.phase === 'turn_start') sysLine(session, `\r\n\x1b[36m▸ 第 ${ev.turn} 轮\x1b[0m`);
         } else if (ev.type === 'text' || ev.type === 'reasoning') {
           // dsh 的 text/reasoning 增量实时回显，final 到达后不再重复输出全文。
           const piece = String(ev.text || '');
           if (piece) {
-            sawText = sawText || ev.type === 'text';
+            if (ev.type === 'text') { sawText = true; textParts.push(piece); }
+            else trace.push({ phase: 'reasoning', text: piece.slice(0, 400) });
             frame(session, piece);
           }
         } else if (ev.type === 'final') {
@@ -291,41 +316,66 @@ async function runTask(session, task, patch) {
   } finally {
     cur.done = true;
     session.current = null;
+    // 落库快照：文本全文 + 轨迹 + 错误，供 aiChat 在任务完成后写回会话消息。
+    session.lastResult = {
+      text: textParts.join('') || finalText,
+      trace: trace.slice(-200),
+      errored,
+      error: lastErr || '',
+      dshSessionId: session.dshSessionId || '',
+    };
   }
   return cur.killed ? 'killed' : (!errored ? 'done' : 'error');
 }
 
 /* ------------------------------ 会话 API -------------------------------- */
 
-async function openSession(state, providerId, user) {
+async function openSession(state, providerId, user, options = {}) {
   if (sessions.size >= MAX_SESSIONS) {
     for (const s of Array.from(sessions.values())) {
-      if (!s.subscribers.size && now() - s.lastActive > SESSION_IDLE_MS) closeSession(s, '会话回收');
+      if (!s.persistent && !s.subscribers.size && now() - s.lastActive > SESSION_IDLE_MS) closeSession(s, '会话回收');
     }
   }
   const provider = pickProvider(state, providerId);
-  const sid = crypto.randomBytes(10).toString('hex');
+  // options.existingSid：复用已有引擎会话（AI 会话页刷新后重连）；否则新建。
+  const sid = String(options.existingSid || '') || crypto.randomBytes(10).toString('hex');
+  if (sessions.has(sid)) {
+    const existing = sessions.get(sid);
+    if (!existing.closed) return {
+      sid, provider: { id: existing.providerId, name: existing.providerName, model: existing.model },
+      greeting: '', reused: true,
+    };
+  }
   // 会话目录必须放在「容器内已挂载到宿主机」的 data 目录下，
   // 这样它既能被平台进程写入，也能以宿主机路径 bind mount 给 dsh 容器。
-  const dir = path.join(String(config.dataDir || ''), 'dsh-sessions', `dp-dsh-${sid}`);
+  // persistent 会话用稳定目录名，便于刷新后沿用 dshSessionId 续接上下文。
+  const dirName = options.persistent && options.chatId
+    ? `dp-dsh-chat-${String(options.chatId).replace(/[^a-zA-Z0-9_-]/g, '')}`
+    : `dp-dsh-${sid}`;
+  const dir = path.join(String(config.dataDir || ''), 'dsh-sessions', dirName);
   fs.mkdirSync(path.join(dir, 'home', '.dsh'), { recursive: true });
   const session = {
     sid, dir,
-    dshSessionId: null, // 首次由 dsh 生成，见 runTask 对 session 事件的处理
+    persistent: Boolean(options.persistent),
+    chatId: String(options.chatId || ''),
+    dshSessionId: String(options.dshSessionId || '') || null, // 持久会话传入以续接；终端会话首次由 dsh 生成
     providerId: provider.id,
     providerName: provider.name,
     model: provider.model,
     ownerId: (user && user.id) || '',
     subscribers: new Set(), pending: [], closed: false,
+    eventSubscribers: new Set(), eventPending: [],
     lastActive: now(), timer: null, current: null, busy: false,
     turns: 0,
   };
   sessions.set(sid, session);
-  session.timer = setInterval(() => {
-    if (now() - session.lastActive > SESSION_IDLE_MS && !session.subscribers.size) {
-      closeSession(session, '会话空闲超时');
-    }
-  }, 30000);
+  if (!session.persistent) {
+    session.timer = setInterval(() => {
+      if (now() - session.lastActive > SESSION_IDLE_MS && !session.subscribers.size && !session.eventSubscribers.size) {
+        closeSession(session, '会话空闲超时');
+      }
+    }, 30000);
+  }
 
   return {
     sid,
@@ -415,4 +465,91 @@ function active(user) {
       turns: s.turns, lastActive: new Date(s.lastActive).toISOString() }));
 }
 
-module.exports = { openSession, attachStream, submit, interrupt, close, active };
+/* ------------------- AI 会话（结构化事件通道，v0.4.10） ------------------- */
+
+/**
+ * 订阅会话的结构化事件流（NDJSON 原文：session/status/text/reasoning/final）。
+ * 与 attachStream 的字节流并存；两者可同时订阅同一会话。
+ */
+function attachEventStream(sid, req, res) {
+  const session = sessions.get(String(sid || ''));
+  const writeClosed = (reason) => {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      'connection': 'keep-alive', 'x-accel-buffering': 'no',
+    });
+    res.write(`event: closed\ndata: ${JSON.stringify({ reason })}\n\n`);
+    res.end();
+  };
+  if (!session || session.closed) return writeClosed('会话不存在或已关闭');
+  if (!canUse(session, req && req.user)) {
+    res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(JSON.stringify({ ok: false, error: '无权订阅该 AI 会话', status: 403 }));
+    return;
+  }
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache, no-transform',
+    'connection': 'keep-alive', 'x-accel-buffering': 'no',
+  });
+  res.write(': connected\n\n');
+  for (const f of session.eventPending) res.write(`data: ${f}\n\n`);
+  session.eventPending = [];
+  session.eventSubscribers.add(res);
+  session.lastActive = now();
+  const hb = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* noop */ } }, 20000);
+  const cleanup = () => { clearInterval(hb); session.eventSubscribers.delete(res); };
+  req.on('close', cleanup);
+  res.on('close', cleanup);
+}
+
+/** 读取会话当前引擎信息（供 aiChat 持久化 dshSessionId / 统计）。 */
+function sessionInfo(sid, user) {
+  const session = owned(sid, user);
+  return {
+    sid: session.sid,
+    dshSessionId: session.dshSessionId || '',
+    turns: session.turns,
+    busy: session.busy,
+    providerId: session.providerId,
+    model: session.model,
+    persistent: Boolean(session.persistent),
+    lastResult: session.lastResult || null,
+  };
+}
+
+/**
+ * 提交任务并推进会话状态；返回 { accepted, promise }。
+ * promise 在任务结束后 resolve 为会话最新信息（含新生成的 dshSessionId）。
+ * 结构化事件通过事件通道实时推送，这里额外发一个 echo 事件标识用户本轮输入。
+ */
+function submitWithEvents(state, sid, input, user) {
+  const session = owned(sid, user);
+  const task = String(input || '').trim();
+  if (!task) return { accepted: false, reason: 'empty' };
+  if (session.busy) return { accepted: false, reason: 'busy' };
+  let patch;
+  try {
+    patch = renderPatch(session.dir, pickProvider(state, session.providerId));
+  } catch (e) {
+    emitEvent(session, { type: 'final', text: '', reason: { kind: 'error', error: { message: e.message || String(e) } } });
+    return { accepted: false, reason: 'config' };
+  }
+  session.busy = true;
+  session.turns += 1;
+  session.lastActive = now();
+  emitEvent(session, { type: 'echo', text: task, turn: session.turns });
+  const promise = runTask(session, task, patch).then((status) => {
+    session.busy = false;
+    session.lastActive = now();
+    emitEvent(session, { type: 'done', status, turns: session.turns });
+    return { status, ...sessionInfo(sid, user) };
+  });
+  return { accepted: true, promise };
+}
+
+module.exports = {
+  openSession, attachStream, submit, interrupt, close, active,
+  attachEventStream, sessionInfo, submitWithEvents,
+};

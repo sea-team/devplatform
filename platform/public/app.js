@@ -34,7 +34,8 @@ const VIEW_META = {
   ai: ['配置 AI 服务', 'API 服务、宿主机 / WSL 本地 AI 程序与代理'],
   'ai-list': ['已配置服务', '查看、编辑、删除已保存的 AI 服务'],
   'ai-test': ['连通性测试', '向已保存的服务发起真实请求验证可用性'],
-  ops: ['AI 终端', 'DeepSeek Harness 驱动的命令行式 AI 助手，工具调用实时可见'],
+  ops: ['AI 运维', '多轮对话式运维助手，支持文件 / 图片与会话留存'],
+  aichat: ['AI 会话', 'DeepSeek Harness 驱动的会话式助手，对话与工具轨迹一目了然'],
   users: ['账号管理', '管理员新增账号、调整角色、禁用与重置密码'],
 };
 const MODULE_ICONS = {
@@ -44,7 +45,7 @@ const MODULE_ICONS = {
   servers: '▣', 'server-new': '＋', extensions: '▦', gitsrc: '⑃',
   docker: '⬡', 'docker-containers': '▣', 'docker-images': '◫', 'docker-volumes': '⛁',
   'docker-networks': '⌘', 'docker-compose': '▦',
-  proxy: '⇄', environment: '⌬', envcfg: '⚙', ai: '✦', 'ai-list': '☷', 'ai-test': '⇆', ops: '◎',
+  proxy: '⇄', environment: '⌬', envcfg: '⚙', ai: '✦', 'ai-list': '☷', 'ai-test': '⇆', ops: '◎', aichat: '✧',
   users: '♙',
 };
 // 子页面归属：侧边栏主项保持高亮，标签栏仍显示各自的子页标题。
@@ -3382,158 +3383,763 @@ async function loadAI() {
   } catch (e) { if ($('#provider-list')) $('#provider-list').innerHTML = errorBlock(e.message); }
 }
 
-/* --------------------- AI 终端（DeepSeek Harness） ----------------------- */
-// xterm.js 交互式 REPL：SSE 收输出、POST 送输入，复用 SSH 终端的终端组件。
-const aiTerm = { sid: null, term: null, fit: null, source: null, resizeHandler: null, bound: false, busy: false };
+const opsState = {
+  sessions: [], currentId: '', attachments: [], sending: false, bound: false,
+  suggestion: '',           // AI 回复给出的下一步提示词，Tab 可填入输入框
+  serverScope: 'all',       // 'all' | 服务器 id 数组（多台 / 单台 / 空）
+  servers: [],
+};
 
-function aiTermWrite(text) {
-  if (aiTerm.term) { try { aiTerm.term.write(text); } catch { /* noop */ } }
+/* ---------- v0.4.4：会话服务器范围 + 输入框 ghost-text 建议 ---------- */
+const OPS_PROMPT_PLACEHOLDER = '检查所有服务器负载，找出最近失败的构建并分析原因…（Ctrl/⌘ + Enter 发送）';
+
+function opsScopeLabel(scope) {
+  if (!Array.isArray(scope)) return '服务器：全部';
+  if (!scope.length) return '服务器：不选';
+  return `服务器：${scope.length} 台`;
 }
 
-function aiTermStatus(text, cls = '') {
-  const el = $('#ait-status');
-  if (!el) return;
-  el.textContent = text;
-  el.className = cls || 'muted';
+function renderOpsScope() {
+  const btn = $('#ops-server-btn');
+  if (btn) btn.textContent = `🖥 ${opsScopeLabel(opsState.serverScope)}`;
+  const boxes = $$('#ops-server-list input[type="checkbox"]');
+  const scope = opsState.serverScope;
+  boxes.forEach((b) => { b.checked = !Array.isArray(scope) || scope.includes(b.value); });
 }
 
-function aiTermNotice(text, isError = false) {
-  const el = $('#ait-notice');
-  if (!el) return;
-  if (!text) { el.hidden = true; el.textContent = ''; return; }
-  el.hidden = false;
-  el.className = isError ? 'notice error' : 'notice';
-  el.innerHTML = text;
+function renderOpsServerList() {
+  const box = $('#ops-server-list');
+  if (!box) return;
+  box.innerHTML = opsState.servers.length ? opsState.servers.map((s) => `
+    <label class="check ops-scope-item" title="${esc(s.host || '')}">
+      <input type="checkbox" value="${esc(s.id)}" /> ${esc(s.name || s.host || s.id)}
+    </label>`).join('') : '<div class="empty">还没有登记服务器，默认按「全部」处理</div>';
+  renderOpsScope();
 }
 
-async function loadAITerminal() {
-  // 填 AI 服务下拉（只列 API 类型）
-  let items = [];
-  try {
-    const r = await api('/ai/providers');
-    items = (r.items || []).filter((p) => p.kind !== 'cli' && p.enabled !== false);
-  } catch (e) { toast(e.message, true); }
-  const sel = $('#ait-provider');
-  if (sel) {
-    const prev = sel.value;
-    sel.innerHTML = items.length
-      ? items.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} · ${esc(p.model || '')}</option>`).join('')
-      : '<option value="">（无可用 AI 服务）</option>';
-    if (prev && items.some((p) => p.id === prev)) sel.value = prev;
+async function applyOpsScope(scope) {
+  opsState.serverScope = Array.isArray(scope) ? scope.slice() : 'all';
+  renderOpsScope();
+  const panel = $('#ops-server-panel');
+  if (panel) panel.hidden = true;
+  if (opsState.currentId) {
+    try {
+      await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}`, {
+        method: 'PUT', body: { serverScope: opsState.serverScope },
+      });
+    } catch (e) { toast(e.message, true); }
   }
-  if (!items.length) {
-    aiTermNotice('尚未配置可用的 AI 服务。请先在「AI 服务配置」页添加一个 <b>API 类型</b>的服务（填写 Base URL、模型与 API Key）后重试。', true);
-    aiTermStatus('未连接');
+  toast(`范围已更新：${opsScopeLabel(opsState.serverScope)}`);
+}
+
+function renderOpsGhost() {
+  const ghost = $('#ops-ghost');
+  const input = $('#ops-prompt');
+  if (!ghost || !input) return;
+  const show = Boolean(opsState.suggestion) && !input.value;
+  ghost.hidden = !show;
+  input.placeholder = show ? '' : OPS_PROMPT_PLACEHOLDER;
+  if (show) {
+    ghost.innerHTML = `${esc(opsState.suggestion)}<span class="ops-ghost-tag">Tab 填入 · Esc 忽略</span>`;
+  }
+}
+
+function acceptOpsSuggestion() {
+  const input = $('#ops-prompt');
+  if (!input || !opsState.suggestion || input.value) return false;
+  input.value = opsState.suggestion;
+  opsState.suggestion = '';
+  renderOpsGhost();
+  input.focus();
+  return true;
+}
+
+function opsStatus(text) { const el = $('#ops-status'); if (el) el.textContent = text || ''; }
+
+/* 附件读取：图片转 dataURL、文本转纯文本；过大文件直接拒绝。 */
+function readOpsAttachment(file) {
+  return new Promise((resolve, reject) => {
+    const name = file.name || 'file';
+    const mime = file.type || '';
+    const isImage = /^image\//.test(mime) || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
+    if (file.size > 3 * 1024 * 1024) return reject(new Error(`「${name}」超过 3MB，请压缩后再附加`));
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`读取「${name}」失败`));
+    if (isImage) {
+      reader.onload = () => compressOpsImage(String(reader.result), mime)
+        .then((data) => resolve({ name, mime: mime || 'image/png', size: file.size, kind: 'image', data }))
+        .catch(reject);
+      reader.readAsDataURL(file);
+    } else {
+      reader.onload = () => resolve({
+        name, mime: mime || 'text/plain', size: file.size, kind: 'text',
+        data: String(reader.result || '').slice(0, 200000),
+      });
+      reader.readAsText(file);
+    }
+  });
+}
+
+/* 图片等比压缩到最长边 1600px、JPEG 0.82，避免 base64 撑爆请求体与 state.json。 */
+function compressOpsImage(dataUrl, mime) {
+  return new Promise((resolve) => {
+    if (/svg/i.test(mime)) return resolve(dataUrl);   // SVG 直接透传
+    const img = new Image();
+    img.onerror = () => resolve(dataUrl);
+    img.onload = () => {
+      try {
+        const max = 1600;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        const out = canvas.toDataURL('image/jpeg', 0.82);
+        resolve(out.length < dataUrl.length ? out : dataUrl);
+      } catch { resolve(dataUrl); }
+    };
+    img.src = dataUrl;
+  });
+}
+
+function renderOpsAttachments() {
+  const box = $('#ops-attachments');
+  if (!box) return;
+  box.hidden = !opsState.attachments.length;
+  box.innerHTML = opsState.attachments.map((a, i) => `
+    <div class="ops-attach-item">
+      ${a.kind === 'image' && /^data:image\//.test(a.data)
+        ? `<img src="${esc(a.data)}" alt="${esc(a.name)}" class="ops-attach-thumb" />`
+        : '<span class="ops-attach-ico">▤</span>'}
+      <span class="ops-attach-name" title="${esc(a.name)}">${esc(a.name)}</span>
+      <button class="btn btn-ghost btn-sm" type="button" data-ops-attach-del="${i}" title="移除">✕</button>
+    </div>`).join('');
+  box.querySelectorAll('[data-ops-attach-del]').forEach((b) => b.addEventListener('click', () => {
+    opsState.attachments.splice(Number(b.dataset.opsAttachDel), 1);
+    renderOpsAttachments();
+  }));
+}
+
+function opsMessageHtml(m) {
+  const mine = m.role === 'user';
+  const attachments = (m.attachments || []).map((a) => {
+    if (a.kind === 'image' && a.data && /^data:image\//.test(a.data)) {
+      return `<a href="${esc(a.data)}" target="_blank" rel="noopener" class="ops-msg-image"><img src="${esc(a.data)}" alt="${esc(a.name)}" /></a>`;
+    }
+    return `<div class="ops-msg-file"><span>▤</span><span>${esc(a.name)}</span><span class="muted small">${esc(fmtSize(a.size || 0))}</span></div>`;
+  }).join('');
+
+  let trace = '';
+  if (m.role === 'assistant' && Array.isArray(m.trace) && m.trace.length) {
+    trace = `<details class="ops-trace"><summary>工具调用轨迹 · ${m.trace.length} 步</summary>
+      <pre class="log">${esc(JSON.stringify(m.trace, null, 2))}</pre></details>`;
+  }
+  const meta = m.role === 'assistant'
+    ? `<div class="ops-msg-meta muted small">${esc(fmtTime(m.at))}${m.provider ? ' · ' + esc(m.provider) : ''}${m.model ? ' · ' + esc(m.model) : ''}${m.attachmentMode === 'text-fallback' ? ' · 图片已降级为文字' : ''}${m.mode === 'context-injection' ? ' · 上下文注入模式' : ''}</div>`
+    : `<div class="ops-msg-meta muted small">${esc(fmtTime(m.at))}</div>`;
+  const body = m.error
+    ? `<div class="ops-msg-error">失败：${esc(m.error)}</div>`
+    : `<div class="ops-msg-text">${esc(m.content || '(空)')}</div>`;
+  return `<div class="ops-msg ${mine ? 'mine' : 'ai'}">
+    <div class="ops-msg-avatar">${mine ? '我' : 'AI'}</div>
+    <div class="ops-msg-body">
+      ${attachments ? `<div class="ops-msg-attachments">${attachments}</div>` : ''}
+      ${body}${trace}${meta}
+    </div>
+  </div>`;
+}
+
+function renderOpsMessages(messages, scroll = true) {
+  const box = $('#ops-messages');
+  if (!box) return;
+  box.innerHTML = messages && messages.length
+    ? messages.map(opsMessageHtml).join('')
+    : '<div class="empty">还没有消息，输入问题或附加日志 / 截图开始分析</div>';
+  if (scroll) box.scrollTop = box.scrollHeight;
+}
+
+function renderOpsSessions() {
+  const box = $('#ops-session-list');
+  if (!box) return;
+  box.innerHTML = opsState.sessions.length ? opsState.sessions.map((s) => `
+    <div class="ops-session ${s.id === opsState.currentId ? 'active' : ''}" data-ops-session="${esc(s.id)}">
+      <div class="ops-session-title">${esc(s.title || '新会话')}</div>
+      <div class="ops-session-meta muted small">${esc(fmtTime(s.updatedAt))} · ${s.messageCount || 0} 条</div>
+    </div>`).join('') : '<div class="empty">还没有会话，点「＋ 新建」开始</div>';
+  box.querySelectorAll('[data-ops-session]').forEach((b) => b.addEventListener('click', () => openOpsSession(b.dataset.opsSession)));
+}
+
+async function loadOpsSessions(preferId = '') {
+  try {
+    const d = await api('/ai/sessions');
+    opsState.sessions = d.items || [];
+    const wanted = preferId || opsState.currentId;
+    if (wanted && opsState.sessions.some((s) => s.id === wanted)) {
+      if (wanted === opsState.currentId) { renderOpsSessions(); return; }
+      return openOpsSession(wanted);
+    }
+    if (opsState.sessions.length) return openOpsSession(opsState.sessions[0].id);
+    opsState.currentId = '';
+    renderOpsSessions();
+    renderOpsMessages([]);
+    const t = $('#ops-chat-title'); if (t) t.textContent = 'AI 运维';
+    const sub = $('#ops-chat-sub'); if (sub) sub.textContent = '点「＋ 新建」开始一段新对话';
+  } catch (e) { toast(e.message, true); }
+}
+
+async function openOpsSession(id) {
+  try {
+    const s = await api(`/ai/sessions/${encodeURIComponent(id)}`);
+    opsState.currentId = s.id;
+    opsState.attachments = [];
+    renderOpsAttachments();
+    const t = $('#ops-chat-title'); if (t) t.textContent = s.title || '新会话';
+    const sub = $('#ops-chat-sub'); if (sub) sub.textContent = s.messageCount ? `${s.messageCount} 条消息 · 会话已留存，可继续对话` : '新会话';
+    const prov = $('#ops-provider'); if (prov && s.providerId) prov.value = s.providerId;
+    const w = $('#ops-write'); if (w) w.checked = Boolean(s.allowWrite);
+    opsState.serverScope = Array.isArray(s.serverScope) ? s.serverScope : (s.serverScope || 'all');
+    renderOpsScope();
+    const last = [...(s.messages || [])].reverse().find((m) => m && m.role === 'assistant' && m.suggestion);
+    opsState.suggestion = last ? String(last.suggestion) : '';
+    renderOpsGhost();
+    renderOpsSessions();
+    renderOpsMessages(s.messages);
+  } catch (e) { toast(e.message, true); }
+}
+
+async function createOpsSession() {
+  try {
+    const s = await api('/ai/sessions', { method: 'POST', body: {
+      providerId: ($('#ops-provider') || {}).value || '',
+      allowWrite: Boolean(($('#ops-write') || {}).checked),
+      serverScope: opsState.serverScope,
+    } });
+    await loadOpsSessions(s.id);
+    toast('已新建会话');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function deleteOpsSession() {
+  if (!opsState.currentId) return;
+  if (!await confirmDialog({ message: '确认删除当前会话？其中的消息与附件将无法恢复。' })) return;
+  try {
+    await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}`, { method: 'DELETE' });
+    opsState.currentId = '';
+    toast('会话已删除');
+    await loadOpsSessions();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function clearOpsSession() {
+  if (!opsState.currentId) return;
+  if (!await confirmDialog({ message: '确认清空当前会话的全部消息？（会话本身保留）' })) return;
+  try {
+    const s = await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}/clear`, { method: 'POST' });
+    renderOpsMessages(s.messages);
+    const sub = $('#ops-chat-sub'); if (sub) sub.textContent = '消息已清空，可继续对话';
+    await loadOpsSessions(opsState.currentId);
+    toast('已清空消息');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function renameOpsSession() {
+  if (!opsState.currentId) return;
+  const title = await promptDialog('会话标题', ($('#ops-chat-title') || {}).textContent || '新会话');
+  if (!title || !title.trim()) return;
+  try {
+    await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}`, { method: 'PUT', body: { title: title.trim() } });
+    const t = $('#ops-chat-title'); if (t) t.textContent = title.trim();
+    await loadOpsSessions(opsState.currentId);
+    toast('已重命名');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function sendOpsMessage() {
+  if (opsState.sending) return;
+  const input = $('#ops-prompt');
+  const content = (input ? input.value : '').trim();
+  const attachments = opsState.attachments.slice();
+  if (!content && !attachments.length) { toast('请输入内容或附加文件', true); return; }
+  if (!opsState.currentId) {
+    try {
+      const s = await api('/ai/sessions', { method: 'POST', body: {
+        providerId: ($('#ops-provider') || {}).value || '',
+        allowWrite: Boolean(($('#ops-write') || {}).checked),
+        serverScope: opsState.serverScope,
+      } });
+      opsState.currentId = s.id;
+    } catch (e) { toast(e.message, true); return; }
+  }
+
+  opsState.sending = true;
+  const sendBtn = $('#ops-send');
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '分析中…'; }
+  if (input) input.value = '';
+  opsState.attachments = [];
+  opsState.suggestion = '';
+  renderOpsGhost();
+  renderOpsAttachments();
+  const box = $('#ops-messages');
+  if (box) {
+    if (box.querySelector('.empty')) box.innerHTML = '';
+    box.insertAdjacentHTML('beforeend', opsMessageHtml({ role: 'user', content, attachments, at: new Date().toISOString() }));
+    box.insertAdjacentHTML('beforeend', '<div class="ops-msg ai" id="ops-pending"><div class="ops-msg-avatar">AI</div><div class="ops-msg-body"><div class="ops-msg-text ops-typing">正在分析平台状态与日志…</div></div></div>');
+    box.scrollTop = box.scrollHeight;
+  }
+  opsStatus('AI 正在调用工具分析，可能需要几十秒');
+
+  try {
+    const d = await api(`/ai/sessions/${encodeURIComponent(opsState.currentId)}/messages`, {
+      method: 'POST',
+      body: {
+        content, attachments,
+        providerId: ($('#ops-provider') || {}).value || '',
+        allowWrite: Boolean(($('#ops-write') || {}).checked),
+        serverScope: opsState.serverScope,
+      },
+    });
+    const pending = $('#ops-pending');
+    if (pending) {
+      pending.outerHTML = opsMessageHtml(d.assistantMessage);
+    } else if (box) {
+      box.insertAdjacentHTML('beforeend', opsMessageHtml(d.assistantMessage));
+    }
+    if (box) box.scrollTop = box.scrollHeight;
+    if (d.assistantMessage && d.assistantMessage.error) toast(d.assistantMessage.error, true);
+    if (d.assistantMessage && d.assistantMessage.attachmentMode === 'text-fallback') {
+      toast('当前服务不支持图像识别，图片已降级为文字说明');
+    }
+    const sub = $('#ops-chat-sub'); if (sub) sub.textContent = '会话已留存，可继续追问或稍后恢复';
+    opsState.suggestion = String((d.assistantMessage && d.assistantMessage.suggestion) || '');
+    renderOpsGhost();
+    await loadOpsSessions(opsState.currentId);
+    opsStatus('');
+  } catch (e) {
+    const pending = $('#ops-pending');
+    if (pending) pending.outerHTML = opsMessageHtml({ role: 'assistant', content: '', error: e.message, at: new Date().toISOString() });
+    toast(e.message, true);
+    opsStatus('发送失败');
+  } finally {
+    opsState.sending = false;
+    if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = '发送'; }
+  }
+}
+
+async function loadOps() {
+  try {
+    const [tools, providers, servers] = await Promise.all([
+      api('/ai/tools'), api('/ai/providers'), api('/servers'),
+    ]);
+    const hint = $('#ops-hint');
+    if (hint) hint.textContent = `只读：${(tools.readCommands || []).join(' · ')}`;
+    fillProviderSelects(providers.items || []);
+    opsState.servers = servers.items || [];
+    renderOpsServerList();
+  } catch (e) { toast(e.message, true); }
+  await loadOpsSessions();
+
+  if (opsState.bound) return;
+  opsState.bound = true;
+  $('#ops-form').addEventListener('submit', (e) => { e.preventDefault(); sendOpsMessage(); });
+  const promptEl = $('#ops-prompt');
+  if (promptEl) {
+    promptEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab' && acceptOpsSuggestion()) { e.preventDefault(); }
+      else if (e.key === 'Escape' && opsState.suggestion) { opsState.suggestion = ''; renderOpsGhost(); }
+      else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendOpsMessage(); }
+    });
+    promptEl.addEventListener('input', renderOpsGhost);
+  }
+  $('#ops-server-btn').addEventListener('click', () => {
+    const panel = $('#ops-server-panel');
+    if (!panel) return;
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) renderOpsScope();
+  });
+  $('#ops-scope-all').addEventListener('click', () => applyOpsScope('all'));
+  $('#ops-scope-none').addEventListener('click', () => applyOpsScope([]));
+  $('#ops-scope-apply').addEventListener('click', () => {
+    const boxes = $$('#ops-server-list input[type="checkbox"]');
+    const checked = boxes.filter((b) => b.checked).map((b) => b.value);
+    applyOpsScope(boxes.length && checked.length === boxes.length ? 'all' : checked);
+  });
+  $('#ops-new').addEventListener('click', createOpsSession);
+  $('#ops-delete').addEventListener('click', deleteOpsSession);
+  $('#ops-clear').addEventListener('click', clearOpsSession);
+  $('#ops-rename').addEventListener('click', renameOpsSession);
+  $('#ops-file').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    if (opsState.attachments.length + files.length > 6) { toast('每条消息最多 6 个附件', true); e.target.value = ''; return; }
+    for (const file of files) {
+      try { opsState.attachments.push(await readOpsAttachment(file)); }
+      catch (err) { toast(err.message, true); }
+    }
+    e.target.value = '';
+    renderOpsAttachments();
+  });
+}
+
+/* ------------- AI 会话（DeepSeek Harness 会话式，v0.4.10） ---------------- */
+// 与「AI 运维」两页并存：运维页走 opsAgent 平台上下文；本页由 dsh 在工作区多步执行，
+// text / 轨迹结构化事件通过 SSE 实时回显，界面仿会话式助手（气泡 / tab / 统计）。
+
+const aiChatState = {
+  chats: [], currentId: '', engineSid: '', source: null,
+  sending: false, tab: 'chat', streamText: '', streamTrace: [],
+  stats: { turns: 0, steps: 0 }, attachments: [], bound: false,
+  lastDone: false,
+};
+
+function achStatus(text, busy = false) {
+  const el = $('#ach-status');
+  if (!el) return;
+  el.textContent = text || '';
+  const stop = $('#ach-stop');
+  if (stop) stop.hidden = !busy;
+  const send = $('#ach-send');
+  if (send) { send.disabled = busy; send.textContent = busy ? '生成中…' : '发送 ↑'; }
+}
+
+function achStatsText() {
+  const el = $('#ach-stats');
+  if (!el) return;
+  const s = aiChatState.stats || {};
+  el.textContent = `${s.turns || 0} 轮 · ${s.steps || 0} 步 · — tok/s · 上下文 —`;
+}
+
+function achMessageHtml(m) {
+  const mine = m && m.role === 'user';
+  const content = String((m && m.content) || '');
+  const attachments = ((m && m.attachments) || []).map((a) => (
+    a && a.kind === 'image' && a.data && /^data:image\//.test(a.data)
+      ? `<a href="${esc(a.data)}" target="_blank" rel="noopener" class="ops-msg-image"><img src="${esc(a.data)}" alt="${esc(a.name)}" /></a>`
+      : `<div class="ops-msg-file"><span>▤</span><span>${esc((a && a.name) || 'file')}</span></div>`
+  )).join('');
+  const err = m && m.error ? `<div class="ops-msg-error">失败：${esc(m.error)}</div>` : '';
+  const hasTrace = !mine && Array.isArray(m && m.trace) && m.trace.length;
+  const traceBtn = hasTrace ? `<button class="ach-msg-trace" type="button" data-ach-viewtrace="${esc(m.id || '')}" title="查看工具调用轨迹">轨迹 · ${m.trace.length} 步</button>` : '';
+  const meta = mine
+    ? `<div class="ops-msg-meta muted small">${esc(fmtTime(m.at))}</div>`
+    : `<div class="ops-msg-meta muted small">${esc(fmtTime(m.at))}${m.model ? ' · ' + esc(m.model) : ''}</div>`;
+  return `<div class="ops-msg ${mine ? 'mine' : 'ai'}">
+    <div class="ops-msg-avatar">${mine ? '我' : '✧'}</div>
+    <div class="ops-msg-body">
+      ${attachments ? `<div class="ops-msg-attachments">${attachments}</div>` : ''}
+      <div class="ops-msg-text ach-msg-text">${esc(content || (mine ? '' : '（无文本输出）'))}</div>
+      ${err}${traceBtn}${meta}
+    </div>
+  </div>`;
+}
+
+function achRenderMessages(messages, scroll = true) {
+  const box = $('#ach-msgs');
+  if (!box) return;
+  const list = Array.isArray(messages) ? messages : [];
+  box.innerHTML = list.length
+    ? list.map(achMessageHtml).join('')
+    : '<div class="empty">输入问题开始对话，DeepSeek Harness 会在工作区里分析并执行</div>';
+  box.querySelectorAll('[data-ach-viewtrace]').forEach((b) => b.addEventListener('click', () => achSwitchTab('trace')));
+  if (scroll) box.scrollTop = box.scrollHeight;
+}
+
+function achRenderTrace() {
+  const box = $('#ach-trace');
+  if (!box) return;
+  const events = aiChatState.streamTrace.slice();
+  if (!events.length) {
+    box.innerHTML = '<div class="empty">暂无轨迹。发送消息后可查看每一轮的工具调用与状态。</div>';
     return;
   }
-  aiTermNotice('');
+  box.innerHTML = events.map((ev) => {
+    const phase = String((ev && ev.phase) || (ev && ev.type) || 'event');
+    const detail = ev && ev.text ? String(ev.text).slice(0, 600) : JSON.stringify(ev || {});
+    return `<div class="ach-trace-row"><span class="badge">${esc(phase)}</span><pre class="log">${esc(detail)}</pre></div>`;
+  }).join('');
+}
 
-  if (aiTerm.bound) return;
-  aiTerm.bound = true;
+function achSwitchTab(tab) {
+  aiChatState.tab = tab;
+  $$('.aichat-tab').forEach((b) => b.classList.toggle('active', b.dataset.achTab === tab));
+  const msgs = $('#ach-msgs'); const trace = $('#ach-trace');
+  if (msgs) msgs.hidden = tab !== 'chat';
+  if (trace) { trace.hidden = tab !== 'trace'; if (tab === 'trace') achRenderTrace(); }
+}
 
-  const connect = async () => {
-    const providerId = sel ? sel.value : '';
-    if (!providerId) { toast('请先选择一个 AI 服务', true); return; }
-    // 断开旧会话
-    if (aiTerm.sid) {
-      api('/ai/terminal/close', { method: 'POST', body: { sid: aiTerm.sid } }).catch(() => {});
-      aiTerm.sid = null;
+function achRenderSessions() {
+  const box = $('#ach-sessions');
+  if (!box) return;
+  box.innerHTML = aiChatState.chats.length ? aiChatState.chats.map((s) => `
+    <div class="ops-session ${s.id === aiChatState.currentId ? 'active' : ''}" data-ach-session="${esc(s.id)}">
+      <div class="ops-session-title">${esc(s.title || '新会话')}</div>
+      <div class="ops-session-meta muted small">${esc(fmtTime(s.updatedAt))} · ${s.messageCount || 0} 条</div>
+    </div>`).join('') : '<div class="empty">还没有会话，点「＋ 新会话」开始</div>';
+  box.querySelectorAll('[data-ach-session]').forEach((b) => b.addEventListener('click', () => openAIChat(b.dataset.achSession)));
+}
+
+async function achLoadSessions(preferId = '') {
+  try {
+    const d = await api('/ai/chats');
+    aiChatState.chats = d.items || [];
+    const wanted = preferId || aiChatState.currentId;
+    if (wanted && aiChatState.chats.some((s) => s.id === wanted)) {
+      if (wanted === aiChatState.currentId) { achRenderSessions(); return; }
+      return openAIChat(wanted);
     }
-    if (aiTerm.source) { try { aiTerm.source.close(); } catch { /* noop */ } aiTerm.source = null; }
-    if (aiTerm.term) { try { aiTerm.term.dispose(); } catch { /* noop */ } aiTerm.term = null; }
-    aiTerm.busy = false;
-    try {
-      const s = await api('/ai/terminal/open', { method: 'POST', body: { providerId } });
-      aiTerm.sid = s.sid;
-      if (typeof Terminal === 'undefined') throw new Error('终端组件未加载：请确认 /vendor/xterm.min.js 已部署');
-      const wrap = $('#ait-term-wrap');
-      aiTerm.term = new Terminal({
-        cols: 100, rows: 26, cursorBlink: true, fontSize: 13, scrollback: 8000,
-        fontFamily: 'Consolas, "SF Mono", Menlo, monospace',
-        theme: { background: '#0f172a', foreground: '#e2e8f0', cursor: '#60a5fa', selectionBackground: '#1d4ed855' },
-      });
-      if (typeof FitAddon !== 'undefined' && FitAddon.FitAddon) {
-        aiTerm.fit = new FitAddon.FitAddon();
-        aiTerm.term.loadAddon(aiTerm.fit);
-      }
-      aiTerm.term.open(wrap);
-      try { aiTerm.fit && aiTerm.fit.fit(); } catch { /* noop */ }
-      aiTerm.term.writeln(s.greeting || '已连接 AI 终端');
-      aiTerm.term.focus();
+    if (aiChatState.chats.length) return openAIChat(aiChatState.chats[0].id);
+    aiChatState.currentId = ''; aiChatState.engineSid = '';
+    achRenderSessions(); achRenderMessages([]);
+    const t = $('#ach-title'); if (t) t.textContent = '新会话';
+    const sub = $('#ach-sub'); if (sub) sub.textContent = '点「＋ 新会话」开始对话';
+  } catch (e) { toast(e.message, true); }
+}
 
-      // 键盘输入 -> 后端。回车提交整行；Ctrl+C 走中断。
-      let lineBuf = '';
-      aiTerm.term.onData((data) => {
-        if (!aiTerm.sid) return;
-        if (data === '\r' || data === '\n') {
-          const line = lineBuf.trim();
-          lineBuf = '';
-          if (!line) { aiTermWrite('\r\n'); return; }
-          aiTermWrite('\r\n');
-          api('/ai/terminal/input', { method: 'POST', body: { sid: aiTerm.sid, input: line } })
-            .then((r) => { if (!r.accepted && r.reason === 'busy') toast('上一任务尚未完成，请稍候或先中断', true); })
-            .catch((err) => toast(err.message, true));
-          return;
-        }
-        if (data === '\u0003') { // Ctrl+C
-          lineBuf = '';
-          aiTermWrite('^C\r\n');
-          api('/ai/terminal/interrupt', { method: 'POST', body: { sid: aiTerm.sid } }).catch(() => {});
-          return;
-        }
-        if (data === '\u007f') { // Backspace
-          if (lineBuf.length) { lineBuf = lineBuf.slice(0, -1); aiTermWrite('\b \b'); }
-          return;
-        }
-        if (data >= ' ' && data !== '\t') { lineBuf += data; aiTermWrite(data); }
-      });
+function achCloseSource() {
+  if (aiChatState.source) { try { aiChatState.source.close(); } catch { /* noop */ } aiChatState.source = null; }
+}
 
-      // SSE 接收输出
-      aiTerm.source = new EventSource(`/api/ai/terminal/stream?sid=${encodeURIComponent(s.sid)}${streamToken()}`);
-      aiTerm.source.onmessage = (ev) => {
-        try {
-          const bin = atob(ev.data);
-          const bytes = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
-          aiTermWrite(bytes);
-        } catch { /* 忽略坏帧 */ }
-      };
-      aiTerm.source.addEventListener('closed', (ev) => {
-        let reason = '会话已关闭';
-        try { reason = JSON.parse(ev.data).reason || reason; } catch { /* noop */ }
-        aiTermWrite(`\r\n\x1b[90m[${reason}]\x1b[0m\r\n`);
-        aiTermStatus('已断开', 'muted');
-        aiTerm.sid = null;
-      });
-      aiTerm.source.onerror = () => { if (aiTerm.sid) aiTermStatus('连接中断', 'muted'); };
-      aiTermStatus(`已连接 · ${s.provider?.name || ''}`, 'chip-green');
+async function openAIChat(id, providerOverride = '') {
+  achCloseSource();
+  try {
+    const opened = await api(`/ai/chats/${encodeURIComponent(id)}/open`, {
+      method: 'POST', body: providerOverride ? { providerId: providerOverride } : {},
+    });
+    const detailData = await api(`/ai/chats/${encodeURIComponent(id)}`);
+    aiChatState.currentId = id;
+    aiChatState.engineSid = opened.engineSid || '';
+    aiChatState.streamText = ''; aiChatState.streamTrace = [];
+    aiChatState.stats = Object.assign({ turns: 0, steps: 0 }, detailData.stats || {});
+    const sel = $('#ach-provider'); if (sel && opened.providerId) sel.value = opened.providerId;
+    const t = $('#ach-title'); if (t) t.textContent = detailData.title || '新会话';
+    const sub = $('#ach-sub'); if (sub) sub.textContent = `${detailData.messageCount || 0} 条消息 · 会话已留存`;
+    achStatsText();
+    achRenderMessages(detailData.messages);
+    achRenderSessions();
+    achSwitchTab(aiChatState.tab || 'chat');
+  } catch (e) { toast(e.message, true); }
+}
 
-      // 自适应宽度
-      if (aiTerm.resizeHandler) window.removeEventListener('resize', aiTerm.resizeHandler);
-      aiTerm.resizeHandler = () => { try { aiTerm.fit && aiTerm.fit.fit(); } catch { /* noop */ } };
-      window.addEventListener('resize', aiTerm.resizeHandler);
-    } catch (e) {
-      aiTermNotice(`连接失败：${esc(e.message)}`, true);
-      aiTermStatus('连接失败');
-    }
-  };
+async function createAIChat() {
+  try {
+    const sel = $('#ach-provider');
+    const s = await api('/ai/chats', { method: 'POST', body: { providerId: sel ? sel.value : '' } });
+    await achLoadSessions(s.id);
+    toast('已新建会话');
+  } catch (e) { toast(e.message, true); }
+}
 
-  const disconnect = () => {
-    if (aiTerm.sid) {
-      api('/ai/terminal/close', { method: 'POST', body: { sid: aiTerm.sid } }).catch(() => {});
-      aiTerm.sid = null;
-    }
-    if (aiTerm.source) { try { aiTerm.source.close(); } catch { /* noop */ } aiTerm.source = null; }
-    if (aiTerm.term) { aiTerm.term.writeln('\r\n\x1b[90m[已断开]\x1b[0m'); }
-    aiTermStatus('已断开');
-  };
+async function deleteAIChat() {
+  if (!aiChatState.currentId) return;
+  if (!await confirmDialog({ message: '确认删除当前会话？其中的消息将无法恢复。' })) return;
+  try {
+    achCloseSource();
+    await api(`/ai/chats/${encodeURIComponent(aiChatState.currentId)}`, { method: 'DELETE' });
+    aiChatState.currentId = ''; aiChatState.engineSid = '';
+    toast('会话已删除');
+    await achLoadSessions();
+  } catch (e) { toast(e.message, true); }
+}
 
-  $('#ait-connect').addEventListener('click', connect);
-  $('#ait-interrupt').addEventListener('click', () => {
-    if (aiTerm.sid) api('/ai/terminal/interrupt', { method: 'POST', body: { sid: aiTerm.sid } }).catch(() => {});
+async function clearAIChat() {
+  if (!aiChatState.currentId) return;
+  if (!await confirmDialog({ message: '确认清空当前会话的全部消息？（会话本身保留）' })) return;
+  try {
+    achCloseSource();
+    const s = await api(`/ai/chats/${encodeURIComponent(aiChatState.currentId)}/clear`, { method: 'POST' });
+    aiChatState.streamText = ''; aiChatState.streamTrace = [];
+    aiChatState.stats = { turns: 0, steps: 0 };
+    achRenderMessages(s.messages || []); achStatsText();
+    await openAIChat(aiChatState.currentId);
+    toast('已清空消息');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function renameAIChat() {
+  if (!aiChatState.currentId) return;
+  const title = await promptDialog('会话标题', ($('#ach-title') || {}).textContent || '新会话');
+  if (!title || !title.trim()) return;
+  try {
+    await api(`/ai/chats/${encodeURIComponent(aiChatState.currentId)}`, { method: 'PUT', body: { title: title.trim() } });
+    const t = $('#ach-title'); if (t) t.textContent = title.trim();
+    await achLoadSessions(aiChatState.currentId);
+    toast('已重命名');
+  } catch (e) { toast(e.message, true); }
+}
+
+function achReadAttachment(file) {
+  return new Promise((resolve, reject) => {
+    const name = file.name || 'file';
+    const mime = file.type || '';
+    const isImage = /^image\//.test(mime) || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
+    if (file.size > 3 * 1024 * 1024) return reject(new Error(`「${name}」超过 3MB`));
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`读取「${name}」失败`));
+    reader.onload = () => resolve({ name, mime: mime || (isImage ? 'image/png' : 'text/plain'),
+      size: file.size, kind: isImage ? 'image' : 'text', data: String(reader.result || '').slice(0, 200000) });
+    if (isImage) reader.readAsDataURL(file); else reader.readAsText(file);
   });
-  $('#ait-clear').addEventListener('click', () => { if (aiTerm.term) aiTerm.term.clear(); });
-  $('#ait-close').addEventListener('click', disconnect);
+}
+
+function achRenderAttachments() {
+  const box = $('#ach-attachments');
+  if (!box) return;
+  box.hidden = !aiChatState.attachments.length;
+  box.innerHTML = aiChatState.attachments.map((a, i) => `
+    <div class="ops-attach-item"><span class="ops-attach-ico">${a.kind === 'image' ? '▧' : '▤'}</span>
+      <span class="ops-attach-name">${esc(a.name)}</span>
+      <button class="btn btn-ghost btn-sm" type="button" data-ach-attach-del="${i}">✕</button></div>`).join('');
+  box.querySelectorAll('[data-ach-attach-del]').forEach((b) => b.addEventListener('click', () => {
+    aiChatState.attachments.splice(Number(b.dataset.achAttachDel), 1);
+    achRenderAttachments();
+  }));
+}
+
+async function sendAIChatMessage() {
+  if (aiChatState.sending) return;
+  const input = $('#ach-input');
+  const content = (input ? input.value : '').trim();
+  if (!content) { toast('请输入内容', true); return; }
+  if (!aiChatState.currentId) {
+    try { const s = await api('/ai/chats', { method: 'POST', body: {} }); aiChatState.currentId = s.id; await achLoadSessions(s.id); }
+    catch (e) { toast(e.message, true); return; }
+  }
+
+  aiChatState.sending = true;
+  aiChatState.streamText = '';
+  aiChatState.streamTrace = [];
+  aiChatState.lastDone = false;
+  if (input) input.value = '';
+  const attachments = aiChatState.attachments.slice();
+  aiChatState.attachments = []; achRenderAttachments();
+
+  const box = $('#ach-msgs');
+  if (box) {
+    if (box.querySelector('.empty')) box.innerHTML = '';
+    box.insertAdjacentHTML('beforeend', achMessageHtml({ role: 'user', content, attachments, at: new Date().toISOString() }));
+    box.insertAdjacentHTML('beforeend', '<div class="ops-msg ai" id="ach-pending"><div class="ops-msg-avatar">✧</div><div class="ops-msg-body"><div class="ops-msg-text ach-msg-text ach-typing">正在工作区里分析并执行…</div></div></div>');
+    box.scrollTop = box.scrollHeight;
+  }
+  achStatus('DeepSeek Harness 正在执行，可切换到「轨迹」查看步骤', true);
+
+  // 先打开会话拿到引擎 sid，再订阅结构化事件流。
+  let engineSid = aiChatState.engineSid;
+  try {
+    const sel = $('#ach-provider');
+    const opened = await api(`/ai/chats/${encodeURIComponent(aiChatState.currentId)}/open`, {
+      method: 'POST', body: sel && sel.value ? { providerId: sel.value } : {},
+    });
+    engineSid = opened.engineSid || engineSid;
+    aiChatState.engineSid = engineSid;
+    achCloseSource();
+    aiChatState.source = new EventSource(`/api/ai/chats/stream?sid=${encodeURIComponent(engineSid)}${streamToken()}`);
+    aiChatState.source.onmessage = (ev) => {
+      let d; try { d = JSON.parse(ev.data); } catch { return; }
+      if (d.type === 'session') return;
+      if (d.type === 'echo') return;
+      if (d.type === 'status') {
+        aiChatState.streamTrace.push(d);
+        if (d.phase === 'step_start') { aiChatState.stats.steps = (aiChatState.stats.steps || 0) + 1; achStatsText(); }
+        if (d.phase === 'turn_start') { aiChatState.stats.turns = Math.max(aiChatState.stats.turns || 0, Number(d.turn) || 0); achStatsText(); }
+      } else if (d.type === 'reasoning') {
+        aiChatState.streamTrace.push(d);
+      } else if (d.type === 'text') {
+        aiChatState.streamText += String(d.text || '');
+        const pendingText = $('#ach-pending .ach-msg-text');
+        if (pendingText) { pendingText.classList.remove('ach-typing'); pendingText.textContent = aiChatState.streamText; }
+        if (box) box.scrollTop = box.scrollHeight;
+      } else if (d.type === 'final') {
+        if (d.reason && d.reason.kind === 'error') {
+          const msg = (d.reason.error && d.reason.error.message) || '执行失败';
+          aiChatState.streamText = aiChatState.streamText || `失败：${msg}`;
+        } else if (d.text && !aiChatState.streamText) {
+          aiChatState.streamText = String(d.text);
+        }
+        const pendingText = $('#ach-pending .ach-msg-text');
+        if (pendingText) pendingText.textContent = aiChatState.streamText;
+      } else if (d.type === 'done') {
+        aiChatState.lastDone = true;
+      }
+      if (aiChatState.tab === 'trace') achRenderTrace();
+    };
+    aiChatState.source.onerror = () => { /* SSE 结束由 done / close 处理 */ };
+  } catch (e) { /* 订阅失败仍继续发送，落库后刷新即可看到结果 */ }
+
+  try {
+    const d = await api(`/ai/chats/${encodeURIComponent(aiChatState.currentId)}/send`, {
+      method: 'POST', body: { content },
+    });
+    const pending = $('#ach-pending');
+    if (pending) pending.outerHTML = achMessageHtml(d.assistantMessage);
+    else if (box) box.insertAdjacentHTML('beforeend', achMessageHtml(d.assistantMessage));
+    if (d.assistantMessage && d.assistantMessage.error) toast(d.assistantMessage.error, true);
+    aiChatState.stats = Object.assign(aiChatState.stats || {}, (d.session && d.session.stats) || {});
+    achStatsText();
+    await achLoadSessions(aiChatState.currentId);
+    achStatus('');
+  } catch (e) {
+    const pending = $('#ach-pending');
+    if (pending) pending.outerHTML = achMessageHtml({ role: 'assistant', content: '', error: e.message, at: new Date().toISOString() });
+    toast(e.message, true);
+    achStatus('发送失败');
+  } finally {
+    aiChatState.sending = false;
+    achCloseSource();
+    achStatus('');
+  }
+}
+
+async function loadAIChat() {
+  try {
+    const [providers, servers] = await Promise.all([api('/ai/providers'), api('/servers')]);
+    const items = (providers.items || []).filter((p) => p.kind !== 'cli' && p.enabled !== false);
+    const sel = $('#ach-provider');
+    if (sel) {
+      const prev = sel.value;
+      sel.innerHTML = items.length
+        ? items.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} · ${esc(p.model || '')}</option>`).join('')
+        : '<option value="">（无可用 AI 服务）</option>';
+      if (prev && items.some((p) => p.id === prev)) sel.value = prev;
+    }
+    if (!items.length) toast('尚未配置 AI 服务：请在「AI 服务配置」页添加 API 类型服务', true);
+    const ws = $('#ach-workspace');
+    if (ws) {
+      const cur = (servers.items || []).find((s) => s.id === 'local') || (servers.items || [])[0];
+      ws.textContent = '工作区 · ' + (cur ? (cur.workspaceDir || cur.name || cur.host || cur.id) : '本机 /workspace');
+    }
+  } catch (e) { toast(e.message, true); }
+  await achLoadSessions();
+
+  if (aiChatState.bound) return;
+  aiChatState.bound = true;
+  $('#ach-form').addEventListener('submit', (e) => { e.preventDefault(); sendAIChatMessage(); });
+  const input = $('#ach-input');
+  if (input) input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendAIChatMessage(); }
+  });
+  $('#ach-new').addEventListener('click', createAIChat);
+  $('#ach-delete').addEventListener('click', deleteAIChat);
+  $('#ach-clear').addEventListener('click', clearAIChat);
+  $('#ach-rename').addEventListener('click', renameAIChat);
+  $('#ach-stop').addEventListener('click', async () => {
+    if (!aiChatState.currentId) return;
+    try { await api(`/ai/chats/${encodeURIComponent(aiChatState.currentId)}/interrupt`, { method: 'POST', body: {} }); toast('已请求中断'); }
+    catch (e) { toast(e.message, true); }
+  });
+  $$('.aichat-tab').forEach((b) => b.addEventListener('click', () => achSwitchTab(b.dataset.achTab)));
+  $('#ach-file').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    if (aiChatState.attachments.length + files.length > 6) { toast('每条消息最多 6 个附件', true); e.target.value = ''; return; }
+    for (const file of files) {
+      try { aiChatState.attachments.push(await achReadAttachment(file)); }
+      catch (err) { toast(err.message, true); }
+    }
+    e.target.value = ''; achRenderAttachments();
+  });
+  achStatsText();
 }
 
 /* ----------------------------- 扩展 / 数据库 ----------------------------- */
@@ -4104,7 +4710,7 @@ const loaders = {
   'docker-volumes': loadDocker, 'docker-networks': loadDocker, 'docker-compose': loadDocker,
   proxy: loadProxy,
   dbgate: loadExtExtras, backups: loadExtExtras,
-  ai: loadAI, 'ai-list': loadAI, 'ai-test': loadAI, ops: loadAITerminal,
+  ai: loadAI, 'ai-list': loadAI, 'ai-test': loadAI, ops: loadOps, aichat: loadAIChat,
   environment: loadEnvironment, envcfg: loadEnvConfig,
   users: loadUsers,
 };
@@ -5244,11 +5850,11 @@ $('#newfile-form').addEventListener('submit', async (e) => {
     toast('文件已创建'); e.target.reset(); loadStorage();
   } catch (err) { toast(err.message, true); }
 });
-// v0.4.8：切到 AI 终端（DeepSeek Harness）。新终端以工作区为上下文，
-// 当前目录可在对话中直接引用。
+// OpenList 的「AI 会话」入口：跳到 DeepSeek Harness 会话式助手，
+// 当前目录可在对话中直接引用。原「AI 运维」仍保留在侧栏独立入口。
 $('#ol-ai-session').addEventListener('click', () => {
-  switchView('ops');
-  toast(`已打开 AI 终端，可在对话中引用目录：${currentStoragePath}`);
+  switchView('aichat');
+  toast(`已打开 AI 会话，可在对话中引用目录：${currentStoragePath}`);
 });
 $('#upload-input').addEventListener('change', (e) => uploadFiles(e.target.files));
 $('#ol-conn-new').addEventListener('click', () => fillOpenlistConnectionForm(null));

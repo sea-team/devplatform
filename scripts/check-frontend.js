@@ -23,6 +23,7 @@ const coreSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src',
 const engineSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'engine.js'), 'utf8');
 const sessionsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'aiSessions.js'), 'utf8');
 const dshSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'dshTerminal.js'), 'utf8');
+const aiChatSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'aiChat.js'), 'utf8');
 const miniSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'mini.js'), 'utf8');
 const remoteSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'remoteOps.js'), 'utf8');
 const openlistSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'openlist.js'), 'utf8');
@@ -39,7 +40,7 @@ const note = (ok, label, extra = '') => {
 const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
 const refs = [...new Set([...app.matchAll(/\$\('#([A-Za-z0-9_-]+)'\)/g)].map((m) => m[1]))];
 // 这些 id 由 JS 运行时动态注入（附件预览 / 会话 pending 气泡 / 2FA 弹窗按钮 / 登录提示）。
-const RUNTIME_IDS = new Set(['ops-hint', 'ops-pending', 'security-disable', 'security-enable']);
+const RUNTIME_IDS = new Set(['ops-hint', 'ops-pending', 'ach-pending', 'security-disable', 'security-enable']);
 const missing = refs.filter((id) => !ids.has(id) && !RUNTIME_IDS.has(id));
 note(missing.length === 0, 'app.js 引用的静态 id 均存在', missing.length ? `缺失：${missing.join(', ')}` : `${refs.length} 个引用`);
 
@@ -47,12 +48,13 @@ const sections = [...html.matchAll(/class="page" id="view-([a-z0-9-]+)"/g)].map(
 const SUBPAGES = ['repo-new', 'repo-clone', 'git-runtime', 'storage-conn', 'storage-mounts', 'storage-drivers',
   'build-start', 'deploys', 'server-new', 'docker-containers', 'docker-images',
   'docker-volumes', 'docker-networks', 'docker-compose', 'ai-list', 'ai-test'];
-// v0.4.4：Git 运行时从克隆页拆出独立子页，资源协作页下线，总数仍为 32。
-note(sections.length === 32 && sections.includes('gitsrc') && sections.includes('docker')
+// v0.4.10：新增「AI 会话」独立页，总页面数 32 -> 33（AI 运维保留、二者并存）。
+note(sections.length === 33 && sections.includes('gitsrc') && sections.includes('docker')
   && sections.includes('proxy') && sections.includes('environment') && sections.includes('envcfg')
   && sections.includes('ide-config') && sections.includes('users') && sections.includes('git-runtime')
+  && sections.includes('aichat') && sections.includes('ops')
   && !sections.includes('collab') && SUBPAGES.every((v) => sections.includes(v)),
-'32 个独立页面（含 Git 运行时子页；资源协作页已下线）均已转为可标签化的 .page', sections.join(', '));
+'33 个独立页面（AI 运维 + AI 会话两页并存；资源协作页已下线）均已转为可标签化的 .page', sections.join(', '));
 note(['/git-sources', '/docker/overview', '/extensions/backups', '/extensions/dbgate', '/builds/backends']
   .every((p) => app.includes(p)) && app.includes('function loadGitSources') && app.includes('function loadDocker'),
 'Git 源 / Docker 管理 / 备份 / DbGate / 构建后端接口已全部接线');
@@ -339,23 +341,39 @@ note(['id="view-ai"', 'id="view-ai-list"', 'id="view-ai-test"'].every((s) => htm
   && app.includes("switchView('ai-list')"),
 'AI 服务配置拆成「配置 / 已配置服务 / 连通性测试」三个独立子页并共享 subnav');
 
-// 2) AI 终端（v0.4.8）：xterm.js 交互式运行 DeepSeek Harness，替换旧对话模式。
-note(['id="view-ops"', 'id="ait-provider"', 'id="ait-connect"', 'id="ait-interrupt"',
-  'id="ait-clear"', 'id="ait-close"', 'id="ait-term-wrap"', 'id="ait-status"']
+// 2) AI 运维（v0.4.3）：v0.4.10 原样恢复被终端替换掉的会话式对话功能。
+note(['id="view-ops"', 'id="ops-new"', 'id="ops-session-list"', 'id="ops-provider"',
+  'id="ops-server-btn"', 'id="ops-server-panel"', 'id="ops-write"', 'id="ops-ghost"',
+  'id="ops-file"', 'id="ops-messages"', 'id="ops-prompt"', 'id="ops-send"']
   .every((s) => html.includes(s))
-  && ['function loadAITerminal', 'new Terminal(', 'new EventSource(', '/ai/terminal/open',
-    '/ai/terminal/input', '/ai/terminal/stream', '/ai/terminal/interrupt', '/ai/terminal/close']
-    .every((s) => app.includes(s)),
-'AI 终端 UI：xterm.js + SSE 输出 + POST 输入 + 连接/中断/清屏/断开均已接线');
-note(dshSrc.includes("app.post") === false
-  && ['function openSession', 'function attachStream', 'function submit', 'function interrupt',
-    'function close', 'function active', 'cordis.patch.yml', '--session-id', 'agent-default-model',
-    'canUse(session, user)', 'function renderPatch']
-    .every((s) => dshSrc.includes(s))
+  && ['function loadOps', 'function sendOpsMessage', 'function renderOpsGhost', 'function acceptOpsSuggestion',
+    'function readOpsAttachment', 'function renderOpsAttachments', 'function applyOpsScope',
+    'function createOpsSession', 'function deleteOpsSession', 'function renameOpsSession',
+    'function clearOpsSession', '/ai/sessions'].every((s) => app.includes(s))
+  && app.includes("ops: loadOps"),
+'AI 运维会话式对话已恢复：会话管理 / 服务器范围 / 写授权 / 附件 / Tab 建议 / 工具轨迹齐全');
+// 2b) AI 会话（v0.4.10）：DeepSeek Harness 驱动的会话式界面，结构化事件 SSE + dsh 后端。
+note(['id="view-aichat"', 'id="ach-new"', 'id="ach-sessions"', 'id="ach-provider"',
+  'id="ach-title"', 'id="ach-msgs"', 'id="ach-trace"', 'data-ach-tab="chat"',
+  'data-ach-tab="trace"', 'id="ach-input"', 'id="ach-send"', 'id="ach-stop"', 'id="ach-stats"']
+  .every((s) => html.includes(s))
+  && ['function loadAIChat', 'function sendAIChatMessage', 'function openAIChat',
+    'function achSwitchTab', 'function achRenderTrace', '/ai/chats/stream', '/ai/chats/',
+    'new EventSource(', 'data-ach-session'].every((s) => app.includes(s))
+  && css.includes('#view-aichat .aichat-layout') && app.includes("aichat: loadAIChat")
+  && html.includes('data-view="aichat"'),
+'AI 会话页：会话列表 / 对话·轨迹 tab / 用户气泡 / 模型选择 / 统计 / SSE 增量接线完成');
+note(['function openSession', 'function attachStream', 'function submit', 'function interrupt',
+  'function close', 'function active', 'function emitEvent', 'function attachEventStream',
+  'function submitWithEvents', 'cordis.patch.yml', '--session-id', 'agent-default-model',
+  'canUse(session, user)'].every((s) => dshSrc.includes(s))
   && ['/api/ai/terminal/open', '/api/ai/terminal/stream', '/api/ai/terminal/input',
-    '/api/ai/terminal/interrupt', '/api/ai/terminal/close', '/api/ai/terminal/active']
-    .every((s) => serverSrc.includes(s)),
-'AI 终端后端：dsh headless 会话按 ownerId 隔离、patch 注入 AI 服务、session-id 续接、路由齐全');
+    '/api/ai/terminal/active', '/api/ai/chats', '/api/ai/chats/stream',
+    '/api/ai/chats/:id/send', '/api/ai/chats/:id/open'].every((s) => serverSrc.includes(s))
+  && ['function send', 'function open', 'function list', 'function clearMessages',
+    'dshTerminal.submitWithEvents', 'state.aiChats'].every((s) => aiChatSrc.includes(s))
+  && coreSrc.includes('aiChats'),
+'AI 会话后端：结构化事件通道 + 会话落库 owner 隔离 + patch 注入 + session-id 续接 + 路由齐全');
 note(['image_url', 'function buildUserContent', 'function buildPrompt', 'function historyTurns',
   'visionFallback', 'text-fallback'].every((s) => engineSrc.includes(s))
   && miniSrc.includes('route.options.bodyLimit')
@@ -387,12 +405,12 @@ note(html.includes('id="confirm-modal"') && html.includes('id="confirm-ok"')
   && !/\b(confirm|prompt|alert)\(/.test(appCode),
 '平台统一确认 / 输入弹窗已接线，原生 confirm / prompt / alert 全部替换');
 
-// 2) AI：编辑取消按钮保留；旧对话的 Tab 建议 / 服务器范围随对话页下线，改由 xterm 终端承接。
+// 2) AI：编辑取消按钮保留；AI 运维对话功能恢复 + AI 会话页新增，二者并存。
 note(html.includes('id="provider-cancel"')
-  && app.includes('function loadAITerminal') && app.includes('onData(')
-  && html.includes('DeepSeek Harness') && !html.includes('id="ops-ghost"')
-  && !html.includes('id="ops-server-panel"'),
-'AI 服务编辑取消保留；运维对话由 xterm AI 终端替换（旧对话 UI 已下线）');
+  && app.includes('function loadOps') && app.includes('function loadAIChat')
+  && html.includes('id="ops-ghost"') && html.includes('id="ops-server-panel"')
+  && html.includes('id="view-aichat"'),
+'AI 服务编辑取消保留；AI 运维对话功能恢复，DeepSeek Harness 会话式 AI 会话页并存');
 
 // 3) 构建记录批量删除、驱动清单空态不再误报平台账号权限。
 note(serverSrc.includes("app.delete('/api/builds'") && html.includes('id="build-select-all"')
