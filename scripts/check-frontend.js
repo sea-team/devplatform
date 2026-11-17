@@ -347,7 +347,13 @@ note(html.includes('AI 模型配置') && html.includes('class="model-catalog"')
   && html.includes('id="model-add"') && html.includes('id="model-restore"')
   && app.includes('function renderProviderModelRows') && app.includes('function loadProviderModels')
   && app.includes('/ai/models/fetch') && app.includes('function syncModelCatalogToForm'),
-'AI 模型配置：表单含模型目录（显示名 / 模型 ID），支持「获取可用模型」拉取上游 /models 并点选加入');
+'AI 模型配置：表单含模型目录（显示名 / 模型 ID），支持「获取可用模型」拉取上游 /models');
+
+// v0.4.12：获取可用模型后默认全部勾选加入模型目录，胶囊可切换取消。
+note(app.includes('拉取到的可用模型默认全部勾选加入模型目录')
+  && app.includes('const existing = new Map(providerModelRows.map')
+  && app.includes('默认模型不能取消勾选') && app.includes('点击胶囊可取消'),
+'获取可用模型：拉取结果默认全部勾选加入模型目录，胶囊点击可取消 / 恢复，默认模型不可取消');
 
 // 2) AI 运维（v0.4.3）：v0.4.10 原样恢复被终端替换掉的会话式对话功能。
 note(['id="view-ops"', 'id="ops-new"', 'id="ops-session-list"', 'id="ops-provider"',

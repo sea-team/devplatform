@@ -3341,6 +3341,7 @@ function renderProviderModelRows(defaultModel) {
   box.querySelectorAll('[data-model-del]').forEach((b) => b.addEventListener('click', () => {
     providerModelRows.splice(Number(b.dataset.modelDel), 1);
     renderProviderModelRows(getDefaultModelValue());
+    renderAvailableModels();
   }));
   box.querySelectorAll('[data-model-default]').forEach((b) => b.addEventListener('click', () => {
     const m = providerModelRows[Number(b.dataset.modelDefault)];
@@ -3384,7 +3385,7 @@ function syncModelCatalogToForm() {
   return ordered;
 }
 
-/** 渲染「获取可用模型」结果：点一下即加入模型目录。 */
+/** 渲染「获取可用模型」结果：默认全部勾选加入目录，点胶囊可取消 / 再点恢复。 */
 function renderAvailableModels() {
   const box = $('#model-available');
   if (!box) return;
@@ -3392,17 +3393,23 @@ function renderAvailableModels() {
   box.hidden = false;
   const added = new Set(providerModelRows.map((m) => String(m.id || '')));
   box.innerHTML = providerAvailableModels.map((m, i) => `
-    <button type="button" class="model-chip ${added.has(m.id) ? 'is-added' : ''}" data-avail="${i}" title="${esc(m.ownedBy ? '提供者 ' + m.ownedBy : m.id)}">
+    <button type="button" class="model-chip ${added.has(m.id) ? 'is-added' : ''}" data-avail="${i}" title="${esc(added.has(m.id) ? '点击取消勾选' : (m.ownedBy ? '提供者 ' + m.ownedBy : '点击勾选加入目录'))}">
       <span class="model-chip-add">${added.has(m.id) ? '✓' : '＋'}</span>${esc(m.name || m.id)}
     </button>`).join('');
   box.querySelectorAll('[data-avail]').forEach((b) => b.addEventListener('click', () => {
     const m = providerAvailableModels[Number(b.dataset.avail)];
     if (!m) return;
-    if (providerModelRows.some((x) => x.id === m.id)) { toast('该模型已在目录中'); return; }
-    providerModelRows.push({ id: m.id, name: m.name || m.id });
+    const idx = providerModelRows.findIndex((x) => x.id === m.id);
+    if (idx >= 0) {
+      if (m.id === getDefaultModelValue()) { toast('默认模型不能取消勾选', true); return; }
+      providerModelRows.splice(idx, 1);
+      toast(`已取消 ${m.name || m.id}`);
+    } else {
+      providerModelRows.push({ id: m.id, name: m.name || m.id });
+      toast(`已勾选 ${m.name || m.id}`);
+    }
     renderProviderModelRows(getDefaultModelValue());
     renderAvailableModels();
-    toast(`已添加 ${m.name || m.id}`);
   }));
 }
 
@@ -6265,8 +6272,19 @@ $('#model-fetch').addEventListener('click', async () => {
     const body = providerFormBody($('#provider-form'));
     const d = await api('/ai/models/fetch', { method: 'POST', body });
     providerAvailableModels = (d.items || []).map((m) => ({ id: m.id, name: m.id, ownedBy: m.ownedBy || '' }));
+    // 拉取到的可用模型默认全部勾选加入模型目录；已存在的条目保留原来填的显示名。
+    const existing = new Map(providerModelRows.map((m) => [String(m.id || ''), String(m.name || '')]));
+    for (const m of providerAvailableModels) {
+      if (m.id && !existing.has(m.id)) providerModelRows.push({ id: m.id, name: m.name || m.id });
+    }
+    // 没有默认模型时自动把第一个可用模型设为默认，避免保存后目录无主。
+    const modelInput = $('#provider-form [name="model"]');
+    if (modelInput && !String(modelInput.value || '').trim() && providerModelRows.length) {
+      modelInput.value = providerModelRows[0].id;
+    }
+    renderProviderModelRows(getDefaultModelValue());
     renderAvailableModels();
-    box.textContent = `已获取 ${d.count || providerAvailableModels.length} 个可用模型${d.effectiveProxy ? ' · 代理 ' + d.effectiveProxy : ''}：在下方点选加入模型目录`;
+    box.textContent = `已获取 ${d.count || providerAvailableModels.length} 个可用模型${d.effectiveProxy ? ' · 代理 ' + d.effectiveProxy : ''}：已全部勾选加入模型目录，点击胶囊可取消`;
   } catch (err) {
     providerAvailableModels = []; renderAvailableModels();
     box.textContent = `获取失败：${err.message}`;
