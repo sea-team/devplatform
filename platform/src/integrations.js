@@ -677,6 +677,57 @@ async function aiChat(provider, messages, tools = []) {
   return payload;
 }
 
+/**
+ * 拉取某个 API 类型服务的可用模型目录（OpenAI 兼容 GET /models）。
+ * 用于「AI 模型配置」页的「获取可用模型」按钮；支持单项代理与自定义 Headers。
+ */
+async function aiModels(provider) {
+  if (provider.kind === 'cli') throw new Error('本地程序类型没有在线模型目录');
+  const base = String(provider.baseURL || '').replace(/\/+$/, '');
+  if (!base) throw new Error('请先填写 Base URL');
+  const url = `${base}/models`;
+
+  let extraHeaders = {};
+  if (provider.headers) {
+    try { extraHeaders = typeof provider.headers === 'string' ? JSON.parse(provider.headers) : provider.headers; }
+    catch { throw new Error('自定义 Headers 不是合法 JSON'); }
+  }
+  const headers = { ...extraHeaders };
+  // noKey（本地免密服务）不发送 Authorization；否则与 aiChat 保持一致用 Bearer。
+  if (!provider.noKey && provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
+
+  const init = { method: 'GET', headers, signal: AbortSignal.timeout(30000) };
+  const resolved = aiProxy(provider);
+  if (resolved.url && !proxyModule.shouldBypass(url, resolved.noProxy)) {
+    init.dispatcher = proxyModule.dispatcher(resolved.url);
+  }
+
+  let response;
+  try {
+    response = await fetch(url, init);
+  } catch (e) {
+    const cause = (e && e.cause) || null;
+    const code = String((cause && cause.code) || (e && e.code) || '').toUpperCase();
+    throw new Error(`无法连接模型目录接口${code ? `（${code}）` : ''}：请检查 Base URL、代理与网络是否可达`);
+  }
+  const text = await response.text();
+  let payload;
+  try { payload = JSON.parse(text); } catch { payload = null; }
+  if (!response.ok) throw new Error(`模型目录接口返回 HTTP ${response.status}: ${text.slice(0, 300)}`);
+  if (!payload) throw new Error('模型目录接口返回内容不是合法 JSON');
+
+  const rows = Array.isArray(payload.data) ? payload.data : (Array.isArray(payload) ? payload : []);
+  const items = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const id = String((row && (row.id || row.name)) || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    items.push({ id, ownedBy: String((row && row.owned_by) || '') });
+  }
+  return { items, count: items.length, provider: provider.name || '', baseURL: base };
+}
+
 const publicProvider = (p) => ({
   ...p,
   apiKey: p.apiKey ? `${String(p.apiKey).slice(0, 4)}****${String(p.apiKey).slice(-4)}` : '',
@@ -687,5 +738,5 @@ const publicProvider = (p) => ({
 module.exports = {
   httpJSON, giteaApi, openlistApi,
   sshExec, sshConnect, sftpPut, collectStatus, sshOptions, publicServer,
-  aiChat, aiProxy, publicProvider, detectLocalPrograms, runCli, proxyEnvironment, CLI_CANDIDATES,
+  aiChat, aiModels, aiProxy, publicProvider, detectLocalPrograms, runCli, proxyEnvironment, CLI_CANDIDATES,
 };

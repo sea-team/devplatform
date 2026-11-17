@@ -139,10 +139,10 @@ function yamlStr(value) {
 /**
  * 把平台 AI 服务渲染成 dsh 的 cordis.patch.yml，写入会话私有目录（挂载到容器 /session）。
  */
-function renderPatch(sessionDir, provider) {
+function renderPatch(sessionDir, provider, modelOverride) {
   const keyEnv = 'PLATFORM_AI_KEY';
   const providerId = 'platform-ai';
-  const model = String(provider.model || '').trim();
+  const model = String(modelOverride || provider.model || '').trim();
   const baseURL = String(provider.baseURL || '').trim();
   if (!model) throw new HttpError(400, 'AI 服务缺少模型名称');
   if (!baseURL) throw new HttpError(400, 'AI 服务缺少 Base URL');
@@ -337,6 +337,8 @@ async function openSession(state, providerId, user, options = {}) {
     }
   }
   const provider = pickProvider(state, providerId);
+  // 会话级模型覆盖：来自 AI 会话页选择的模型；未指定时用服务默认模型。
+  const chosenModel = String(options.model || '').trim() || provider.model;
   // options.existingSid：复用已有引擎会话（AI 会话页刷新后重连）；否则新建。
   const sid = String(options.existingSid || '') || crypto.randomBytes(10).toString('hex');
   if (sessions.has(sid)) {
@@ -361,7 +363,7 @@ async function openSession(state, providerId, user, options = {}) {
     dshSessionId: String(options.dshSessionId || '') || null, // 持久会话传入以续接；终端会话首次由 dsh 生成
     providerId: provider.id,
     providerName: provider.name,
-    model: provider.model,
+    model: chosenModel,
     ownerId: (user && user.id) || '',
     subscribers: new Set(), pending: [], closed: false,
     eventSubscribers: new Set(), eventPending: [],
@@ -379,8 +381,8 @@ async function openSession(state, providerId, user, options = {}) {
 
   return {
     sid,
-    provider: { id: provider.id, name: provider.name, model: provider.model },
-    greeting: `已连接 DeepSeek Harness · ${provider.name} (${provider.model})\r\n输入问题回车发送；思考与工具调用实时显示。\r\n`,
+    provider: { id: provider.id, name: provider.name, model: chosenModel },
+    greeting: `已连接 DeepSeek Harness · ${provider.name} (${chosenModel})\r\n输入问题回车发送；思考与工具调用实时显示。\r\n`,
   };
 }
 
@@ -424,7 +426,7 @@ function submit(state, sid, input, user) {
   if (session.busy) return { accepted: false, reason: 'busy' };
   let patch;
   try {
-    patch = renderPatch(session.dir, pickProvider(state, session.providerId));
+    patch = renderPatch(session.dir, pickProvider(state, session.providerId), session.model);
   } catch (e) {
     sysLine(session, `\x1b[31m${e.message || e}\x1b[0m`);
     return { accepted: false, reason: 'config' };
@@ -531,7 +533,7 @@ function submitWithEvents(state, sid, input, user) {
   if (session.busy) return { accepted: false, reason: 'busy' };
   let patch;
   try {
-    patch = renderPatch(session.dir, pickProvider(state, session.providerId));
+    patch = renderPatch(session.dir, pickProvider(state, session.providerId), session.model);
   } catch (e) {
     emitEvent(session, { type: 'final', text: '', reason: { kind: 'error', error: { message: e.message || String(e) } } });
     return { accepted: false, reason: 'config' };

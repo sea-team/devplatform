@@ -341,6 +341,14 @@ note(['id="view-ai"', 'id="view-ai-list"', 'id="view-ai-test"'].every((s) => htm
   && app.includes("switchView('ai-list')"),
 'AI 服务配置拆成「配置 / 已配置服务 / 连通性测试」三个独立子页并共享 subnav');
 
+// v0.4.11：AI 服务配置改名 AI 模型配置；配置页支持获取可用模型并维护模型目录。
+note(html.includes('AI 模型配置') && html.includes('class="model-catalog"')
+  && html.includes('id="model-rows"') && html.includes('id="model-fetch"')
+  && html.includes('id="model-add"') && html.includes('id="model-restore"')
+  && app.includes('function renderProviderModelRows') && app.includes('function loadProviderModels')
+  && app.includes('/ai/models/fetch') && app.includes('function syncModelCatalogToForm'),
+'AI 模型配置：表单含模型目录（显示名 / 模型 ID），支持「获取可用模型」拉取上游 /models 并点选加入');
+
 // 2) AI 运维（v0.4.3）：v0.4.10 原样恢复被终端替换掉的会话式对话功能。
 note(['id="view-ops"', 'id="ops-new"', 'id="ops-session-list"', 'id="ops-provider"',
   'id="ops-server-btn"', 'id="ops-server-panel"', 'id="ops-write"', 'id="ops-ghost"',
@@ -363,6 +371,13 @@ note(['id="view-aichat"', 'id="ach-new"', 'id="ach-sessions"', 'id="ach-provider
   && css.includes('#view-aichat .aichat-layout') && app.includes("aichat: loadAIChat")
   && html.includes('data-view="aichat"'),
 'AI 会话页：会话列表 / 对话·轨迹 tab / 用户气泡 / 模型选择 / 统计 / SSE 增量接线完成');
+// v0.4.11：AI 会话下拉按服务分组列出全部可用模型，切换即重建引擎并落库模型名。
+note(app.includes('function achParseSelection') && app.includes('function achCurrentSelection')
+  && app.includes("api('/ai/models')") && app.includes("body: { providerId: p.providerId, model: p.model }")
+  && serverSrc.includes("app.get('/api/ai/models'") && serverSrc.includes("req.body?.model || ''")
+  && aiChatSrc.includes('modelOverride') && dshSrc.includes('chosenModel')
+  && dshSrc.includes('renderPatch(session.dir, pickProvider(state, session.providerId), session.model)'),
+'AI 会话可按服务分组选择具体模型：/ai/models 聚合目录 + open/send 传 model + dsh patch 按选中模型渲染');
 note(['function openSession', 'function attachStream', 'function submit', 'function interrupt',
   'function close', 'function active', 'function emitEvent', 'function attachEventStream',
   'function submitWithEvents', 'cordis.patch.yml', '--session-id', 'agent-default-model',

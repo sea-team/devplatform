@@ -1096,3 +1096,39 @@ tr.file-row.is-file .file-name b { font-weight: 550; }
   .aichat-side { max-height: 180px; }
   .aichat-body { height: 52vh; }
 }
+
+/* ---------------- AI 模型配置：模型目录（v0.4.11） ---------------- */
+.model-catalog {
+  margin-top: 14px; padding: 12px 14px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface-2);
+}
+.model-catalog-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.model-catalog-head b { font-size: 13px; }
+.model-catalog-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.model-rows { display: flex; flex-direction: column; gap: 8px; }
+.model-row {
+  display: grid; grid-template-columns: 18px 1fr 1fr auto auto; align-items: center; gap: 8px;
+  padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+}
+.model-row .model-grip { color: var(--muted); cursor: grab; text-align: center; user-select: none; }
+.model-row input {
+  width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text); font-size: 12px;
+}
+.model-row input:focus { outline: none; border-color: var(--primary); }
+.model-row.is-default { border-color: var(--primary); box-shadow: inset 3px 0 0 var(--primary); }
+.model-add-hint { color: var(--muted); font-size: 12px; padding: 2px 0; }
+.model-available {
+  display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0;
+  padding: 10px; border: 1px dashed var(--border); border-radius: 8px; max-height: 180px; overflow: auto;
+}
+.model-available .model-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  color: var(--text); font-size: 12px; cursor: pointer;
+}
+.model-available .model-chip:hover { border-color: var(--primary); }
+.model-available .model-chip .model-chip-add { color: var(--primary); font-weight: 700; }
+.model-available .model-chip.is-added { opacity: .5; cursor: default; }

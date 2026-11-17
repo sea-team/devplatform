@@ -2997,3 +2997,27 @@ v0.4.8 把「AI 运维」对话页整体替换成了 xterm 终端，误删了已
 
 - 自检：`npm run check`（含 `aiChat.js` / `dshTerminal.js`）、前端自检 104 项全通过，0 失败。
 - 双页 DOM/JS/CSS/路由断言齐全：AI 运维 6 项能力、AI 会话气泡 + 轨迹 + 统计 + SSE 均已接线。
+
+---
+
+## §49 AI 模型配置与模型选择（v0.4.11）
+
+### 49.1 改名与模型目录
+
+- 侧栏「AI 服务配置」统一改名为 **AI 模型配置**（页面路由 `view-ai` / `view-ai-list` / `view-ai-test` 与接口 `/api/ai/providers` 保持不变，仅 UI 文案调整）。
+- API 类型表单新增字段：**API 协议**（OpenAI Chat Completions）、**重试策略**、**默认模型**，以及独立的 **模型目录** 区块：
+  - 每行 = 显示名称 + 模型 ID，可「设为默认」/ 删除 / 拖拽排序；默认模型自动置顶并写入 `model` 字段。
+  - **获取可用模型**：用当前表单（未保存也可）的配置请求上游 OpenAI 兼容 `GET /models`，结果以胶囊展示，点一下即加入模型目录；兼容单项代理与自定义 Headers，编辑已有服务时 Key 留空会回退到已保存的 Key。
+  - **恢复默认模型**：把目录重置为仅默认模型；**添加模型**：手动补录上游不提供 `/models` 的场景。
+- 后端：`integrations.aiModels()` 拉取并规范化目录；`POST /api/ai/models/fetch` 供表单试拉；provider 保存时经 `normalizeModelCatalog()` 去重限长（默认模型必在内），结果写入 `provider.models`。
+
+### 49.2 AI 会话选择具体模型
+
+- `GET /api/ai/models` 聚合所有已启用 API 服务的模型目录：`{providerId, providerName, model, label, value}`，`value = providerId::model`。
+- AI 会话页 `#ach-provider` 改为按服务分组（`<optgroup>`）的下拉，列出全部可用模型；新建 / 打开 / 发送 / 切换都携带 `{providerId, model}`。
+- `aiChat.open/openEngine` 接受 `modelOverride`，切换即重建 dsh 引擎并把模型名落库；`dshTerminal` 的 `renderPatch(sessionDir, provider, modelOverride)` 与 `submitWithEvents` 用会话选中的模型渲染 `cordis.patch.yml`，不再固定取服务默认模型。
+
+### 49.3 验证
+
+- `npm run check` 语法检查、`node scripts/check-frontend.js` 前端自检均通过（新增 2 项断言：模型目录拉取、按服务选模型）。
+- 两页互不干扰：AI 运维仍走 `opsAgent`，AI 会话走 dsh；未配置模型目录的服务自动回退为单个默认模型，旧数据零迁移。

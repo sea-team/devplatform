@@ -147,7 +147,7 @@ function clearMessages(user, id) {
  * 打开/续接会话的引擎。首次或引擎已失效时用 openSession(persistent) 新建，
  * 并持久化 engineSid；已有则复用。返回引擎 sid 与模型信息。
  */
-async function openEngine(stateObj, user, id, providerOverride = '') {
+async function openEngine(stateObj, user, id, providerOverride = '', modelOverride = '') {
   const session = owned(user, id, true);
   let engineSid = String(session.engineSid || '');
   let info = null;
@@ -160,6 +160,7 @@ async function openEngine(stateObj, user, id, providerOverride = '') {
       persistent: true,
       chatId: id,
       dshSessionId: session.dshSessionId || '',
+      model: modelOverride || session.model || '',
     });
     engineSid = opened.sid;
     update((s) => {
@@ -176,20 +177,26 @@ async function openEngine(stateObj, user, id, providerOverride = '') {
 }
 
 /** 打开会话：确保引擎就绪，返回详情 + 引擎 sid，供前端订阅事件流。 */
-async function open(stateObj, user, id, providerOverride = '') {
+async function open(stateObj, user, id, providerOverride = '', modelOverride = '') {
   const detailData = detail(user, id);
   const providerId = String(providerOverride || detailData.providerId || '');
-  // 切换了 AI 服务时，重建引擎以应用新 provider。
-  if (providerId && providerId !== detailData.providerId) {
+  const model = String(modelOverride || '');
+  // 切换了 AI 服务 / 模型时，重建引擎以应用新配置。
+  if ((providerId && providerId !== detailData.providerId) || (model && model !== detailData.model)) {
     const cur = findById(String(id));
     if (cur && cur.engineSid) { try { dshTerminal.close(String(cur.engineSid), user); } catch { /* noop */ } }
     update((s) => {
       const target = (s.aiChats || []).find((x) => x && x.id === id);
-      if (target) { target.engineSid = ''; target.dshSessionId = ''; target.providerId = providerId; }
+      if (target) {
+        target.engineSid = ''; target.dshSessionId = '';
+        if (providerId) target.providerId = providerId;
+        if (model) target.model = model;
+      }
     });
   }
-  const engine = await openEngine(stateObj, user, id, providerOverride);
-  return { ...detailData, engineSid: engine.engineSid, providerId: engine.info.providerId, model: engine.info.model };
+  const engine = await openEngine(stateObj, user, id, providerOverride, model);
+  const fresh = detail(user, id);
+  return { ...fresh, engineSid: engine.engineSid, providerId: engine.info.providerId, model: engine.info.model };
 }
 
 /**
@@ -202,7 +209,8 @@ async function send(stateObj, user, id, body = {}) {
   if (content.length > MAX_CONTENT) throw badRequest('内容过长');
   owned(user, id, true);
 
-  const engine = await openEngine(stateObj, user, id, '');
+  const current = findById(String(id));
+  const engine = await openEngine(stateObj, user, id, '', String((current && current.model) || ''));
   const userMessage = { id: uid('msg'), role: 'user', content, at: now() };
   update((s) => {
     const target = (s.aiChats || []).find((x) => x && x.id === id);

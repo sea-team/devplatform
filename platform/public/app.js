@@ -31,8 +31,8 @@ const VIEW_META = {
   proxy: ['代理配置', '全局 / 分组 / Git Host 规则 / 单项覆盖，四级优先级解析与连通性测试'],
   environment: ['环境适配', '自动识别环境、体检、切换档案与自动处置，换机器无需改代码'],
   envcfg: ['环境配置', '查看与管理 .env：白名单写入、脱敏、待重启提示与诊断联动的配置指引'],
-  ai: ['配置 AI 服务', 'API 服务、宿主机 / WSL 本地 AI 程序与代理'],
-  'ai-list': ['已配置服务', '查看、编辑、删除已保存的 AI 服务'],
+  ai: ['配置 AI 模型', 'API 服务、宿主机 / WSL 本地 AI 程序与代理'],
+  'ai-list': ['已配置模型', '查看、编辑、删除已保存的 AI 服务'],
   'ai-test': ['连通性测试', '向已保存的服务发起真实请求验证可用性'],
   ops: ['AI 运维', '多轮对话式运维助手，支持文件 / 图片与会话留存'],
   aichat: ['AI 会话', 'DeepSeek Harness 驱动的会话式助手，对话与工具轨迹一目了然'],
@@ -70,6 +70,9 @@ let logTimer = null;
 let selectedBuildId = null;
 let detectedPrograms = null;
 let detectedOnce = false;
+// AI 模型配置：编辑表单里的模型目录（{id,name} 数组）与「获取可用模型」结果缓存。
+let providerModelRows = [];
+let providerAvailableModels = [];
 let serverCache = [];
 let serverPollTimer = null;
 let serverPollBusy = false;
@@ -604,7 +607,7 @@ async function loadOverview() {
     const d = await api('/overview');
     const c = d.counts;
     $('#stat-grid').innerHTML = [
-      ['已配置服务器', c.servers, 'SSH 可连接节点'],
+      ['已配置模型器', c.servers, 'SSH 可连接节点'],
       ['构建任务', c.builds, `成功 ${c.buildSuccess} · 失败 ${c.buildFailed}`],
       ['部署次数', c.deploys, '产物自动发布'],
       ['AI 服务', c.aiProviders, 'API / 本地 CLI / 代理'],
@@ -3312,7 +3315,117 @@ function providerSummary(p) {
   return `${esc(p.baseURL)} · ${esc(p.model)} · Key ${esc(p.apiKey || '未设置')}${p.proxy ? ' · 代理 ' + esc(p.proxy) : ''}`;
 }
 
-/** 把已配置服务填进所有页面的服务商下拉（连通性测试 / AI 运维会话）。 */
+/** 渲染编辑表单里的模型目录：显示名 + 模型 ID，可设为默认 / 删除 / 拖拽排序。 */
+function renderProviderModelRows(defaultModel) {
+  const box = $('#model-rows');
+  if (!box) return;
+  if (!providerModelRows.length) {
+    box.innerHTML = '<div class="model-add-hint">尚无模型。点「获取可用模型」拉取，或手动「添加模型」。</div>';
+    return;
+  }
+  box.innerHTML = providerModelRows.map((m, i) => `
+    <div class="model-row ${m.id === defaultModel ? 'is-default' : ''}" data-model-row="${i}" draggable="true">
+      <span class="model-grip" title="拖拽排序">≡</span>
+      <input class="model-name" data-model-name="${i}" value="${esc(m.name || m.id)}" placeholder="显示名称" />
+      <input class="model-id" data-model-id="${i}" value="${esc(m.id)}" placeholder="模型 ID" />
+      <button type="button" class="btn btn-sm" data-model-default="${i}" title="设为默认模型">${m.id === defaultModel ? '默认' : '设为默认'}</button>
+      <button type="button" class="btn btn-sm btn-danger" data-model-del="${i}" title="删除">✕</button>
+    </div>`).join('');
+
+  box.querySelectorAll('[data-model-name]').forEach((el) => el.addEventListener('input', () => {
+    providerModelRows[Number(el.dataset.modelName)].name = el.value;
+  }));
+  box.querySelectorAll('[data-model-id]').forEach((el) => el.addEventListener('input', () => {
+    providerModelRows[Number(el.dataset.modelId)].id = el.value;
+  }));
+  box.querySelectorAll('[data-model-del]').forEach((b) => b.addEventListener('click', () => {
+    providerModelRows.splice(Number(b.dataset.modelDel), 1);
+    renderProviderModelRows(getDefaultModelValue());
+  }));
+  box.querySelectorAll('[data-model-default]').forEach((b) => b.addEventListener('click', () => {
+    const m = providerModelRows[Number(b.dataset.modelDefault)];
+    if (!m) return;
+    const id = String(m.id || m.name || '').trim();
+    if (!id) { toast('请先填写模型 ID', true); return; }
+    const modelInput = $('#provider-form [name="model"]');
+    if (modelInput) modelInput.value = id;
+    renderProviderModelRows(id);
+    toast(`默认模型已设为 ${id}`);
+  }));
+  let dragIdx = -1;
+  box.querySelectorAll('[data-model-row]').forEach((row) => {
+    row.addEventListener('dragstart', () => { dragIdx = Number(row.dataset.modelRow); });
+    row.addEventListener('dragover', (e) => { e.preventDefault(); });
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const to = Number(row.dataset.modelRow);
+      if (dragIdx < 0 || dragIdx === to) return;
+      const [moved] = providerModelRows.splice(dragIdx, 1);
+      providerModelRows.splice(to, 0, moved);
+      renderProviderModelRows(getDefaultModelValue());
+    });
+  });
+}
+
+function getDefaultModelValue() {
+  const el = $('#provider-form [name="model"]');
+  return el ? String(el.value || '').trim() : '';
+}
+
+/** 把模型目录同步进表单提交体：默认模型置顶并写入 model 字段。 */
+function syncModelCatalogToForm() {
+  const rows = providerModelRows
+    .map((m) => ({ id: String((m && m.id) || '').trim(), name: String((m && m.name) || '').trim() }))
+    .filter((m) => m.id);
+  const def = getDefaultModelValue();
+  const ordered = def ? rows.filter((m) => m.id === def).concat(rows.filter((m) => m.id !== def)) : rows;
+  const modelInput = $('#provider-form [name="model"]');
+  if (modelInput && ordered.length && !def) modelInput.value = ordered[0].id;
+  return ordered;
+}
+
+/** 渲染「获取可用模型」结果：点一下即加入模型目录。 */
+function renderAvailableModels() {
+  const box = $('#model-available');
+  if (!box) return;
+  if (!providerAvailableModels.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  const added = new Set(providerModelRows.map((m) => String(m.id || '')));
+  box.innerHTML = providerAvailableModels.map((m, i) => `
+    <button type="button" class="model-chip ${added.has(m.id) ? 'is-added' : ''}" data-avail="${i}" title="${esc(m.ownedBy ? '提供者 ' + m.ownedBy : m.id)}">
+      <span class="model-chip-add">${added.has(m.id) ? '✓' : '＋'}</span>${esc(m.name || m.id)}
+    </button>`).join('');
+  box.querySelectorAll('[data-avail]').forEach((b) => b.addEventListener('click', () => {
+    const m = providerAvailableModels[Number(b.dataset.avail)];
+    if (!m) return;
+    if (providerModelRows.some((x) => x.id === m.id)) { toast('该模型已在目录中'); return; }
+    providerModelRows.push({ id: m.id, name: m.name || m.id });
+    renderProviderModelRows(getDefaultModelValue());
+    renderAvailableModels();
+    toast(`已添加 ${m.name || m.id}`);
+  }));
+}
+
+function loadProviderModels(p) {
+  const raw = Array.isArray(p.models) && p.models.length ? p.models : [{ id: p.model || '', name: p.model || '' }];
+  providerModelRows = raw.map((m) => ({
+    id: String((m && (m.id || m.name)) || ''),
+    name: String((m && m.name) || (m && m.id) || ''),
+  })).filter((m) => m.id);
+  providerAvailableModels = [];
+  renderProviderModelRows(p.model || '');
+  renderAvailableModels();
+}
+
+function clearProviderModels() {
+  providerModelRows = [];
+  providerAvailableModels = [];
+  renderProviderModelRows('');
+  renderAvailableModels();
+  const r = $('#model-fetch-result'); if (r) { r.hidden = true; r.textContent = ''; }
+}
+
+/** 把已配置模型填进所有页面的服务商下拉（连通性测试 / AI 运维会话）。 */
 function fillProviderSelects(items) {
   const options = items.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} · ${p.kind === 'cli' ? '本地 ' + esc(p.command) : esc(p.model)}</option>`).join('')
     || '<option value="">请先配置服务</option>';
@@ -3342,7 +3455,7 @@ async function loadAI() {
           <button class="btn btn-sm" data-collab-open="aiProviders|${esc(p.id)}">协作者</button>
           <button class="btn btn-sm btn-danger" data-delprovider="${esc(p.id)}">删除</button>
         </div>
-      </div>`).join('') : '<div class="empty">还没有配置 AI 服务，请在「配置 AI 服务」页添加</div>';
+      </div>`).join('') : '<div class="empty">还没有配置 AI 模型，请在「配置 AI 模型」页添加</div>';
 
     box.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', async () => {
       try {
@@ -3360,6 +3473,7 @@ async function loadAI() {
         form.elements.apiKey.value = '';
         form.elements.apiKey.placeholder = '留空表示不修改已保存的 Key';
         setProviderKind(p.kind || 'api');
+        loadProviderModels(p);
         renderCollabInline('aiProviders', p.id);
         const cancel = $('#provider-cancel');
         if (cancel) cancel.textContent = '取消编辑 / 返回列表';
@@ -3376,7 +3490,7 @@ async function loadAI() {
     }));
     box.querySelectorAll('[data-ai-proxy]').forEach((b) => b.addEventListener('click', () => gotoProxyOverride('ai', b.dataset.aiProxy)));
     box.querySelectorAll('[data-delprovider]').forEach((b) => b.addEventListener('click', async () => {
-      if (!await confirmDialog({ message: '确认删除这个 AI 服务配置？' })) return;
+      if (!await confirmDialog({ message: '确认删除这个 AI 模型配置？' })) return;
       try { await api(`/ai/providers/${b.dataset.delprovider}`, { method: 'DELETE' }); toast('已删除'); loadAI(); }
       catch (e) { toast(e.message, true); }
     }));
@@ -3901,18 +4015,24 @@ function achCloseSource() {
   if (aiChatState.source) { try { aiChatState.source.close(); } catch { /* noop */ } aiChatState.source = null; }
 }
 
-async function openAIChat(id, providerOverride = '') {
+async function openAIChat(id, selectionOverride = '') {
   achCloseSource();
   try {
+    const picked = achParseSelection(selectionOverride);
     const opened = await api(`/ai/chats/${encodeURIComponent(id)}/open`, {
-      method: 'POST', body: providerOverride ? { providerId: providerOverride } : {},
+      method: 'POST', body: picked ? { providerId: picked.providerId, model: picked.model } : {},
     });
     const detailData = await api(`/ai/chats/${encodeURIComponent(id)}`);
     aiChatState.currentId = id;
     aiChatState.engineSid = opened.engineSid || '';
     aiChatState.streamText = ''; aiChatState.streamTrace = [];
     aiChatState.stats = Object.assign({ turns: 0, steps: 0 }, detailData.stats || {});
-    const sel = $('#ach-provider'); if (sel && opened.providerId) sel.value = opened.providerId;
+    const sel = $('#ach-provider');
+    if (sel) {
+      const wanted = `${opened.providerId || ''}::${opened.model || ''}`;
+      const has = Array.from(sel.options).some((o) => o.value === wanted);
+      sel.value = has ? wanted : (Array.from(sel.options).some((o) => o.value === `${opened.providerId || ''}::`) ? `${opened.providerId || ''}::` : '');
+    }
     const t = $('#ach-title'); if (t) t.textContent = detailData.title || '新会话';
     const sub = $('#ach-sub'); if (sub) sub.textContent = `${detailData.messageCount || 0} 条消息 · 会话已留存`;
     achStatsText();
@@ -3924,8 +4044,8 @@ async function openAIChat(id, providerOverride = '') {
 
 async function createAIChat() {
   try {
-    const sel = $('#ach-provider');
-    const s = await api('/ai/chats', { method: 'POST', body: { providerId: sel ? sel.value : '' } });
+    const p = achCurrentSelection();
+    const s = await api('/ai/chats', { method: 'POST', body: { providerId: p.providerId, model: p.model } });
     await achLoadSessions(s.id);
     toast('已新建会话');
   } catch (e) { toast(e.message, true); }
@@ -4027,9 +4147,9 @@ async function sendAIChatMessage() {
   // 先打开会话拿到引擎 sid，再订阅结构化事件流。
   let engineSid = aiChatState.engineSid;
   try {
-    const sel = $('#ach-provider');
+    const p = achCurrentSelection();
     const opened = await api(`/ai/chats/${encodeURIComponent(aiChatState.currentId)}/open`, {
-      method: 'POST', body: sel && sel.value ? { providerId: sel.value } : {},
+      method: 'POST', body: p.providerId ? { providerId: p.providerId, model: p.model } : {},
     });
     engineSid = opened.engineSid || engineSid;
     aiChatState.engineSid = engineSid;
@@ -4091,19 +4211,41 @@ async function sendAIChatMessage() {
   }
 }
 
+/** 解析「providerId::model」选择值；空/无模型时返回 null。 */
+function achParseSelection(value) {
+  const v = String(value || '');
+  if (!v) return null;
+  const i = v.indexOf('::');
+  return { providerId: i < 0 ? v : v.slice(0, i), model: i < 0 ? '' : v.slice(i + 2) };
+}
+
+/** 当前下拉框选中的服务 + 模型。 */
+function achCurrentSelection() {
+  const sel = $('#ach-provider');
+  return achParseSelection(sel ? sel.value : '') || { providerId: '', model: '' };
+}
+
 async function loadAIChat() {
   try {
-    const [providers, servers] = await Promise.all([api('/ai/providers'), api('/servers')]);
-    const items = (providers.items || []).filter((p) => p.kind !== 'cli' && p.enabled !== false);
+    const [models, servers] = await Promise.all([api('/ai/models'), api('/servers')]);
+    const items = models.items || [];
     const sel = $('#ach-provider');
     if (sel) {
       const prev = sel.value;
+      const groups = new Map();
+      items.forEach((m) => {
+        if (!groups.has(m.providerId)) groups.set(m.providerId, { name: m.providerName, entries: [] });
+        groups.get(m.providerId).entries.push(m);
+      });
       sel.innerHTML = items.length
-        ? items.map((p) => `<option value="${esc(p.id)}">${esc(p.name)} · ${esc(p.model || '')}</option>`).join('')
-        : '<option value="">（无可用 AI 服务）</option>';
-      if (prev && items.some((p) => p.id === prev)) sel.value = prev;
+        ? Array.from(groups.values()).map((g) => {
+            const opts = g.entries.map((m) => `<option value="${esc(m.value)}">${esc(m.label)}</option>`).join('');
+            return `<optgroup label="${esc(g.name)}">${opts}</optgroup>`;
+          }).join('')
+        : '<option value="">（无可用 AI 模型）</option>';
+      if (prev && Array.from(sel.options).some((o) => o.value === prev)) sel.value = prev;
     }
-    if (!items.length) toast('尚未配置 AI 服务：请在「AI 服务配置」页添加 API 类型服务', true);
+    if (!items.length) toast('尚未配置 AI 模型：请在「AI 模型配置」页添加 API 类型模型并拉取可用模型', true);
     const ws = $('#ach-workspace');
     if (ws) {
       const cur = (servers.items || []).find((s) => s.id === 'local') || (servers.items || [])[0];
@@ -4118,6 +4260,22 @@ async function loadAIChat() {
   const input = $('#ach-input');
   if (input) input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendAIChatMessage(); }
+  });
+  const modelSel = $('#ach-provider');
+  if (modelSel) modelSel.addEventListener('change', async () => {
+    if (!aiChatState.currentId) return;
+    const p = achCurrentSelection();
+    if (!p.providerId) return;
+    // 切换模型后立即重建引擎；保留会话消息上下文。
+    try {
+      await api(`/ai/chats/${encodeURIComponent(aiChatState.currentId)}/open`, {
+        method: 'POST', body: { providerId: p.providerId, model: p.model },
+      });
+      const detailData = await api(`/ai/chats/${encodeURIComponent(aiChatState.currentId)}`);
+      aiChatState.engineSid = '';
+      const sub = $('#ach-sub'); if (sub) sub.textContent = `${detailData.messageCount || 0} 条消息 · 会话已留存`;
+      toast(`已切换到模型 ${p.model || p.providerId}：下一条消息起生效`);
+    } catch (e) { toast(e.message, true); }
   });
   $('#ach-new').addEventListener('click', createAIChat);
   $('#ach-delete').addEventListener('click', deleteAIChat);
@@ -6044,6 +6202,9 @@ function providerFormBody(form) {
   const body = formData(form);
   body.enabled = form.elements.enabled.checked;
   body.noKey = form.elements.noKey.checked;
+  if (form.elements.protocol) body.protocol = form.elements.protocol.value;
+  if (form.elements.retryPolicy) body.retryPolicy = form.elements.retryPolicy.value;
+  if ($('#api-fields') && !$('#api-fields').hidden) body.models = syncModelCatalogToForm();
   return body;
 }
 
@@ -6054,18 +6215,20 @@ $('#provider-form').addEventListener('submit', async (e) => {
     await api('/ai/providers', { method: 'POST', body: providerFormBody(e.target) });
     if (editingId) await saveCollabInline('aiProviders', editingId);
     renderCollabInline('aiProviders', '');
-    toast('AI 服务已保存');
+    toast('AI 模型已保存');
     e.target.reset();
     setProviderKind('api');
+    clearProviderModels();
     $('#provider-test-result').hidden = true;
     if ($('#provider-cancel')) $('#provider-cancel').textContent = '取消 / 返回列表';
     await loadAI();
-    switchView('ai-list');                 // 保存后跳到「已配置服务」看到结果
+    switchView('ai-list');                 // 保存后跳到「已配置模型」看到结果
   } catch (err) { toast(err.message, true); }
 });
 $('#provider-cancel').addEventListener('click', () => {
   $('#provider-form').reset();
   setProviderKind('api');
+  clearProviderModels();
   $('#provider-test-result').hidden = true;
   $('#provider-cancel').textContent = '取消 / 返回列表';
   renderCollabInline('aiProviders', '');
@@ -6074,10 +6237,43 @@ $('#provider-cancel').addEventListener('click', () => {
 $('#provider-reset').addEventListener('click', () => {
   $('#provider-form').reset();
   setProviderKind('api');
+  clearProviderModels();
   $('#provider-test-result').hidden = true;
   $('#provider-cancel').textContent = '取消 / 返回列表';
   renderCollabInline('aiProviders', '');
 });
+// 模型目录：添加 / 恢复默认 / 获取可用模型（上游 OpenAI 兼容 /models）。
+$('#model-add').addEventListener('click', () => {
+  providerModelRows.push({ id: '', name: '' });
+  renderProviderModelRows(getDefaultModelValue());
+  const last = $('#model-rows input.model-id:last-of-type');
+  if (last) last.focus();
+});
+$('#model-restore').addEventListener('click', () => {
+  const def = getDefaultModelValue();
+  providerModelRows = def ? [{ id: def, name: def }] : [];
+  providerAvailableModels = [];
+  renderProviderModelRows(def);
+  renderAvailableModels();
+  toast('模型目录已恢复为默认模型');
+});
+$('#model-fetch').addEventListener('click', async () => {
+  const box = $('#model-fetch-result');
+  box.hidden = false;
+  box.textContent = '正在从上游 /models 拉取可用模型…';
+  try {
+    const body = providerFormBody($('#provider-form'));
+    const d = await api('/ai/models/fetch', { method: 'POST', body });
+    providerAvailableModels = (d.items || []).map((m) => ({ id: m.id, name: m.id, ownedBy: m.ownedBy || '' }));
+    renderAvailableModels();
+    box.textContent = `已获取 ${d.count || providerAvailableModels.length} 个可用模型${d.effectiveProxy ? ' · 代理 ' + d.effectiveProxy : ''}：在下方点选加入模型目录`;
+  } catch (err) {
+    providerAvailableModels = []; renderAvailableModels();
+    box.textContent = `获取失败：${err.message}`;
+    toast(err.message, true);
+  }
+});
+
 $('#provider-test').addEventListener('click', async (e) => {
   const box = $('#provider-test-result');
   box.hidden = false;

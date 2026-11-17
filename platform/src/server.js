@@ -9,7 +9,7 @@ const {
   safeWorkspacePath, relativeWorkspacePath, badRequest, notFound, inferStatus,
 } = require('./core');
 const {
-  giteaApi, openlistApi, sshExec, collectStatus, publicServer, aiChat, aiProxy, publicProvider, httpJSON,
+  giteaApi, openlistApi, sshExec, collectStatus, publicServer, aiChat, aiModels, aiProxy, publicProvider, httpJSON,
   detectLocalPrograms, runCli,
 } = require('./integrations');
 const { PROFILES, startBuild, deployBuild, opsAgent, READ_COMMANDS } = require('./engine');
@@ -1206,6 +1206,28 @@ app.get('/api/servers/:id/terminals', (req, res) => ok(res, {
 
 /* ------------------------------- AI 服务配置 ----------------------------- */
 
+/** 规范化模型目录：接受 [{id,name}] 或字符串数组，去重、限长，始终保证默认模型在内。 */
+function normalizeModelCatalog(raw, defaultModel) {
+  let list = raw;
+  if (typeof list === 'string') { try { list = JSON.parse(list); } catch { list = []; } }
+  const out = [];
+  const seen = new Set();
+  const push = (id, name) => {
+    const mid = String(id || '').trim();
+    if (!mid || seen.has(mid)) return;
+    seen.add(mid);
+    out.push({ id: mid.slice(0, 200), name: String(name || mid).trim().slice(0, 120) || mid });
+  };
+  push(defaultModel, defaultModel);
+  if (Array.isArray(list)) {
+    for (const item of list.slice(0, 300)) {
+      if (typeof item === 'string') push(item, item);
+      else if (item && typeof item === 'object') push(item.id || item.name, item.name || item.id);
+    }
+  }
+  return out;
+}
+
 app.get('/api/ai/providers', (req, res) => ok(res, {
   items: state().aiProviders.map(publicProvider),
 }));
@@ -1251,6 +1273,7 @@ app.post('/api/ai/providers', wrap(async (req, res) => {
         ? existing.apiKey : String(b.apiKey || ''),
       headers: b.headers || '',
       noKey: Boolean(b.noKey),
+      models: normalizeModelCatalog(b.models, String(b.model)),
     };
   }
 
@@ -1330,6 +1353,48 @@ app.post('/api/ai/test', wrap(async (req, res) => {
   });
 }));
 
+// 「获取可用模型」：用当前表单（尚未保存）的配置拉一次上游 /models 目录。
+app.post('/api/ai/models/fetch', wrap(async (req, res) => {
+  const b = req.body || {};
+  const formProxy = String(b.proxy || '').includes('******') ? '' : String(b.proxy || '');
+  let apiKey = String(b.apiKey || '');
+  if (!apiKey && b.id) {
+    const saved = state().aiProviders.find((p) => p.id === b.id);
+    if (saved && saved.apiKey) apiKey = saved.apiKey;
+  }
+  const provider = {
+    id: String(b.id || ''), kind: 'api', name: '临时探测',
+    baseURL: String(b.baseURL || '').replace(/\/+$/, ''),
+    model: String(b.model || ''), apiKey,
+    headers: b.headers || '', noKey: Boolean(b.noKey), proxy: formProxy,
+  };
+  const d = await aiModels(provider);
+  ok(res, { ...d, effectiveProxy: aiProxy(provider).masked });
+}));
+
+// AI 会话页「选择模型」：聚合所有已启用 API 服务的模型目录，value = providerId::modelId。
+app.get('/api/ai/models', (req, res) => {
+  const items = [];
+  for (const p of state().aiProviders) {
+    if (p.kind === 'cli' || p.enabled === false) continue;
+    const catalog = Array.isArray(p.models) && p.models.length
+      ? p.models
+      : [{ id: p.model, name: p.model }];
+    for (const m of catalog) {
+      const mid = String((m && (m.id || m.name)) || '').trim();
+      if (!mid) continue;
+      items.push({
+        providerId: p.id,
+        providerName: p.name,
+        model: mid,
+        label: String((m && m.name) || mid),
+        value: `${p.id}::${mid}`,
+      });
+    }
+  }
+  ok(res, { items });
+});
+
 const findProvider = (id) => {
   const provider = state().aiProviders.find((p) => p.id === id)
     || state().aiProviders.find((p) => p.enabled !== false);
@@ -1339,7 +1404,12 @@ const findProvider = (id) => {
 
 app.post('/api/ai/chat', wrap(async (req, res) => {
   requireBody(req.body, ['prompt']);
-  const provider = findProvider(req.body.providerId);
+  const baseProvider = findProvider(req.body.providerId);
+  // 允许传入具体模型（AI 会话/连通性测试选择模型时），仅覆盖模型名，其余配置沿用服务。
+  const modelOverride = String(req.body.model || '').trim();
+  const provider = (modelOverride && baseProvider.kind !== 'cli')
+    ? { ...baseProvider, model: modelOverride }
+    : baseProvider;
   const response = await aiChat(provider, [
     { role: 'system', content: '你是开发平台助手，回答简洁、用简体中文。' },
     { role: 'user', content: String(req.body.prompt) },
@@ -1441,7 +1511,8 @@ app.post('/api/ai/chats/:id/clear', wrap(async (req, res) => ok(res, aiChatStore
 
 // 打开 / 续接会话引擎，返回 engineSid 供前端订阅结构化事件流。
 app.post('/api/ai/chats/:id/open', wrap(async (req, res) => {
-  ok(res, await aiChatStore.open(state(), req.user, req.params.id, String(req.body?.providerId || '')));
+  ok(res, await aiChatStore.open(state(), req.user, req.params.id,
+    String(req.body?.providerId || ''), String(req.body?.model || '')));
 }));
 
 // 发送消息：同步落库并等待 dsh 完成，增量文本由上面的 stream 实时推送。
