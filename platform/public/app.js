@@ -2242,7 +2242,7 @@ function renderProxyGroups(cfg) {
   $('#proxy-groups').innerHTML = PROXY_SCOPES.map((scope) => `
     <div class="row gap wrap" style="margin-bottom:8px">
       <span class="muted" style="min-width:130px">${esc(PROXY_LABELS[scope])}</span>
-      <input data-proxy-group-input="${scope}" placeholder="留空继承全局代理；direct 强制直连"
+      <input data-proxy-group-input="${scope}" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空继承"
         value="${esc(cfg.groups[scope].direct ? 'direct' : (cfg.groups[scope].url || ''))}" style="flex:1;min-width:220px" />
       <button class="btn btn-sm btn-primary" data-proxy-group-save="${scope}">保存</button>
       <button class="btn btn-ghost btn-sm" data-proxy-group-clear="${scope}">清空</button>

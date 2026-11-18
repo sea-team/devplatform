@@ -309,7 +309,7 @@
                 <label id="clone-password-field">密码 / 个人访问令牌<input name="password" id="clone-password" type="password" placeholder="GitHub 请填 PAT，不要填登录密码" autocomplete="new-password" /></label>
                 <label id="clone-token-field" hidden>访问令牌 Token<input name="token" id="clone-token" type="password" placeholder="ghp_... / Gitea Token / GitLab PAT" autocomplete="new-password" /></label>
               </div>
-              <label>本次克隆代理（可选）<input name="proxy" placeholder="留空按代理规则继承；填 direct 强制直连" /></label>
+              <label>本次克隆代理（可选）<input name="proxy" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空继承" /></label>
               <label>TLS 证书校验（本次克隆）<select name="insecure">
                 <option value="auto">跟随 Git 源 / 全局设置（默认严格校验）</option>
                 <option value="on">忽略证书校验（仅限可信内网应急）</option>
@@ -1028,7 +1028,7 @@
               </div>
               <label>私钥 PEM 内容（可选）<textarea name="privateKey" rows="2" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
               <label>或私钥文件路径（可选）<input name="privateKeyPath" placeholder="C:/Users/you/.ssh/id_rsa （容器内请填挂载后的路径）" /></label>
-              <label>单个服务器代理（可选）<input name="proxy" placeholder="留空继承「服务器代理」分组 / 全局代理；direct 强制直连" /></label>
+              <label>单个服务器代理（可选）<input name="proxy" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空继承" /></label>
               <div class="notice">
                 <b>代理填写说明</b>：支持 <code>http://user:pass@host:port</code>、<code>https://…</code>、<code>socks5://…</code>（SSH 走隧道）。<b>留空</b>表示继承下一级；填 <code>direct</code> 表示明确直连，会清除子进程代理变量。内网 IP 建议在「代理配置 → 全局 NO_PROXY」里排除。<br />
                 私钥带口令时务必填写「私钥密码」，否则 SSH 会报解密失败。接口不会回传凭据明文，表单里显示 <code>******</code> 时保留原值即可。
@@ -1111,7 +1111,7 @@
               <input type="hidden" name="kind" id="provider-kind" value="api" />
               <div class="grid-3">
                 <label>服务名称<input name="name" placeholder="DeepSeek / 本机 Codex" required /></label>
-                <label>代理地址（可选）<input name="proxy" placeholder="http://127.0.0.1:7890 / direct / 留空继承 AI 分组代理" /></label>
+                <label>代理地址（可选）<input name="proxy" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空继承" /></label>
                 <label class="check"><input type="checkbox" name="enabled" checked /> 启用该服务</label>
               </div>
               <div class="hint">单个 AI 服务代理 &gt; AI 服务分组代理 &gt; 全局代理。API 服务走 HTTP 代理转发，本地 CLI 注入 <code>HTTP_PROXY / HTTPS_PROXY / ALL_PROXY</code>；留空继承下一级，<code>direct</code> 强制直连。格式与示例见「代理配置」页。</div>
@@ -1235,7 +1235,7 @@
             <div class="hint">按仓库地址的主机名匹配，支持精确值（<code>github.com</code>）与通配符（<code>*.gitea.internal</code>）；多条规则按添加顺序，先命中先生效。常用来「外网走代理、内网直连」。</div>
             <form id="proxy-rule-form" class="row">
               <input name="pattern" placeholder="github.com 或 *.gitea.internal" required />
-              <input name="url" placeholder="http://127.0.0.1:7890 或 direct" required />
+              <input name="url" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct" required />
               <input name="note" placeholder="备注（可选）" />
               <button class="btn btn-sm btn-primary" type="submit">添加规则</button>
             </form>
@@ -1788,7 +1788,7 @@
       <div class="modal-body">
         <div class="notice">只对该对象生效，优先级高于 Git Host 规则 / 分组 / 全局代理。可填 <code>http://…</code>、<code>socks5://…</code>、<code>direct</code>；<b>留空保存 = 删除覆盖</b>。已有地址出于安全不回显，填新值即覆盖。</div>
         <form id="objproxy-form" class="form" style="margin-top:12px">
-          <label>代理地址<input name="url" placeholder="http://127.0.0.1:7890 / direct / 留空删除" /></label>
+          <label>代理地址<input name="url" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空删除" /></label>
           <label>备注（可选）<input name="note" placeholder="例如：仅该仓库走内网代理" /></label>
           <div class="form-actions">
             <button class="btn btn-primary" type="submit">保存覆盖</button>
