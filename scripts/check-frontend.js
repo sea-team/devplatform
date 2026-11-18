@@ -31,6 +31,7 @@ const integrationsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform'
 const workspaceGitSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'workspaceGit.js'), 'utf8');
 const gitSourcesSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'gitSources.js'), 'utf8');
 const credsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'serviceCredentials.js'), 'utf8');
+const userDirsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'userDirs.js'), 'utf8');
 const nativeSrc = fs.readFileSync(path.resolve(__dirname, '..', 'windows', 'native-services.ps1'), 'utf8');
 const errors = [];
 const note = (ok, label, extra = '') => {
@@ -375,6 +376,21 @@ note(gitSourcesSrc.includes('function effectiveSource') && gitSourcesSrc.include
   && app.includes('syncRepoAuthFields') && !app.includes('data-proxy-repo')
   && html.includes('name="autoWorkspace"') && html.includes('id="repo-git-message"'),
 '新建仓库内联凭据/代理/TLS + 自动克隆工作区；列表去代理按钮、IDE 直达、Git 提交/还原输入');
+
+// v0.4.17①：IDE 直达免密 —— 服务端代登录 code-server 并透传会话 Cookie。
+note(serverSrc.includes('async function ideAutoLoginCookie') && serverSrc.includes('code-server-session=')
+  && serverSrc.includes("res.setHeader('Set-Cookie', cookie)") && serverSrc.includes('autoLogin'),
+'IDE 直达免密：POST /api/ide/open 代登录 code-server 透传会话 Cookie，失败降级');
+
+// v0.4.17② C 批：建账号自动建 OpenList 家目录 + 完整路径前缀隔离 + 目录协作。
+note(userDirsSrc.includes('async function provision') && userDirsSrc.includes('function allowsPath')
+  && userDirsSrc.includes('function canWritePath') && userDirsSrc.includes('HOME_ROOT')
+  && serverSrc.includes("await userDirs.provision(user)") && serverSrc.includes("'/api/user-dirs'")
+  && permSrc.includes('userDirs.allowsPath(user, dir)') && permSrc.includes('userDirs.canWritePath(user, d)')
+  && permSrc.includes("/api\\/openlist\\/admin\\/api") && openlistSrc.includes("dir === '/users'")
+  && app.includes('data-collab-open="directories|') && app.includes('/user-dirs')
+  && app.includes('storageHomeInit'),
+'C 批：建账号建家目录 + 完整路径前缀隔离（read 协作者只读）+ 目录协作按钮 + admin 代理写收口 + 默认进家目录');
 
 // v0.4.14：所有代理地址输入框的 placeholder 都带 socks5 示例。
 note((html.match(/socks5:\/\/127\.0\.0\.1:1080/g) || []).length >= 5

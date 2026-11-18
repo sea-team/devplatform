@@ -36,6 +36,7 @@ const permissions = require('./permissions');
 const aiSessions = require('./aiSessions');
 const aiChatStore = require('./aiChat');
 const dshTerminal = require('./dshTerminal');
+const userDirs = require('./userDirs');
 
 // 面板里保存过的 OpenList 连接优先于 .env（不改文件、重启后仍然生效）。
 openlist.applyConfig();
@@ -143,9 +144,39 @@ app.post('/api/auth/2fa/confirm', wrap(async (req, res) => ok(res, auth.confirm2
 app.post('/api/auth/2fa/disable', wrap(async (req, res) => ok(res, auth.disable2fa(req.user))));
 
 app.get('/api/users', wrap(async (req, res) => { requireAdmin(req); ok(res, { items: auth.listUsers() }); }));
-app.post('/api/users', wrap(async (req, res) => { requireAdmin(req); ok(res, auth.createUser(req.body)); }));
+// v0.4.17 C 批：建账号同步建 OpenList 家目录（失败降级，账号仍可用；目录可稍后重建）。
+app.post('/api/users', wrap(async (req, res) => {
+  requireAdmin(req);
+  const user = auth.createUser(req.body);
+  let directory = { id: '', path: '', created: false, error: '' };
+  try { directory = await userDirs.provision(user); }
+  catch (e) { directory.error = String((e && e.message) || e || '建家目录失败'); }
+  ok(res, { ...user, directory });
+}));
 app.put('/api/users/:id', wrap(async (req, res) => { requireAdmin(req); ok(res, auth.updateUser(req.params.id, req.body, req.user)); }));
-app.delete('/api/users/:id', wrap(async (req, res) => { requireAdmin(req); ok(res, auth.deleteUser(req.params.id, req.user)); }));
+app.delete('/api/users/:id', wrap(async (req, res) => {
+  requireAdmin(req);
+  const r = auth.deleteUser(req.params.id, req.user);
+  // 禁用账号时只移除家目录归属记录，文件保留，避免误删数据。
+  try { userDirs.release(req.params.id); } catch { /* 归属清理失败不影响账号禁用 */ }
+  ok(res, r);
+}));
+
+// v0.4.17 C 批：用户家目录列表。管理员看全部；普通用户看自己 + 被协作的目录。
+app.get('/api/user-dirs', wrap(async (req, res) => {
+  const rows = permissions.visible(req.user, userDirs.listRecords()).map((d) => ({
+    id: d.id, name: d.name, dirPath: d.dirPath, ownerId: d.ownerId || '',
+    ownerName: (() => {
+      const u = (state().users || []).find((x) => x && x.id === d.ownerId);
+      return u ? (u.displayName || u.username) : '';
+    })(),
+    permission: d.ownerId === req.user.id ? 'owner'
+      : ((d.collaborators || []).find((c) => c && c.userId === req.user.id) || {}).permission || 'read',
+    collaborators: Array.isArray(d.collaborators) ? d.collaborators.length : 0,
+    createdAt: d.createdAt || '',
+  }));
+  ok(res, { items: rows });
+}));
 
 app.get('/api/resources', wrap(async (req, res) => ok(res, { items: permissions.resourcesFor(req.user) })));
 // 仓库 / 目录这类外部对象首次协作时懒建归属记录（owner 归当前操作者），再走标准协作者视图。
@@ -619,6 +650,32 @@ const maskSecret = (v) => {
   return s.length <= 8 ? `${s.slice(0, 1)}******` : `${s.slice(0, 3)}******${s.slice(-3)}`;
 };
 
+/**
+ * v0.4.17：外部 code-server 容器形态下，点「IDE 打开」弹的是 code-server 自己的登录页
+ * （CODE_SERVER_PASSWORD），用户因此被要求再输一次密码。平台本来就持有该密码，这里在
+ * 服务端代登录一次，把 code-server-session 透传给浏览器：Cookie 按 host 存储、不区分端口，
+ * 平台 9000 种下的会话在 8080 同样有效，window.open 打开 IDE 时已带会话，直接进入编辑器。
+ * 仅对外部 code-server 生效（本机 serve-web open 模式本就免密）；任何失败都降级返回 null，
+ * 绝不阻断打开动作，仍会把原始 url 交给前端。
+ */
+async function ideAutoLoginCookie() {
+  const pwd = String(config.codeServerPassword || '');
+  const base = String(config.codeServerUrl || '').replace(/\/+$/, '');
+  if (!pwd || !/^https?:\/\//.test(base)) return null;
+  try {
+    const r = await fetch(`${base}/login?to=%2F`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: `password=${encodeURIComponent(pwd)}`,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(6000),
+    });
+    const cookie = String(r.headers.get('set-cookie') || '');
+    const m = cookie.match(/(code-server-session=[^;]+)/);
+    return m ? `${m[1]}; Path=/; SameSite=Lax` : null;
+  } catch { return null; }
+}
+
 app.get('/api/ide', wrap(async (req, res) => {
   const pwd = String(config.codeServerPassword || '');
   const mode = config.ideAccessMode === 'token' ? 'token' : 'open';
@@ -689,10 +746,19 @@ app.post('/api/ide/open', wrap(async (req, res) => {
   const folder = native
     ? abs.replace(/\\/g, '/')
     : `/home/coder/project/${relativeWorkspacePath(abs)}`.replace(/\/+$/, '');
+  // 外部 code-server 容器：服务端用平台已知密码代登录，透传会话 Cookie，
+  // 让新开标签页直达编辑器而不再停在登录页（v0.4.17）。失败则降级为原行为。
+  let autoLogin = false;
+  if (!native) {
+    const cookie = await ideAutoLoginCookie();
+    if (cookie) { res.setHeader('Set-Cookie', cookie); autoLogin = true; }
+  }
   ok(res, {
     url: `${config.codeServerUrl}/?folder=${encodeURIComponent(folder)}`,
-    folder, mode: native ? 'native' : 'container',
-    hint: native ? '本机路径（VS Code serve-web）' : '容器内映射路径 /home/coder/project',
+    folder, mode: native ? 'native' : 'container', autoLogin,
+    hint: native ? '本机路径（VS Code serve-web）'
+      : autoLogin ? '容器内映射路径 /home/coder/project · 已代登录，直接进入'
+        : '容器内映射路径 /home/coder/project（代登录失败，可能需在 IDE 登录页输入口令）',
   });
 }));
 

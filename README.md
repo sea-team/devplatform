@@ -3077,3 +3077,34 @@ v0.4.8 把「AI 运维」对话页整体替换成了 xterm 终端，误删了已
 
 - `npm run check` + 前端自检通过（新增 3 项锁定断言 + 调整 1 项仓库代理按钮断言）。
 - 临时端到端冒烟：Git 组 7 项（presets 标记、只读放行、只读协作者写 403、owner 写放行、共享仓库写放行）+ 建仓组 5 项（源登记、内联凭据覆盖、autoWorkspace 触发/不触发），全过，脚本已删。
+
+---
+
+## §54 v0.4.17：IDE 直达免密 + 功能补充 C 批（用户家目录与隔离）
+
+### 54.1 IDE 直达免密（点「IDE 打开」直达编辑器，不再弹登录页）
+
+- **根因**：246 上 `dp-code-server` 容器自带登录页（`CODE_SERVER_PASSWORD`），平台的「IDE 打开」此前只 `window.open(url)`，落在 code-server 登录页，用户被迫再输一次密码。这与平台登录守卫无关。
+- **修复**：`POST /api/ide/open` 在外部 code-server 形态下，服务端用平台已知密码 `POST {codeServerUrl}/login?to=/` 代登录，拿到 `code-server-session` Cookie 并通过 `Set-Cookie` 透传给浏览器（Cookie 按 host 存储、不区分端口，9000 种下的会话在 8080 同样生效），`window.open` 打开时已带会话，直接进入编辑器。
+- **降级**：本机 serve-web（open 模式本就免密）不代登录；上游不可达 / 密码错误 / 无法拿 Cookie 时返回原始 url + `autoLogin:false` + 提示，绝不阻断打开动作。权限侧 `/api/ide/password` 明文 reveal 仍仅管理员。
+
+### 54.2 C 批：建账号自动建用户家目录（OpenList）
+
+- 新增 `src/userDirs.js`：`provision(user)` 在建账号后幂等地在 OpenList 建 `/users/<username>` 家目录，写一条 `directories[]` 归属记录（`aclKind:'directory'`，owner = 该用户），并登记 `openlistMountOwners['user:<userId>']`。上游建目录失败不回滚账号创建，返回 `directory.error` 可稍后重试。
+- `POST /api/users` 改为异步建账号 + `await provision()`；账号禁用（`DELETE /api/users/:id`）只移除家目录归属记录、文件保留（`release()`），避免误删数据。
+- 新增 `GET /api/user-dirs`：管理员看全部家目录；普通用户看自己 + 被协作的目录（复用 `permissions.visible`）。
+- 前端「账号管理」加「用户目录」列，显示家目录路径 + `data-collab-open="directories|<id>"` 协作者按钮（复用通用协作者弹窗，owner/管理员可授予 read/write）。
+
+### 54.3 目录隔离：从「挂载首段」升级为「家目录完整路径前缀」
+
+- `permissions.mountFileScopeAllows()` 优先用 `userDirs.allowsPath()`：`/users/alice` 只有 alice、alice 的 read/write 协作者、管理员可访问，`/users/bob` 对 alice 不可见；旧的自建挂载仍按首段匹配，`user:` 前缀记录不参与首段匹配（否则所有家目录首段都是 users 会互穿）。
+- `fileWriteScopeAllows()` 对落在 `/users/*` 的写操作追加 `userDirs.canWritePath()`：owner / write 协作者可写，**read 协作者只读**（这是冒烟测出的真实越权点，已修）。
+- `openlist.filterRootContent()` 对 `/users` 目录按 `allowedPrefixes()` 裁剪子目录；`mountSegmentsFor()` 把有家目录的用户在根目录放行 `users` 段。
+- **安全收口**：`/api/openlist/admin/api/*` 代理注入管理员 token，写操作（POST/PUT/DELETE 改上游存储/挂载/用户）在 `permissions.guard()` 里限管理员；只读 GET 保留给内嵌后台浏览，兼顾功能与隔离。
+- 存储页普通账号首次进入默认定位到 `/users/<username>`（`storageHomeInit` 一次性初始化），管理员保持根目录总览。
+
+### 54.4 验证
+
+- `npm run check`（含 userDirs.js）+ 前端自检（新增 2 项锁定断言）全过。
+- `npm run smoke:userdirs` 隔离冒烟 13 项全过：alice/bob 家目录互不可见、read 协作者可读不可写、管理员全通、根目录放行、admin 代理写拦截、懒建幂等、canWritePath/ allowsPath 直校。
+- 246 实地探查：code-server 容器 `dp-code-server`（8080，密码来自平台 `.env`）、目录映射 `/home/coder/project`；容器内代登录拿 Cookie + 带 Cookie 访问 `?folder=` 返回 200，链路验证通过。OpenList 在线（Local 挂载 `/workspace`），文件 API 可用。

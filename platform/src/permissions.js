@@ -17,6 +17,7 @@
  * 的全部容器与文件；外部系统（SSH / Docker / OpenList / Git）内部的多租户隔离不在此层实现。
  */
 const { state, update, HttpError, badRequest, notFound, OWNED_COLLECTIONS } = require('./core');
+const userDirs = require('./userDirs');
 
 /** 可归属的顶层集合：与 core.js 的自动归属列表保持同源。 */
 const COLLECTIONS = OWNED_COLLECTIONS;
@@ -141,10 +142,15 @@ function mountFileScopeAllows(p, user) {
   if (!dir.startsWith('/')) return false;
   const seg = dir.replace(/^\/+/, '').split('/')[0];
   if (!seg) return false;
+  // v0.4.17 C 批：用户家目录按完整路径前缀隔离（/users/<username>），优先于旧的挂载首段匹配。
+  if (userDirs.allowsPath(user, dir)) return true;
   const owners = state().openlistMountOwners;
   const table = owners && typeof owners === 'object' && !Array.isArray(owners) ? owners : {};
   const uidValue = user && user.id;
-  return Object.values(table).some((rec) => rec && rec.ownerId && uidValue
+  return Object.entries(table).some(([key, rec]) => rec && rec.ownerId && uidValue
+    // user: 前缀由 userDirs 的完整路径前缀逻辑负责，不参与旧的挂载首段匹配，
+    // 否则所有家目录首段都是 users，会互相穿透。
+    && !String(key).startsWith('user:')
     && rec.ownerId === uidValue
     && String(rec.mountPath || '').replace(/^\/+/, '').split('/')[0] === seg);
 }
@@ -161,7 +167,13 @@ function fileWriteScopeAllows(req, user) {
   const dirs = [query.path, body.path, body.srcDir, body.dstDir]
     .filter((v) => typeof v === 'string' && v.length);
   if (!dirs.length) return true; // 如 /api/storage/mounts：不带路径参数
-  if (dirs.every((d) => String(d).trim() !== '/' && mountFileScopeAllows(d, user))) return true;
+  if (dirs.every((d) => String(d).trim() !== '/' && mountFileScopeAllows(d, user))) {
+    // v0.4.17 C 批：路径落在用户家目录时，写操作要求 owner / write 协作者，
+    // read 协作者只读（mountFileScopeAllows 对 read 协作者也放行，必须在此收紧）。
+    const homeDirs = dirs.filter((d) => String(d).replace(/^\/+/, '').split('/')[0] === 'users');
+    if (homeDirs.length && !homeDirs.every((d) => userDirs.canWritePath(user, d))) return false;
+    return true;
+  }
   const names = [];
   const add = (v) => {
     if (Array.isArray(v)) v.forEach(add);
@@ -234,6 +246,11 @@ function guard(req, pathname) {
         .filter((v) => typeof v === 'string' && v.length);
       if (paths.length && !paths.every((p) => mountFileScopeAllows(p, user))) return false;
     } else if (!fileWriteScopeAllows(req, user)) return false;
+  }
+  // C 批安全收口：OpenList 后台代理注入的是管理员 token。只读 GET 保留给内嵌后台浏览，
+  // 但写操作（新建/编辑/删除挂载、改存储、改用户）必须管理员本人，避免普通账号借代理越权。
+  if (action !== 'read' && /^\/api\/openlist\/admin\/api(?:\/|$)/.test(String(pathname || ''))) {
+    return false;
   }
   for (const id of collectIds(req, pathname)) {
     const found = findResourceById(id);

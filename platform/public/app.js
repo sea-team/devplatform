@@ -2162,7 +2162,14 @@ function showDriverTemplate(driver, tpl) {
   });
 }
 
+let storageHomeInit = false;
 async function loadStorage() {
+  // C 批：普通账号首次进入存储页默认落在自己的家目录 /users/<username>；
+  // 管理员保持根目录，便于总览全部挂载。只初始化一次，之后尊重用户的路径选择。
+  if (!storageHomeInit && currentUser && currentUser.role !== 'admin' && currentUser.username) {
+    currentStoragePath = `/users/${currentUser.username}`;
+    storageHomeInit = true;
+  } else if (!storageHomeInit) storageHomeInit = true;
   $('#storage-path').value = currentStoragePath;
   const settled = (p) => Promise.resolve(p).catch((e) => ({ error: e.message }));
   const [status, files, mounts, drivers, connections] = await Promise.all([
@@ -7062,19 +7069,32 @@ async function loadUsers() {
   const box = $('#users-list');
   if (!box) return;
   try {
-    const data = await api('/users');
-    const rows = (data.items || []).map((u) => `<tr>
-      <td><b>${esc(u.username)}</b><div class="desc muted small">${esc(u.displayName || '')}</div></td>
-      <td>${badge(u.role === 'admin' ? '管理员' : '普通用户', u.role === 'admin' ? 'green' : 'gray')}</td>
-      <td>${badge(u.status === 'disabled' ? '已禁用' : '正常', u.status === 'disabled' ? 'red' : 'green')}</td>
-      <td>${badge(u.totpEnabled ? '已启用' : '未启用', u.totpEnabled ? 'green' : 'gray')}</td>
-      <td class="small">${esc(u.lastLoginAt ? fmtTime(u.lastLoginAt) : '从未登录')}</td>
-      <td class="actions">
-        <button class="btn btn-sm" type="button" data-user-reset="${esc(u.id)}">重置密码</button>
-        <button class="btn btn-sm" type="button" data-user-status="${esc(u.id)}">${u.status === 'disabled' ? '启用' : '禁用'}</button>
-      </td>
-    </tr>`);
-    box.innerHTML = table(['账号', '角色', '状态', '二次验证', '最近登录', '操作'], rows);
+    const [data, dirData] = await Promise.all([
+      api('/users'),
+      api('/user-dirs').catch(() => ({ items: [] })),
+    ]);
+    const dirByOwner = {};
+    for (const d of (dirData.items || [])) dirByOwner[d.ownerId] = d;
+    const rows = (data.items || []).map((u) => {
+      const dir = dirByOwner[u.id];
+      const dirCell = dir
+        ? `<div class="small">${esc(dir.dirPath)}</div>`
+          + `<button class="btn btn-sm" type="button" data-collab-open="directories|${esc(dir.id)}">目录协作者${dir.collaborators ? ` (${dir.collaborators})` : ''}</button>`
+        : '<span class="muted small">未创建</span>';
+      return `<tr>
+        <td><b>${esc(u.username)}</b><div class="desc muted small">${esc(u.displayName || '')}</div></td>
+        <td>${badge(u.role === 'admin' ? '管理员' : '普通用户', u.role === 'admin' ? 'green' : 'gray')}</td>
+        <td>${badge(u.status === 'disabled' ? '已禁用' : '正常', u.status === 'disabled' ? 'red' : 'green')}</td>
+        <td>${dirCell}</td>
+        <td>${badge(u.totpEnabled ? '已启用' : '未启用', u.totpEnabled ? 'green' : 'gray')}</td>
+        <td class="small">${esc(u.lastLoginAt ? fmtTime(u.lastLoginAt) : '从未登录')}</td>
+        <td class="actions">
+          <button class="btn btn-sm" type="button" data-user-reset="${esc(u.id)}">重置密码</button>
+          <button class="btn btn-sm" type="button" data-user-status="${esc(u.id)}">${u.status === 'disabled' ? '启用' : '禁用'}</button>
+        </td>
+      </tr>`;
+    });
+    box.innerHTML = table(['账号', '角色', '状态', '用户目录', '二次验证', '最近登录', '操作'], rows);
     box.querySelectorAll('[data-user-reset]').forEach((b) => b.addEventListener('click', async () => {
       const password = await promptDialog({
         title: '重置账号密码',

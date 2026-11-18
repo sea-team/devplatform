@@ -337,8 +337,10 @@ function ownerNameOf(ownerId) {
 function mountSegmentsFor(user) {
   const out = new Set();
   const uidValue = user && user.id;
-  for (const rec of Object.values(mountOwners())) {
+  for (const [key, rec] of Object.entries(mountOwners())) {
     if (!rec || !rec.ownerId || !uidValue || rec.ownerId !== uidValue) continue;
+    // user: 前缀是 C 批用户家目录，统一用 users 段放行、进入后由 filterRootContent 按家目录裁剪。
+    if (String(key).startsWith('user:')) { out.add('users'); continue; }
     const seg = String(rec.mountPath || '').replace(/^\/+/, '').split('/')[0];
     if (seg) out.add(seg);
   }
@@ -381,9 +383,18 @@ function visibleStorages(items, user = currentUser()) {
 
 /** 根目录只列出自己挂载对应的目录，避免「挂载列表看不到、文件页却能看到」。 */
 function filterRootContent(content, dir, user = currentUser()) {
-  if (dir !== '/' || isPrivileged(user)) return Array.isArray(content) ? content : [];
+  const list = Array.isArray(content) ? content : [];
+  if (isPrivileged(user)) return list;
+  // C 批：进入 /users 后，只列出该用户自己的家目录（或协作者被授权的目录）。
+  if (dir === '/users') {
+    // 延迟 require，避免 userDirs -> openlist 的循环依赖。
+    const userDirs = require('./userDirs');
+    const prefixes = userDirs.allowedPrefixes(user).map((p) => String(p).replace(/^\/users\//, '').split('/')[0]).filter(Boolean);
+    return list.filter((f) => prefixes.includes(String((f && f.name) || '').replace(/^\/+/, '')));
+  }
+  if (dir !== '/') return list;
   const allowed = mountSegmentsFor(user);
-  return (Array.isArray(content) ? content : []).filter(
+  return list.filter(
     (f) => allowed.has(String((f && f.name) || '').replace(/^\/+/, '')),
   );
 }
