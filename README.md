@@ -3048,3 +3048,32 @@ v0.4.8 把「AI 运维」对话页整体替换成了 xterm 终端，误删了已
 - **read 放宽**：`can()` 对 `aclKind==='repo'` 的 read 放行给所有登录用户（仓库来自共享 Git 源，避免克隆 / 列表被误拦）；write / 管理仍限 owner + 可写协作者 + 管理员，为 B 批 Git 写权限打基础。
 - **目录对象**：新增 `state.directories` 可归属 / 可协作集合，为 C 批「建账号建用户目录 + 目录隔离」铺垫。
 - **验证**：语法 + 前端自检通过；端到端冒烟 8 项全过（懒建归属、owner 可管理、write 协作者可读不可管、无关用户 read 放宽、归属持久化、目录协作者视图）。
+
+---
+
+## §53 功能补充 · B 批：Git 写操作 + 仓库凭据 / 工作区 / IDE 直达（v0.4.16）
+
+> 用户功能清单第 2 批。三项决策沿用：分批交付、用户目录落 OpenList、Git 写操作开放给所有者+可写协作者+管理员。
+
+### 53.1 Git 写操作（TortoiseGit 式）
+
+- `workspaceGit.js` 子命令白名单扩展：`status/log/branch/remote/diff/show/...` 只读外，新增写操作 `add / commit / push / merge / revert / reset / restore / stash / checkout`。`WRITE_COMMANDS` 覆盖全部写命令（含原 fetch/pull），`DESTRUCTIVE_COMMANDS` 标记 `reset/revert/merge/checkout/restore`。
+- 快捷预设：状态 / 日志 / 分支 / 远程地址 / 差异对比 / 完整差异 / 暂存区差异 / fetch / pull / push / 暂存全部 / 提交（需填提交说明）/ 中止合并 / 还原提交（可填 commit 号）/ 重置到上一次 / 放弃本地改动。破坏性预设在前端弹二次确认；提交 / 还原专用输入框。
+- **仓库级写权限**：`POST /api/repos/git` 对写命令按 `repoAcl`（id = `workspace:<仓库名>`）校验 `permissions.can(user, acl, 'write')`——owner + 可写协作者 + 管理员放行，只读协作者 403。**未配置任何归属的仓库沿用共享语义**（任何登录用户可写），避免锁死既有工作流。只读命令不受限。
+- `MAX_ARG_LEN` 放宽到 500 以容纳 commit message；危险字符 / `--git-dir` / `-c` 等仍拦截。
+
+### 53.2 新建仓库：内联凭据 / 代理 / TLS
+
+- 新建仓库表单「连接与工作区（可选）」区：服务地址 Base URL、凭据方式（源凭据 / 本次账号密码 / 本次 Token）、本次代理、TLS 校验三态、自动克隆开关（默认勾选）。
+- `gitSources.effectiveSource()` 用本次表单字段覆盖已登记源构造一次性源（不写 state.json），内联凭据优先于源凭据（端到端验证：源 token=tok123，内联 token=INLINE_TOKEN，实际请求携带后者）。内联代理走 `proxyModule.forHttp(inlineProxy)`，TLS 用 `parseInsecure()` 三态。
+
+### 53.3 建仓库自动生成工作区目录 + IDE 直达
+
+- 勾选「自动克隆」时，创建成功后用返回的 cloneUrl 调 `cloneRepo()` 在工作区生成目录，结果放 `repo.workspace`，失败放 `repo.workspaceError`（不影响远端仓库创建成功，前端提示手动克隆）。
+- **IDE 打开直达**：本地仓库「IDE 打开」按钮改为 `openRepoIdeDirect()`，直接用该仓库目录调 `/api/ide/open` 开窗，不跳转到「在线 IDE」页；未克隆的远端仓库不再显示「IDE 打开」，只留「克隆到工作区」。
+- **仓库列表去代理按钮**：代理配置统一收敛到「编辑」弹窗的「单项代理覆盖」输入框（socks5 示例齐全）；编辑弹窗同时内嵌协作者勾选（`collab-inline-repoAcl`）。
+
+### 53.4 验证
+
+- `npm run check` + 前端自检通过（新增 3 项锁定断言 + 调整 1 项仓库代理按钮断言）。
+- 临时端到端冒烟：Git 组 7 项（presets 标记、只读放行、只读协作者写 403、owner 写放行、共享仓库写放行）+ 建仓组 5 项（源登记、内联凭据覆盖、autoWorkspace 触发/不触发），全过，脚本已删。

@@ -466,8 +466,24 @@ app.post('/api/repos/clone', wrap(async (req, res) => {
 
 /* -------------------- 工作区仓库 Git 命令（v0.3.10） -------------------- */
 app.get('/api/repos/git/presets', (req, res) => ok(res, { items: workspaceGit.presets() }));
-app.post('/api/repos/git', wrap(async (req, res) =>
-  ok(res, await workspaceGit.run(req.body || {}))));
+app.post('/api/repos/git', wrap(async (req, res) => {
+  const b = req.body || {};
+  const cmd = String(b.command || '').trim();
+  // v0.4.16 B 批：写操作按仓库级权限收紧。
+  // 「有配置协作者 / owner 的仓库」→ 仅所有者 + 可写协作者 + 管理员可写；
+  // 未配置任何归属的仓库沿用共享语义（任何登录用户可写），避免锁定既有工作流。
+  // 还原 / 重置等破坏性命令的二次确认在前端完成。
+  if (workspaceGit.WRITE_COMMANDS.has(cmd)) {
+    const repoName = String(b.repo || '').trim();
+    if (!/^[A-Za-z0-9_.-]+$/.test(repoName) || repoName === '.' || repoName === '..') {
+      throw badRequest('仓库名不合法');
+    }
+    const aclId = `workspace:${repoName}`;
+    const acl = (state().repoAcl || []).find((x) => x && x.id === aclId);
+    if (acl) permissions.assertCan(req.user, acl, 'write');
+  }
+  ok(res, await workspaceGit.run(b));
+}));
 
 /* ------------------------- Git 运行时（v0.3.3） ------------------------- */
 // 容器 / Windows exe 未把 git 放进 PATH 时，提供诊断、手工指定路径与重新探测。

@@ -1014,27 +1014,25 @@ async function loadRepos() {
         <td>${esc(r.description || '-')}<div class="desc muted">${esc(r.localPath || '')}</div></td>
         <td class="muted">${esc(fmtTime(r.updatedAt))}</td>
         <td class="actions"><div class="ext-actions">
-          <button class="btn btn-sm" data-ide="${esc(r.name)}">IDE 打开</button>
+          <button class="btn btn-sm" data-ide-direct="${esc(r.name)}" title="直接用仓库目录打开 IDE 编辑器">IDE 打开</button>
           <button class="btn btn-sm" data-repo-files="${esc(r.name)}">文件管理</button>
           <button class="btn btn-sm" data-repo-git="${esc(r.name)}">Git 操作</button>
           <button class="btn btn-sm" data-repo-term="${esc(r.name)}">终端</button>
           ${r.cloneUrl ? `<button class="btn btn-sm" data-copy="${esc(r.cloneUrl)}">复制地址</button>` : ''}
           <button class="btn btn-sm" data-repo-edit="${esc(r.id)}">编辑</button>
           <button class="btn btn-sm" data-collab-open="repoAcl|${esc(r.id)}">协作者</button>
-          <button class="btn btn-sm" data-proxy-repo="${esc(r.id)}">代理</button>
           <button class="btn btn-sm btn-danger" data-repo-del="${esc(r.id)}">删除</button>
         </div></td>
       </tr>`;
+      // v0.4.16 B 批：未克隆到平台存储的远端仓库不显示「IDE 打开」；代理按钮统一收到「编辑」里处理。
       return `<tr>
         <td><b>${esc(r.name)}</b><div class="desc muted">${esc(r.fullName)}</div></td>
         <td>${badge(esc(r.sourceLabel), r.sourceId === 'builtin-gitea' ? 'blue' : 'amber')}</td>
         <td>${esc(r.description || '-')}${r.private ? ' ' + badge('私有', 'gray') : ''}</td>
         <td class="muted">${esc(fmtTime(r.updatedAt))}</td>
         <td class="actions"><div class="ext-actions">
-          <button class="btn btn-sm" data-ide="${esc(r.name)}">IDE 打开</button>
-          <button class="btn btn-sm" data-clone-repo="${esc(r.cloneUrl)}" data-clone-source="${esc(r.sourceId)}" data-clone-name="${esc(r.name)}" data-clone-id="${esc(r.id)}">克隆</button>
+          <button class="btn btn-sm" data-clone-repo="${esc(r.cloneUrl)}" data-clone-source="${esc(r.sourceId)}" data-clone-name="${esc(r.name)}" data-clone-id="${esc(r.id)}">克隆到工作区</button>
           <button class="btn btn-sm" data-copy="${esc(r.cloneUrl || '')}">复制地址</button>
-          <button class="btn btn-sm" data-proxy-repo="${esc(r.id)}">代理</button>
           <button class="btn btn-sm" data-repo-edit="${esc(r.id)}">编辑</button>
           <button class="btn btn-sm" data-collab-open="repoAcl|${esc(r.id)}">协作者</button>
           <button class="btn btn-sm btn-danger" data-repo-del="${esc(r.id)}" title="从平台列表移除">删除</button>
@@ -1043,10 +1041,7 @@ async function loadRepos() {
     });
     $('#repo-list').innerHTML = rows.length ? table(['仓库', '来源', '描述', '更新时间', '操作'], rows)
       : '<div class="empty">尚未发现仓库：可到「克隆到工作区」拉取第一个仓库，或在「外部 Git 源」登记远程服务。</div>';
-    $$('[data-ide]').forEach((b) => b.addEventListener('click', () => {
-      $('#ide-path').value = b.dataset.ide;
-      switchView('ide');
-    }));
+    $$('[data-ide-direct]').forEach((b) => b.addEventListener('click', () => void openRepoIdeDirect(b.dataset.ideDirect)));
     // v0.3.10：工作区仓库像文件管理一样可打开目录，并可直接执行 Git 命令。
     $$('[data-repo-files]').forEach((b) => b.addEventListener('click', () => openRepoFiles(b.dataset.repoFiles)));
     $$('[data-repo-git]').forEach((b) => b.addEventListener('click', () => openRepoGitModal(b.dataset.repoGit)));
@@ -1065,7 +1060,6 @@ async function loadRepos() {
       try { await navigator.clipboard.writeText(b.dataset.copy); toast('克隆地址已复制'); }
       catch { toast('复制失败，请手动选择', true); }
     }));
-    $$('[data-proxy-repo]').forEach((b) => b.addEventListener('click', () => gotoProxyOverride('git', b.dataset.proxyRepo)));
     $$('[data-repo-edit]').forEach((b) => b.addEventListener('click', () => openRepoEditModal(b.dataset.repoEdit)));
     $$('[data-repo-del]').forEach((b) => b.addEventListener('click', () => {
       const r = repoState.items.find((x) => x.id === b.dataset.repoDel) || {};
@@ -1105,6 +1099,7 @@ function openRepoEditModal(id) {
   form.elements.description.value = r.description || '';
   form.elements.note.value = r.note || '';
   form.elements.proxy.value = r.proxy || '';
+  renderCollabInline('repoAcl', r.id);
   $('#repo-edit-modal').hidden = false;
 }
 
@@ -1129,7 +1124,9 @@ async function removeRepo(id, name, isLocal) {
 $('#repoedit-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    await api('/repos/meta', { method: 'PUT', body: formData(e.target) });
+    const body = formData(e.target);
+    await api('/repos/meta', { method: 'PUT', body });
+    await saveCollabInline('repoAcl', body.id);
     toast('仓库信息已保存');
     $('#repo-edit-modal').hidden = true;
     loadRepos();
@@ -1200,10 +1197,29 @@ async function openRepoGitModal(repo) {
     repoGitPresets = presets.items || [];
     const box = $('#repo-git-presets');
     if (box) {
-      box.innerHTML = repoGitPresets.map((p) => `<button class="btn btn-sm" type="button" data-repo-git-preset="${esc(p.key)}" title="${esc(p.write ? '会写入远端仓库元数据 / 更新分支' : '只读命令')}">${esc(p.label)}</button>`).join('');
-      box.querySelectorAll('[data-repo-git-preset]').forEach((b) => b.addEventListener('click', () => {
+      box.innerHTML = repoGitPresets.map((p) => `<button class="btn btn-sm ${p.destructive ? 'btn-danger' : (p.write ? 'btn-primary' : '')}" type="button" data-repo-git-preset="${esc(p.key)}" title="${esc(p.hint || (p.write ? '会写入仓库 / 远端，需要仓库写权限' : '只读命令'))}">${esc(p.label)}</button>`).join('');
+      box.querySelectorAll('[data-repo-git-preset]').forEach((b) => b.addEventListener('click', async () => {
         const p = repoGitPresets.find((x) => x.key === b.dataset.repoGitPreset);
-        if (p) void runRepoGit(p.command, p.args);
+        if (!p) return;
+        let args = [...(p.args || [])];
+        if (p.needMessage) {
+          const msg = String(($('#repo-git-message') || {}).value || '').trim();
+          if (!msg) { toast('请先在「提交说明」里填写内容', true); return; }
+          args = ['-m', msg];
+        }
+        if (p.needHash) {
+          const hash = String(($('#repo-git-hash') || {}).value || '').trim();
+          if (hash && /^[A-Za-z0-9._~^-]{1,64}$/.test(hash)) args = ['--no-edit', hash];
+        }
+        if (p.destructive) {
+          const okRun = await confirmDialog({
+            title: '破坏性 Git 操作确认',
+            message: `确定执行「${p.label}」（git ${p.command} ${args.join(' ')}）？该操作会改变工作区 / 提交历史，通常不可撤销，请先确认本地改动已备份。`,
+            confirmText: '确定执行', cancelText: '取消',
+          });
+          if (!okRun) return;
+        }
+        void runRepoGit(p.command, args);
       }));
     }
   } catch (e) { toast(e.message, true); }
@@ -1479,6 +1495,21 @@ async function openIde() {
     $('#ide-url').textContent = `打开目录：${d.folder}`;
     $('#ide-frame').src = d.url;
     window.open(d.url, '_blank', 'noopener');
+  } catch (e) { toast(e.message, true); }
+}
+
+/** v0.4.16 B 批：仓库列表「IDE 打开」直接用该仓库的工作区目录打开 IDE，不跳转到「在线 IDE」页。 */
+async function openRepoIdeDirect(repoName) {
+  const repoPath = String(repoName || '').trim();
+  if (!repoPath) { toast('缺少仓库目录名', true); return; }
+  try {
+    const d = await api('/ide/open', { method: 'POST', body: { repoPath } });
+    // 同步「在线 IDE」页的输入框，便于用户后续在 IDE 页复用同一目录。
+    const p = $('#ide-path'); if (p) p.value = repoPath;
+    const label = $('#ide-url'); if (label) label.textContent = `打开目录：${d.folder}`;
+    const frame = $('#ide-frame'); if (frame) frame.src = d.url;
+    window.open(d.url, '_blank', 'noopener');
+    toast(`已用仓库目录打开 IDE：${d.folder}`);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -5774,12 +5805,38 @@ $('#cli-runner').addEventListener('change', () => {
   }
 });
 
+/** 新建仓库：凭据方式切换，只展示当前方式需要的字段。 */
+function syncRepoAuthFields() {
+  const mode = ($('#repo-auth-mode') && $('#repo-auth-mode').value) || 'source';
+  const inline = mode === 'password' || mode === 'token';
+  const box = $('#repo-inline-fields'); if (box) box.hidden = !inline;
+  const u = $('#repo-username-field'); if (u) u.hidden = mode !== 'password';
+  const p = $('#repo-password-field'); if (p) p.hidden = mode !== 'password';
+  const t = $('#repo-token-field'); if (t) t.hidden = mode !== 'token';
+}
+const repoAuthMode = $('#repo-auth-mode');
+if (repoAuthMode) repoAuthMode.addEventListener('change', syncRepoAuthFields);
+
 $('#repo-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const body = formData(e.target);
   body.private = e.target.elements.private.checked;
-  try { const d = await api('/repos', { method: 'POST', body }); toast(`仓库 ${d.repo.name || ''} 已创建`); e.target.reset(); loadRepos(); }
-  catch (err) { toast(err.message, true); }
+  body.autoWorkspace = e.target.elements.autoWorkspace.checked;
+  const mode = String(body.authMode || 'source');
+  if (mode !== 'password') { delete body.username; delete body.password; }
+  if (mode !== 'token') delete body.token;
+  if (mode === 'password' && (!body.username || !body.password)) { toast('请填写用户名和密码', true); return; }
+  if (mode === 'token' && !body.token) { toast('请填写访问令牌 Token', true); return; }
+  try {
+    const d = await api('/repos', { method: 'POST', body });
+    let msg = `仓库 ${d.repo.name || ''} 已创建`;
+    if (d.repo.workspace && d.repo.workspace.path) msg += `，已克隆到 ${d.repo.workspace.path}`;
+    else if (d.repo.workspaceError) msg += `（自动克隆失败：${d.repo.workspaceError}，可到列表手动克隆）`;
+    toast(msg);
+    e.target.reset();
+    syncRepoAuthFields();
+    loadRepos();
+  } catch (err) { toast(err.message, true); }
 });
 
 /** 克隆凭据方式切换：只展示当前方式需要的字段，避免残留值被误提交。 */

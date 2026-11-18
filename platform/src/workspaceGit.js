@@ -23,11 +23,19 @@ const { sshExec } = require('./integrations');
 const ALLOWED_COMMANDS = new Set([
   'status', 'log', 'branch', 'remote', 'fetch', 'pull', 'diff', 'show',
   'rev-parse', 'ls-files', 'tag', 'describe', 'rev-list', 'ls-remote',
+  // v0.4.16 B 批：TortoiseGit 式写操作。提交 / 推送 / 中止合并 / 还原 / 重置 / 暂存。
+  'add', 'commit', 'push', 'merge', 'revert', 'reset', 'restore', 'stash', 'checkout',
 ]);
-const WRITE_COMMANDS = new Set(['fetch', 'pull']);
+// 会改变工作区或远端状态的子命令：除 fetch 外都需要仓库级写权限。
+const WRITE_COMMANDS = new Set([
+  'fetch', 'pull', 'add', 'commit', 'push', 'merge', 'revert', 'reset',
+  'restore', 'stash', 'checkout',
+]);
+// 破坏性写操作（前端需二次确认；仓库级写权限仍由 server 路由校验）。
+const DESTRUCTIVE_COMMANDS = new Set(['reset', 'revert', 'merge', 'checkout', 'restore']);
 const FORBIDDEN_ARGS = /[;&|`$<>\n\r\\]|^\s*-c\s*$|--exec|--upload-pack|--receive-pack|--git-dir|--work-tree|--config-env/;
 const MAX_ARGS = 12;
-const MAX_ARG_LEN = 160;
+const MAX_ARG_LEN = 500; // 放宽以容纳 commit -m 的提交说明；危险字符仍由 FORBIDDEN_ARGS 拦截
 
 const shQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
@@ -63,13 +71,26 @@ function validate(repo, command, args) {
 /** 前端快捷命令（顺序即展示顺序）。 */
 function presets() {
   return [
+    // 只读 / 查看类
     { key: 'status', label: '状态', command: 'status', args: ['--short', '--branch'] },
-    { key: 'log', label: '最近提交', command: 'log', args: ['--oneline', '--decorate', '-n', '12'] },
+    { key: 'log', label: '日志', command: 'log', args: ['--oneline', '--decorate', '-n', '20'] },
     { key: 'branch', label: '分支', command: 'branch', args: ['-a', '-vv'] },
     { key: 'remote', label: '远程地址', command: 'remote', args: ['-v'] },
-    { key: 'diff', label: '改动统计', command: 'diff', args: ['--stat'] },
+    { key: 'diff', label: '差异对比', command: 'diff', args: ['--stat'] },
+    { key: 'diff-full', label: '完整差异', command: 'diff', args: [] },
+    { key: 'diff-staged', label: '暂存区差异', command: 'diff', args: ['--cached', '--stat'] },
+    // 同步类（写，需仓库写权限）
     { key: 'fetch', label: '拉取元数据 (fetch)', command: 'fetch', args: ['--all', '--prune'], write: true },
-    { key: 'pull', label: '更新当前分支 (pull)', command: 'pull', args: ['--ff-only'], write: true },
+    { key: 'pull', label: '拉取更新 (pull)', command: 'pull', args: ['--ff-only'], write: true },
+    { key: 'push', label: '推送 (push)', command: 'push', args: [], write: true, hint: '推送当前分支到默认远端' },
+    // 提交类（写）
+    { key: 'add', label: '暂存全部改动', command: 'add', args: ['-A'], write: true },
+    { key: 'commit', label: '提交', command: 'commit', args: ['-m', 'chore: platform git commit'], write: true, needMessage: true, hint: '需填写提交说明；自定义命令可用 commit -m "说明"' },
+    // 破坏性（写 + 前端二次确认）
+    { key: 'merge-abort', label: '中止合并', command: 'merge', args: ['--abort'], write: true, destructive: true, hint: '放弃进行中的合并' },
+    { key: 'revert', label: '还原提交', command: 'revert', args: ['--no-edit', 'HEAD'], write: true, destructive: true, needHash: true, hint: '默认还原最近一次提交；自定义命令可指定 commit' },
+    { key: 'reset', label: '重置到上一次', command: 'reset', args: ['--hard', 'HEAD~1'], write: true, destructive: true, hint: 'hard 重置会丢弃本地未提交改动，请谨慎' },
+    { key: 'restore', label: '放弃本地改动', command: 'restore', args: ['.'], write: true, destructive: true, hint: '放弃工作区所有未暂存改动' },
   ];
 }
 
@@ -84,6 +105,7 @@ async function run({ repo, command, args = [], timeoutMs = 60000 } = {}) {
     command: cmd,
     args: list,
     write: WRITE_COMMANDS.has(cmd),
+    destructive: DESTRUCTIVE_COMMANDS.has(cmd),
     commandText,
   };
 
@@ -126,4 +148,4 @@ async function run({ repo, command, args = [], timeoutMs = 60000 } = {}) {
   };
 }
 
-module.exports = { run, presets, ALLOWED_COMMANDS, WRITE_COMMANDS };
+module.exports = { run, presets, ALLOWED_COMMANDS, WRITE_COMMANDS, DESTRUCTIVE_COMMANDS };

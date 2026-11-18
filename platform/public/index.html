@@ -241,9 +241,33 @@
               </div>
               <label>描述<input name="description" placeholder="项目简介" /></label>
               <label class="check"><input type="checkbox" name="private" /> 设为私有仓库</label>
+
+              <div class="model-catalog" style="margin-top:12px">
+                <div class="model-catalog-head"><b>连接与工作区（可选）</b><span class="muted small">不填则沿用所选 Git 源登记的凭据</span></div>
+                <div class="grid-2">
+                  <label>仓库服务地址（可选）<input name="baseURL" placeholder="留空用所选源地址；如 http://10.0.0.246:3000" /></label>
+                  <label>凭据方式<select name="authMode" id="repo-auth-mode">
+                    <option value="source">使用所选 Git 源的凭据</option>
+                    <option value="password">本次填写账号密码</option>
+                    <option value="token">本次填写访问令牌 Token</option>
+                  </select></label>
+                </div>
+                <div id="repo-inline-fields" class="grid-2" hidden>
+                  <label id="repo-username-field">用户名<input name="username" placeholder="Git 账号" autocomplete="off" /></label>
+                  <label id="repo-password-field">密码 / 令牌<input name="password" type="password" placeholder="密码或 PAT" autocomplete="new-password" /></label>
+                  <label id="repo-token-field" hidden>访问令牌 Token<input name="token" type="password" placeholder="ghp_... / Gitea Token" autocomplete="new-password" /></label>
+                </div>
+                <label>本次请求代理（可选）<input name="proxy" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空继承" /></label>
+                <label>TLS 证书校验<select name="insecure">
+                  <option value="auto">跟随 Git 源 / 全局设置（默认严格校验）</option>
+                  <option value="on">忽略证书校验（仅限可信内网应急）</option>
+                  <option value="off">强制严格校验</option>
+                </select></label>
+                <label class="check"><input type="checkbox" name="autoWorkspace" checked /> 创建后自动克隆到平台工作区（生成 IDE 可直接打开的目录）</label>
+              </div>
               <div class="form-actions"><button class="btn btn-primary" type="submit">创建仓库</button></div>
             </form>
-            <div class="notice">创建用的凭据来自「外部 Git 源」页登记的信息（Token 或账号密码）。内置 Gitea 的凭据来自 <code>.env</code>。创建完成后可到「仓库列表」点「克隆」拉到工作区。</div>
+            <div class="notice">凭据可来自「外部 Git 源」页登记的信息（内置 Gitea 用 <code>.env</code>），也可在上方「连接与工作区」里本次单独填写。<b>本次填写的账号密码 / Token 不写入 state.json</b>。勾选「自动克隆」后，平台会把新仓库同步到工作区，列表即可直接「IDE 打开 / Git 操作」；若服务返回的内部克隆地址不可达，远端仓库仍会创建成功，可稍后手动克隆。</div>
           </div>
         </section>
 
@@ -1631,9 +1655,11 @@
         <button class="btn btn-ghost btn-sm" type="button" data-repo-git-close>✕ 关闭</button>
       </div>
       <div class="modal-body">
-        <div class="notice warn">命令在平台容器或 SSH 宿主机上执行；子命令走白名单，写操作只放开 fetch / pull，参数禁止 shell 元字符。</div>
+        <div class="notice warn">命令在平台容器或 SSH 宿主机上执行；子命令走白名单（含 commit / push / merge --abort / revert / reset 等写操作），参数禁止 shell 元字符。写操作需该仓库的所有者 / 可写协作者 / 管理员权限；<b>还原 / 重置 / 放弃改动等破坏性操作会二次确认</b>。</div>
         <div class="row gap wrap" id="repo-git-presets" style="margin:12px 0"></div>
         <form id="repo-git-form" class="form">
+          <label>提交说明（点「提交」预设时使用）<input id="repo-git-message" placeholder="例如 fix: 修复登录判断" autocomplete="off" /></label>
+          <label>提交号（点「还原提交」预设时使用；留空则还原最近一次 HEAD）<input id="repo-git-hash" placeholder="例如 a1b2c3d" autocomplete="off" /></label>
           <label>自定义命令（不含开头的 git）<input id="repo-git-input" placeholder="例如 log --oneline -n 5" autocomplete="off" /></label>
           <div class="row gap">
             <button class="btn btn-primary" type="submit" id="repo-git-run">执行</button>
@@ -1771,7 +1797,8 @@
           <label>显示名称<input name="name" /></label>
           <label>描述<input name="description" /></label>
           <label>备注（仅平台可见）<input name="note" placeholder="可选" /></label>
-          <label>单项代理覆盖<input name="proxy" placeholder="http://127.0.0.1:7890 / direct / 留空清除覆盖" /></label>
+          <label>单项代理覆盖<input name="proxy" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空清除覆盖" /></label>
+          <div class="collab-inline" id="collab-inline-repoAcl" hidden></div>
           <div class="form-actions"><button class="btn btn-primary" type="submit">保存</button></div>
         </form>
       </div>

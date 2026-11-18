@@ -338,8 +338,32 @@ async function listBranches(sourceId, fullName) {
   return { items: payload.map((b) => ({ name: String(b.name || ''), protected: Boolean(b.protected), sha: String((b.commit && (b.commit.sha || b.commit.id)) || '').slice(0, 12) })) };
 }
 
+/**
+ * v0.4.16 B 批：用「本次表单填写」的字段覆盖已登记源，构造一次性的有效源（不写入 state）。
+ * 支持单独填写仓库服务地址 / 账号密码 / Token / 凭据来源，让「新建仓库」无需先登记 Git 源。
+ */
+function effectiveSource(sourceId, body = {}) {
+  const s = { ...findSource(sourceId) };
+  const mode = String(body.authMode || '');
+  if (mode === 'password') {
+    s.authType = 'password';
+    s.username = String(body.username || '').trim().slice(0, 80);
+    s.password = String(body.password || '').trim().slice(0, 256);
+    s.token = '';
+    if (!s.username || !s.password) throw new Error('账号密码方式必须填写用户名和密码');
+  } else if (mode === 'token') {
+    s.authType = 'token';
+    s.token = String(body.token || '').trim().slice(0, 512);
+    s.username = ''; s.password = '';
+    if (!s.token) throw new Error('请填写访问令牌 Token');
+  }
+  // 本次单独填写的服务地址（留空则用已登记源的 baseUrl）。
+  if (String(body.baseURL || '').trim()) s.baseUrl = normalizeBase(s.type, body.baseURL);
+  return s;
+}
+
 async function createRepo(sourceId, body = {}) {
-  const s = findSource(sourceId);
+  const s = effectiveSource(sourceId, body);
   assertCredentials(s);
   const name = String(body.name || '').replace(/[^A-Za-z0-9_.-]/g, '-');
   if (!name) throw new Error('请填写仓库名');
@@ -350,12 +374,42 @@ async function createRepo(sourceId, body = {}) {
       ? { name, description: body.description || '', visibility: body.private ? 'private' : 'public', initialize_with_readme: true }
       : { name, description: body.description || '', private: Boolean(body.private), auto_init: true };
   const target = `${url}${kind === 'github' ? '/user/repos' : kind === 'gitlab' ? '/projects' : '/user/repos'}`;
+  const resolved = proxyModule.forHttp(target, 'git', {
+    url: target, itemId: String(body.repoId || s.id), host: proxyModule.hostOf(target),
+    inlineProxy: String(body.proxy || ''),
+  });
+  const inlineTls = parseInsecure(body.insecure);
   const created = await httpJSON(target, {
     method: 'POST', headers: authHeaders(s), body: payload, timeout: 20000,
-    proxy: gitProxyFor(target, s.id).proxy,
-    insecure: envConfig.tlsDecision(s, target),
+    proxy: resolved.proxy,
+    insecure: inlineTls === undefined ? envConfig.tlsDecision(s, target) : inlineTls,
   });
-  return normalizeRepo(s, created);
+  const repo = normalizeRepo(s, created);
+
+  // v0.4.16 B 批：创建成功后默认在平台存储生成工作区目录（自动克隆），
+  // 便于仓库列表「IDE 打开 / Git 操作 / 文件管理」直接使用。失败不影响远端仓库创建结果。
+  const autoWorkspace = body.autoWorkspace === true || body.autoWorkspace === 'true' || body.autoWorkspace === 'on' || body.autoWorkspace === '1';
+  if (autoWorkspace && repo.cloneUrl) {
+    const inline = {};
+    const mode = String(body.authMode || '');
+    if (mode === 'password') { inline.username = String(body.username || '').trim(); inline.password = String(body.password || '').trim(); }
+    if (mode === 'token') { inline.token = String(body.token || '').trim(); }
+    try {
+      repo.workspace = await cloneRepo({
+        sourceId,
+        cloneUrl: repo.cloneUrl,
+        name: body.workspaceName || name,
+        branch: repo.defaultBranch,
+        proxy: body.proxy,
+        insecure: body.insecure,
+        repoId: repo.id,
+        ...inline,
+      });
+    } catch (e) {
+      repo.workspaceError = String((e && e.message) || e);
+    }
+  }
+  return repo;
 }
 
 async function testSource(id) {

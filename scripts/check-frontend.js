@@ -28,6 +28,8 @@ const miniSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src',
 const remoteSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'remoteOps.js'), 'utf8');
 const openlistSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'openlist.js'), 'utf8');
 const integrationsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'integrations.js'), 'utf8');
+const workspaceGitSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'workspaceGit.js'), 'utf8');
+const gitSourcesSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'gitSources.js'), 'utf8');
 const credsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'serviceCredentials.js'), 'utf8');
 const nativeSrc = fs.readFileSync(path.resolve(__dirname, '..', 'windows', 'native-services.ps1'), 'utf8');
 const errors = [];
@@ -68,11 +70,13 @@ note(['/openlist/status', '/openlist/storages', '/openlist/drivers', '/openlist/
   'OpenList 连接 / 挂载 / 驱动 / 文件管理接口已全部接线');
 note(['id="openlist-config-form"', 'id="ol-driver"', 'id="storage-select-all"', 'data-ol-action="move"', 'id="openlist-frame"']
   .every((s) => html.includes(s)), 'OpenList 管理界面控件齐全');
-note(['data-proxy-repo', 'data-dk-op="proxy"', 'data-server-proxy', 'data-ai-proxy']
-  .every((s) => app.includes(s)) && app.includes('function gotoProxyOverride')
+note(['data-dk-op="proxy"', 'data-server-proxy', 'data-ai-proxy']
+  .every((s) => app.includes(s)) && !app.includes('data-proxy-repo')
+  && app.includes('function gotoProxyOverride')
   && app.includes('function openObjectProxy') && html.includes('id="object-proxy-modal"')
+  && html.includes('id="collab-inline-repoAcl"')
   && !html.includes('id="proxy-override-form"'),
-'四类对象均在自身行上打开单项代理覆盖弹窗（代理页不再提供配置表单）');
+'代理覆盖弹窗：服务器/Docker/AI 行上打开，仓库代理改在「编辑」弹窗内（列表不再显示代理按钮）');
 
 // v0.4.4：代理页只保留覆盖清单与说明，配置入口下沉到对象。
 note(html.includes('单项代理覆盖清单') && html.includes('不在本页填写')
@@ -356,6 +360,21 @@ note(coreSrc.includes("'repoAcl', 'directories'") && coreSrc.includes('repoAcl: 
   && permSrc.includes("item.aclKind === 'repo' && action === 'read'")
   && app.includes('data-collab-open="repoAcl|'),
 '仓库级协作者 + 目录对象：repoAcl/directories 归属集合、懒建归属、仓库 read 放宽、列表协作者按钮');
+
+// v0.4.16 B 批①：Git 写操作白名单 + 破坏性命令 + 仓库级写权限校验。
+note(workspaceGitSrc.includes("'add', 'commit', 'push', 'merge', 'revert', 'reset', 'restore', 'stash', 'checkout'")
+  && workspaceGitSrc.includes('DESTRUCTIVE_COMMANDS') && workspaceGitSrc.includes('needMessage: true')
+  && serverSrc.includes('workspaceGit.WRITE_COMMANDS.has(cmd)') && serverSrc.includes("permissions.assertCan(req.user, acl, 'write')")
+  && app.includes('破坏性 Git 操作确认') && app.includes('needMessage') && app.includes('needHash'),
+'Git 写操作：commit/push/merge-abort/revert/reset 等白名单 + 破坏性二次确认 + 仓库级写权限校验');
+
+// v0.4.16 B 批②：新建仓库内联凭据/代理/TLS + 自动克隆工作区；列表去代理按钮、IDE 直达。
+note(gitSourcesSrc.includes('function effectiveSource') && gitSourcesSrc.includes('autoWorkspace')
+  && gitSourcesSrc.includes('repo.workspace = await cloneRepo') && gitSourcesSrc.includes('repo.workspaceError')
+  && app.includes('function openRepoIdeDirect') && app.includes('data-ide-direct')
+  && app.includes('syncRepoAuthFields') && !app.includes('data-proxy-repo')
+  && html.includes('name="autoWorkspace"') && html.includes('id="repo-git-message"'),
+'新建仓库内联凭据/代理/TLS + 自动克隆工作区；列表去代理按钮、IDE 直达、Git 提交/还原输入');
 
 // v0.4.14：所有代理地址输入框的 placeholder 都带 socks5 示例。
 note((html.match(/socks5:\/\/127\.0\.0\.1:1080/g) || []).length >= 5
