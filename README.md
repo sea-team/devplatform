@@ -3022,3 +3022,11 @@ v0.4.8 把「AI 运维」对话页整体替换成了 xterm 终端，误删了已
 
 - `npm run check` 语法检查、`node scripts/check-frontend.js` 前端自检均通过（新增 2 项断言：模型目录拉取、按服务选模型）。
 - 两页互不干扰：AI 运维仍走 `opsAgent`，AI 会话走 dsh；未配置模型目录的服务自动回退为单个默认模型，旧数据零迁移。
+
+---
+
+## §50 新建会话改为草稿态（v0.4.13）
+
+- 问题：AI 运维 / AI 会话两页点「＋ 新建」会立即 `POST /api/ai/sessions|chats` 落库一条会话；若用户没发消息就离开，列表里会堆积「新会话 · 0 条」的无效记录。
+- 修复：`createOpsSession()` / `createAIChat()` 改为**只重置前端草稿态**（清空当前 ID、消息、附件、轨迹、统计并聚焦输入框），不再调用创建接口；真正落库推迟到 `sendOpsMessage()` / `sendAIChatMessage()` 发送第一条消息时（原有兜底创建分支已存在）。AI 会话兜底创建同时带上当前选中的 `{providerId, model}`。
+- 历史遗留：两页 `list()` 均过滤「0 条消息 + 标题仍为『新会话』」的空记录，升级后不再显示（数据仍在 state.json，可按需清理）。

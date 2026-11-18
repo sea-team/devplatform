@@ -73,7 +73,9 @@ function summary(session) {
 /** 列出当前账号可见的会话摘要（不含消息正文，避免列表接口传输附件）。 */
 function list(user) {
   const all = sessions().filter((s) => isAdmin(user) || (s.ownerId && s.ownerId === user.id));
-  return all
+  // 隐藏历史遗留的空会话：0 条消息且标题仍是「新会话」（草稿态改造前点新建留下的）。
+  const visible = all.filter((s) => (s.messages || []).length > 0 || (s.title || '新会话') !== '新会话');
+  return visible
     .slice()
     .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
     .map(summary);

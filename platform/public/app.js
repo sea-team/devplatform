@@ -3731,16 +3731,19 @@ async function openOpsSession(id) {
   } catch (e) { toast(e.message, true); }
 }
 
-async function createOpsSession() {
-  try {
-    const s = await api('/ai/sessions', { method: 'POST', body: {
-      providerId: ($('#ops-provider') || {}).value || '',
-      allowWrite: Boolean(($('#ops-write') || {}).checked),
-      serverScope: opsState.serverScope,
-    } });
-    await loadOpsSessions(s.id);
-    toast('已新建会话');
-  } catch (e) { toast(e.message, true); }
+function createOpsSession() {
+  // 新建只重置为草稿态，不立即落库：发送第一条消息时才创建会话，
+  // 避免点一下「＋ 新建」就留下 0 条消息的无效记录。
+  opsState.currentId = '';
+  opsState.attachments = [];
+  renderOpsAttachments();
+  const t = $('#ops-chat-title'); if (t) t.textContent = '新会话';
+  const sub = $('#ops-chat-sub'); if (sub) sub.textContent = '输入第一条消息后自动创建会话';
+  opsState.suggestion = '';
+  renderOpsGhost();
+  renderOpsMessages([]);
+  renderOpsSessions();
+  const input = $('#ops-prompt'); if (input) { input.value = ''; input.focus(); }
 }
 
 async function deleteOpsSession() {
@@ -4049,13 +4052,22 @@ async function openAIChat(id, selectionOverride = '') {
   } catch (e) { toast(e.message, true); }
 }
 
-async function createAIChat() {
-  try {
-    const p = achCurrentSelection();
-    const s = await api('/ai/chats', { method: 'POST', body: { providerId: p.providerId, model: p.model } });
-    await achLoadSessions(s.id);
-    toast('已新建会话');
-  } catch (e) { toast(e.message, true); }
+function createAIChat() {
+  // 与 AI 运维一致：草稿态，发送第一条消息时才真正创建会话。
+  achCloseSource();
+  aiChatState.currentId = '';
+  aiChatState.engineSid = '';
+  aiChatState.streamText = ''; aiChatState.streamTrace = [];
+  aiChatState.lastDone = false;
+  aiChatState.stats = { turns: 0, steps: 0 };
+  aiChatState.attachments = []; achRenderAttachments();
+  const t = $('#ach-title'); if (t) t.textContent = '新会话';
+  const sub = $('#ach-sub'); if (sub) sub.textContent = '输入第一条消息后自动创建会话';
+  achStatsText();
+  achRenderMessages([]);
+  achRenderSessions();
+  achSwitchTab('chat');
+  const input = $('#ach-input'); if (input) { input.value = ''; input.focus(); }
 }
 
 async function deleteAIChat() {
@@ -4130,8 +4142,11 @@ async function sendAIChatMessage() {
   const content = (input ? input.value : '').trim();
   if (!content) { toast('请输入内容', true); return; }
   if (!aiChatState.currentId) {
-    try { const s = await api('/ai/chats', { method: 'POST', body: {} }); aiChatState.currentId = s.id; await achLoadSessions(s.id); }
-    catch (e) { toast(e.message, true); return; }
+    try {
+      const p = achCurrentSelection();
+      const s = await api('/ai/chats', { method: 'POST', body: { providerId: p.providerId, model: p.model } });
+      aiChatState.currentId = s.id; await achLoadSessions(s.id);
+    } catch (e) { toast(e.message, true); return; }
   }
 
   aiChatState.sending = true;

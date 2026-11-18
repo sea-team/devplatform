@@ -60,6 +60,8 @@ function summary(session) {
 function list(user) {
   return chats()
     .filter((s) => isAdmin(user) || (s.ownerId && s.ownerId === user.id))
+    // 隐藏 0 条消息且标题仍是「新会话」的历史空记录。
+    .filter((s) => (s.messages || []).length > 0 || (s.title || '新会话') !== '新会话')
     .slice()
     .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
     .map(summary);

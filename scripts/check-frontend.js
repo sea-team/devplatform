@@ -349,6 +349,12 @@ note(html.includes('AI 模型配置') && html.includes('class="model-catalog"')
   && app.includes('/ai/models/fetch') && app.includes('function syncModelCatalogToForm'),
 'AI 模型配置：表单含模型目录（显示名 / 模型 ID），支持「获取可用模型」拉取上游 /models');
 
+// v0.4.13：「新建」不再立即落库，发送第一条消息时才创建会话（两页一致）。
+note(app.includes('新建只重置为草稿态，不立即落库')
+  && app.includes('与 AI 运维一致：草稿态，发送第一条消息时才真正创建会话')
+  && app.includes('输入第一条消息后自动创建会话'),
+'AI 运维 / AI 会话：点「新建」只重置草稿态，发送第一条消息才落库，避免 0 条消息空记录');
+
 // v0.4.12：获取可用模型后默认全部勾选加入模型目录，胶囊可切换取消。
 note(app.includes('拉取到的可用模型默认全部勾选加入模型目录')
   && app.includes('const existing = new Map(providerModelRows.map')
