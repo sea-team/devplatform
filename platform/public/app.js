@@ -1020,6 +1020,7 @@ async function loadRepos() {
           <button class="btn btn-sm" data-repo-term="${esc(r.name)}">终端</button>
           ${r.cloneUrl ? `<button class="btn btn-sm" data-copy="${esc(r.cloneUrl)}">复制地址</button>` : ''}
           <button class="btn btn-sm" data-repo-edit="${esc(r.id)}">编辑</button>
+          <button class="btn btn-sm" data-collab-open="repoAcl|${esc(r.id)}">协作者</button>
           <button class="btn btn-sm" data-proxy-repo="${esc(r.id)}">代理</button>
           <button class="btn btn-sm btn-danger" data-repo-del="${esc(r.id)}">删除</button>
         </div></td>
@@ -1035,7 +1036,8 @@ async function loadRepos() {
           <button class="btn btn-sm" data-copy="${esc(r.cloneUrl || '')}">复制地址</button>
           <button class="btn btn-sm" data-proxy-repo="${esc(r.id)}">代理</button>
           <button class="btn btn-sm" data-repo-edit="${esc(r.id)}">编辑</button>
-          <button class="btn btn-sm btn-danger" data-repo-del="${esc(r.id)}">删除</button>
+          <button class="btn btn-sm" data-collab-open="repoAcl|${esc(r.id)}">协作者</button>
+          <button class="btn btn-sm btn-danger" data-repo-del="${esc(r.id)}" title="从平台列表移除">删除</button>
         </div></td>
       </tr>`;
     });

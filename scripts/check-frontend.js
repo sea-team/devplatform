@@ -349,6 +349,14 @@ note(html.includes('AI 模型配置') && html.includes('class="model-catalog"')
   && app.includes('/ai/models/fetch') && app.includes('function syncModelCatalogToForm'),
 'AI 模型配置：表单含模型目录（显示名 / 模型 ID），支持「获取可用模型」拉取上游 /models');
 
+// v0.4.15 A 批：仓库级协作者 + 目录对象（可归属 / 可协作），复用 collaborators 体系。
+note(coreSrc.includes("'repoAcl', 'directories'") && coreSrc.includes('repoAcl: []')
+  && serverSrc.includes('permission.ensureAclRecord')===false && serverSrc.includes('permissions.ensureAclRecord')
+  && permSrc.includes("repoAcl: '仓库', directories: '目录'")
+  && permSrc.includes("item.aclKind === 'repo' && action === 'read'")
+  && app.includes('data-collab-open="repoAcl|'),
+'仓库级协作者 + 目录对象：repoAcl/directories 归属集合、懒建归属、仓库 read 放宽、列表协作者按钮');
+
 // v0.4.14：所有代理地址输入框的 placeholder 都带 socks5 示例。
 note((html.match(/socks5:\/\/127\.0\.0\.1:1080/g) || []).length >= 5
   && app.includes('socks5://127.0.0.1:1080'),

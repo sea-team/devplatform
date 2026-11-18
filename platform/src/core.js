@@ -154,6 +154,11 @@ function defaultState() {
     // 不改动远端仓库。key 为仓库 id（可能含 / 与 :，故用对象字典而非数组）。
     repoMeta: {},
     hiddenRepos: [],
+    // v0.4.15 仓库级协作者：key 为仓库 id（外部格式，含 : /），存 ownerId + collaborators。
+    // 独立成数组集合而非塞进 repoMeta，是为了复用 permissions 的归属 / 协作 / guard 机制。
+    repoAcl: [],
+    // v0.4.15 目录对象：OpenList 挂载映射为可归属、可协作的目录资源（C 批接入建账号与隔离）。
+    directories: [],
     // Git 运行时：手工指定 git 路径 + 是否允许「容器内无 Git 时借 SSH 宿主机执行」。
     git: { bin: '', sshFallback: 'auto' },
     backups: [],
@@ -184,6 +189,7 @@ function defaultState() {
 const OWNED_COLLECTIONS = [
   'servers', 'gitSources', 'aiProviders', 'builds', 'deploys',
   'extensions', 'composeTemplates', 'backups', 'openlistConnections',
+  'repoAcl', 'directories',
 ];
 const requestContext = new AsyncLocalStorage();
 const withUser = (user, fn) => requestContext.run({ user: user || null }, fn);

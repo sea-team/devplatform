@@ -148,10 +148,17 @@ app.put('/api/users/:id', wrap(async (req, res) => { requireAdmin(req); ok(res, 
 app.delete('/api/users/:id', wrap(async (req, res) => { requireAdmin(req); ok(res, auth.deleteUser(req.params.id, req.user)); }));
 
 app.get('/api/resources', wrap(async (req, res) => ok(res, { items: permissions.resourcesFor(req.user) })));
-app.get('/api/collaborators', wrap(async (req, res) => ok(res, permissions.collaboratorsView(req.user, req.query.type, req.query.id))));
-app.put('/api/collaborators', wrap(async (req, res) => ok(res, permissions.setCollaborators(
-  req.user, req.body && req.body.type, req.body && req.body.id, req.body && req.body.collaborators,
-))));
+// 仓库 / 目录这类外部对象首次协作时懒建归属记录（owner 归当前操作者），再走标准协作者视图。
+app.get('/api/collaborators', wrap(async (req, res) => {
+  const { type, id } = req.query;
+  permissions.ensureAclRecord(req.user, type, id);
+  ok(res, permissions.collaboratorsView(req.user, type, id));
+}));
+app.put('/api/collaborators', wrap(async (req, res) => {
+  const b = req.body || {};
+  permissions.ensureAclRecord(req.user, b.type, b.id);
+  ok(res, permissions.setCollaborators(req.user, b.type, b.id, b.collaborators));
+}));
 
 /* --------------------- 运行时 / 热更新（引导器 IPC） --------------------- */
 // 源码直跑时没有引导器；编译成 exe 后由 launcher 监督进程处理更新、回滚与重载。

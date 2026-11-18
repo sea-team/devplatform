@@ -32,6 +32,7 @@ const TYPE_LABELS = {
   servers: '服务器', gitSources: 'Git 源', aiProviders: 'AI 服务',
   builds: '构建记录', deploys: '部署记录', extensions: '扩展 / 数据库实例',
   composeTemplates: 'Compose 模板', backups: '备份任务', openlistConnections: '存储连接',
+  repoAcl: '仓库', directories: '目录',
 };
 
 /** 站点级配置：普通用户只读（仅写操作受限），管理员可改。 */
@@ -69,6 +70,8 @@ function can(user, item, action = 'read') {
   if (!user) return false;
   if (isAdmin(user)) return true;
   if (!item) return false;
+  // 仓库来自共享 Git 源：任何登录用户可读；写 / 管理仍限 owner + 可写协作者 + 管理员。
+  if (item.aclKind === 'repo' && action === 'read') return true;
   if (item.ownerId && item.ownerId === user.id) return true;
   const entry = collaboratorsOf(item).find((c) => c && c.userId === user.id);
   if (!entry) return false;
@@ -247,6 +250,24 @@ function resourceByType(user, type, id, action = 'read') {
   return { type, item };
 }
 
+/**
+ * 仓库 / 目录是外部对象：首次对它们设置协作者时懒创建一条归属记录，
+ * owner 归当前操作者（管理员或能管理该源的用户）。后续走标准协作者接口。
+ */
+function ensureAclRecord(user, type, id) {
+  if (!COLLAB_COLLECTIONS.includes(type)) throw badRequest(`不支持的协作资源类型：${type}`);
+  const rid = String(id || '');
+  if (!rid) throw badRequest('缺少资源 id');
+  if ((state()[type] || []).some((x) => x && x.id === rid)) return;
+  update((s) => {
+    if (!Array.isArray(s[type])) s[type] = [];
+    if (!s[type].some((x) => x && x.id === rid)) {
+      s[type].push({ id: rid, name: rid, aclKind: type === 'repoAcl' ? 'repo' : 'directory',
+        ownerId: (user && user.id) || '', collaborators: [], createdAt: new Date().toISOString() });
+    }
+  });
+}
+
 function collaboratorsView(user, type, id) {
   const { item } = resourceByType(user, type, id);
   // 已禁用账号不再出现在可选协作者里：账号禁用时 core.update() 会清掉旧引用。
@@ -308,5 +329,5 @@ function resourcesFor(user) {
 module.exports = {
   COLLECTIONS, COLLAB_COLLECTIONS, TYPE_LABELS, isAdmin, can, assertCan, visible, assignOwner,
   findResourceById, guard, isGlobalConfigPath, collaboratorsView,
-  setCollaborators, resourcesFor, collaboratorsOf,
+  setCollaborators, resourcesFor, collaboratorsOf, ensureAclRecord,
 };

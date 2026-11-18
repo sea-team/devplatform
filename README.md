@@ -3036,3 +3036,15 @@ v0.4.8 把「AI 运维」对话页整体替换成了 xterm 终端，误删了已
 ## §51 代理地址输入框补充 socks5 示例（v0.4.14）
 
 - 全局代理 / 分组代理 / Git Host 规则 / 单项代理覆盖弹窗，以及克隆、服务器、AI 服务、新建仓库等表单里的「代理地址」输入框，placeholder 统一补上 `socks5://127.0.0.1:1080` 示例（此前仅全局框有）。仅提示文案变更，不影响解析逻辑（后端早已支持 socks5）。
+
+---
+
+## §52 功能补充 · A 批：仓库级协作者 + 目录对象（v0.4.15）
+
+> 用户功能清单分 A~E 批交付，本批为 A。四项决策已确认：分批交付、用户目录落 OpenList、Git 写操作开放给所有者+可写协作者+管理员、AI 运维按服务器 read 权限过滤。
+
+- **仓库级协作者**：仓库 id 是外部格式（`workspace:xxx` / `gitea:...`），新增独立 `state.repoAcl` 数组集合存仓库的 `ownerId + collaborators`（不放 repoMeta，便于复用 permissions 体系），加入 `OWNED_COLLECTIONS`。仓库列表两类行（工作区 / 远端）都加了「协作者」按钮，走现成 `data-collab-open` 弹窗。
+- **懒建归属**：`permissions.ensureAclRecord()` 在首次读/写某仓库或目录协作者时自动建一条归属记录（owner 归当前操作者）；`GET/PUT /api/collaborators` 接线。这样无需等仓库被编辑即可授权。
+- **read 放宽**：`can()` 对 `aclKind==='repo'` 的 read 放行给所有登录用户（仓库来自共享 Git 源，避免克隆 / 列表被误拦）；write / 管理仍限 owner + 可写协作者 + 管理员，为 B 批 Git 写权限打基础。
+- **目录对象**：新增 `state.directories` 可归属 / 可协作集合，为 C 批「建账号建用户目录 + 目录隔离」铺垫。
+- **验证**：语法 + 前端自检通过；端到端冒烟 8 项全过（懒建归属、owner 可管理、write 协作者可读不可管、无关用户 read 放宽、归属持久化、目录协作者视图）。
