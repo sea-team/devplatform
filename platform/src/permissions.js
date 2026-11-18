@@ -168,9 +168,9 @@ function fileWriteScopeAllows(req, user) {
     .filter((v) => typeof v === 'string' && v.length);
   if (!dirs.length) return true; // 如 /api/storage/mounts：不带路径参数
   if (dirs.every((d) => String(d).trim() !== '/' && mountFileScopeAllows(d, user))) {
-    // v0.4.17 C 批：路径落在用户家目录时，写操作要求 owner / write 协作者，
-    // read 协作者只读（mountFileScopeAllows 对 read 协作者也放行，必须在此收紧）。
-    const homeDirs = dirs.filter((d) => String(d).replace(/^\/+/, '').split('/')[0] === 'users');
+    // v0.4.17 C 批：路径落在用户家目录 /workspace/users/* 时，写操作要求 owner / write
+    // 协作者，read 协作者只读（mountFileScopeAllows 对 read 协作者也放行，必须在此收紧）。
+    const homeDirs = dirs.filter((d) => String(d).replace(/^\/+/, '').startsWith('workspace/users/'));
     if (homeDirs.length && !homeDirs.every((d) => userDirs.canWritePath(user, d))) return false;
     return true;
   }

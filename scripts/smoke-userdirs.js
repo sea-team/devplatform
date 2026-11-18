@@ -14,14 +14,14 @@ fs.writeFileSync(stateFile, JSON.stringify({
     { id: 'usr_admin', username: 'admin', role: 'admin', status: 'active' },
   ],
   directories: [
-    { id: 'dir_usr_a', name: 'alice', aclKind: 'directory', dirPath: '/users/alice', ownerId: 'usr_a',
+    { id: 'dir_usr_a', name: 'alice', aclKind: 'directory', dirPath: '/workspace/users/alice', ownerId: 'usr_a',
       collaborators: [{ userId: 'usr_b', permission: 'read' }], createdAt: '' },
-    { id: 'dir_usr_b', name: 'bob', aclKind: 'directory', dirPath: '/users/bob', ownerId: 'usr_b',
+    { id: 'dir_usr_b', name: 'bob', aclKind: 'directory', dirPath: '/workspace/users/bob', ownerId: 'usr_b',
       collaborators: [], createdAt: '' },
   ],
   openlistMountOwners: {
-    'user:usr_a': { ownerId: 'usr_a', mountPath: '/users/alice' },
-    'user:usr_b': { ownerId: 'usr_b', mountPath: '/users/bob' },
+    'user:usr_a': { ownerId: 'usr_a', mountPath: '/workspace/users/alice' },
+    'user:usr_b': { ownerId: 'usr_b', mountPath: '/workspace/users/bob' },
   },
 }), 'utf8');
 
@@ -47,17 +47,17 @@ function check(name, actual, expected) {
 
 // 1. 家目录完整路径前缀隔离
 check('alice 可访问自己家目录', permissions.guard(
-  { user: alice, method: 'GET', query: { path: '/users/alice' }, params: {} }, '/api/openlist/files'), true);
+  { user: alice, method: 'GET', query: { path: '/workspace/users/alice' }, params: {} }, '/api/openlist/files'), true);
 check('alice 不可访问 bob 家目录', permissions.guard(
-  { user: alice, method: 'GET', query: { path: '/users/bob' }, params: {} }, '/api/openlist/files'), false);
+  { user: alice, method: 'GET', query: { path: '/workspace/users/bob' }, params: {} }, '/api/openlist/files'), false);
 check('alice 可访问家目录子路径', permissions.guard(
-  { user: alice, method: 'GET', query: { path: '/users/alice/子目录' }, params: {} }, '/api/openlist/files'), true);
+  { user: alice, method: 'GET', query: { path: '/workspace/users/alice/子目录' }, params: {} }, '/api/openlist/files'), true);
 check('bob 作为 read 协作者可读 alice 家目录', permissions.guard(
-  { user: bob, method: 'GET', query: { path: '/users/alice' }, params: {} }, '/api/openlist/files'), true);
+  { user: bob, method: 'GET', query: { path: '/workspace/users/alice' }, params: {} }, '/api/openlist/files'), true);
 check('bob 作为 read 协作者不可写 alice 家目录', permissions.guard(
-  { user: bob, method: 'POST', body: { path: '/users/alice', name: 'x' }, params: {} }, '/api/openlist/files/mkdir'), false);
+  { user: bob, method: 'POST', body: { path: '/workspace/users/alice', name: 'x' }, params: {} }, '/api/openlist/files/mkdir'), false);
 check('管理员可访问任意家目录', permissions.guard(
-  { user: admin, method: 'GET', query: { path: '/users/bob' }, params: {} }, '/api/openlist/files'), true);
+  { user: admin, method: 'GET', query: { path: '/workspace/users/bob' }, params: {} }, '/api/openlist/files'), true);
 check('根目录读取放行', permissions.guard(
   { user: alice, method: 'GET', query: { path: '/' }, params: {} }, '/api/openlist/files'), true);
 
@@ -73,9 +73,9 @@ check('ensureAclRecord 不重复建目录记录',
   core.state().directories.filter((d) => d.id === 'dir_usr_a').length, 1);
 
 // 4. allowedPrefixes / allowsPath 直接校验
-check('userDirs.allowsPath alice->bob=false', userDirs.allowsPath(alice, '/users/bob'), false);
-check('userDirs.allowsPath alice->alice=true', userDirs.allowsPath(alice, '/users/alice'), true);
-check('userDirs.canWritePath bob->alice=false (read only)', userDirs.canWritePath(bob, '/users/alice'), false);
+check('userDirs.allowsPath alice->bob=false', userDirs.allowsPath(alice, '/workspace/users/bob'), false);
+check('userDirs.allowsPath alice->alice=true', userDirs.allowsPath(alice, '/workspace/users/alice'), true);
+check('userDirs.canWritePath bob->alice=false (read only)', userDirs.canWritePath(bob, '/workspace/users/alice'), false);
 
 console.log(`\nC 批隔离冒烟：${pass} 通过 / ${fail} 失败`);
 // 清理临时 state

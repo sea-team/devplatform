@@ -3,12 +3,15 @@
 /**
  * 用户家目录（C 批 v0.4.17）。
  *
- * 建账号时为每个用户在 OpenList 建一个独立家目录 /users/<username>，并写一条
+ * 建账号时为每个用户在 OpenList 建一个独立家目录 /workspace/users/<username>，并写一条
  * directories[] 归属记录（owner = 该用户，可被授予 read / write 协作者）。文件访问
  * 隔离不再只看「挂载首段」，而是按家目录完整路径前缀判定：
- *   - /users/alice 只有 alice（owner）、alice 的协作者、管理员可访问；
- *   - /users/bob 对 alice 不可见；
+ *   - /workspace/users/alice 只有 alice（owner）、alice 的协作者、管理员可访问；
+ *   - /workspace/users/bob 对 alice 不可见；
  *   - 平台原有的自建挂载（openlistMountOwners）继续按首段隔离，互不干扰。
+ *
+ * 家目录必须落在 OpenList 已有挂载下（246 上唯一挂载是 /workspace），否则上游 mkdir
+ * 报「storage not found」。因此 HOME_ROOT 取 /workspace/users，而不是 OpenList 根 /users。
  *
  * OpenList 服务仍是全站单例，隔离在平台侧（permissions.guard + openlist 列表裁剪）实现。
  * 上游目录创建失败不回滚账号创建：账号可用，仅家目录标 error，可稍后重试重建。
@@ -16,7 +19,7 @@
 const { state, update, uid } = require('./core');
 const openlist = require('./openlist');
 
-const HOME_ROOT = '/users';
+const HOME_ROOT = '/workspace/users';
 const dirIdFor = (userId) => `dir_${String(userId || '')}`;
 const homePathFor = (username) => `${HOME_ROOT}/${String(username || '').trim().toLowerCase()}`;
 
@@ -99,17 +102,12 @@ async function provision(user) {
     const exists = Array.isArray(state().directories) && state().directories.some((d) => d && d.id === id);
     // 上游 mkdir 幂等：目录已存在时 OpenList 返回错误，忽略即可；只在首次且记录不存在时尝试建。
     if (!exists) {
+      // HOME_ROOT=/workspace/users：先确保 /workspace/users 存在，再建 <username>。
+      // mkdir 幂等：已存在会报错，忽略即可。
+      try { await openlist.mkdir('/workspace', 'users'); } catch { /* 容器可能已存在 */ }
       try {
         await openlist.mkdir(HOME_ROOT, username);
-      } catch (e) {
-        // 父目录 /users 不存在时先建父，再建家目录；仍失败则记录错误、不阻断账号创建。
-        try {
-          await openlist.mkdir('/', HOME_ROOT.slice(1));
-        } catch { /* 父目录可能已存在 */ }
-        try {
-          await openlist.mkdir(HOME_ROOT, username);
-        } catch (e2) { error = String((e2 && e2.message) || e2 || '建目录失败'); }
-      }
+      } catch (e2) { error = String((e2 && e2.message) || e2 || '建目录失败'); }
     }
   } catch (e) { error = String((e && e.message) || e || '建目录失败'); }
 

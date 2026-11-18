@@ -339,8 +339,9 @@ function mountSegmentsFor(user) {
   const uidValue = user && user.id;
   for (const [key, rec] of Object.entries(mountOwners())) {
     if (!rec || !rec.ownerId || !uidValue || rec.ownerId !== uidValue) continue;
-    // user: 前缀是 C 批用户家目录，统一用 users 段放行、进入后由 filterRootContent 按家目录裁剪。
-    if (String(key).startsWith('user:')) { out.add('users'); continue; }
+    // user: 前缀是 C 批用户家目录（/workspace/users/<name>），根路径放行 workspace 段，
+    // 进入后由 filterRootContent 逐层裁剪；不参与旧的挂载首段隔离。
+    if (String(key).startsWith('user:')) { out.add('workspace'); continue; }
     const seg = String(rec.mountPath || '').replace(/^\/+/, '').split('/')[0];
     if (seg) out.add(seg);
   }
@@ -385,12 +386,19 @@ function visibleStorages(items, user = currentUser()) {
 function filterRootContent(content, dir, user = currentUser()) {
   const list = Array.isArray(content) ? content : [];
   if (isPrivileged(user)) return list;
-  // C 批：进入 /users 后，只列出该用户自己的家目录（或协作者被授权的目录）。
-  if (dir === '/users') {
-    // 延迟 require，避免 userDirs -> openlist 的循环依赖。
-    const userDirs = require('./userDirs');
-    const prefixes = userDirs.allowedPrefixes(user).map((p) => String(p).replace(/^\/users\//, '').split('/')[0]).filter(Boolean);
+  // 延迟 require，避免 userDirs -> openlist 的循环依赖。
+  const userDirs = require('./userDirs');
+  // C 批：进入 /workspace/users 后，只列出该用户自己的家目录（或协作者被授权的目录）。
+  if (dir === userDirs.HOME_ROOT) {
+    const prefixes = userDirs.allowedPrefixes(user)
+      .map((p) => String(p).replace(/^\/workspace\/users\//, '').split('/')[0]).filter(Boolean);
     return list.filter((f) => prefixes.includes(String((f && f.name) || '').replace(/^\/+/, '')));
+  }
+  // C 批：进入 /workspace 时，普通用户只能看到 users 目录（家容器），不暴露工作区其它内容。
+  if (dir === '/workspace') {
+    const hasHome = userDirs.allowedPrefixes(user).length > 0;
+    if (hasHome) return list.filter((f) => String((f && f.name) || '').replace(/^\/+/, '') === 'users');
+    return list; // 无家目录的历史用户：保持原有可见性，避免回归
   }
   if (dir !== '/') return list;
   const allowed = mountSegmentsFor(user);

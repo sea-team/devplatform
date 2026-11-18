@@ -387,7 +387,8 @@ note(userDirsSrc.includes('async function provision') && userDirsSrc.includes('f
   && userDirsSrc.includes('function canWritePath') && userDirsSrc.includes('HOME_ROOT')
   && serverSrc.includes("await userDirs.provision(user)") && serverSrc.includes("'/api/user-dirs'")
   && permSrc.includes('userDirs.allowsPath(user, dir)') && permSrc.includes('userDirs.canWritePath(user, d)')
-  && permSrc.includes("/api\\/openlist\\/admin\\/api") && openlistSrc.includes("dir === '/users'")
+  && permSrc.includes("/api\\/openlist\\/admin\\/api") && openlistSrc.includes("dir === userDirs.HOME_ROOT")
+  && userDirsSrc.includes("HOME_ROOT = '/workspace/users'")
   && app.includes('data-collab-open="directories|') && app.includes('/user-dirs')
   && app.includes('storageHomeInit'),
 'C 批：建账号建家目录 + 完整路径前缀隔离（read 协作者只读）+ 目录协作按钮 + admin 代理写收口 + 默认进家目录');

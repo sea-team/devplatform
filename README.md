@@ -3090,16 +3090,17 @@ v0.4.8 把「AI 运维」对话页整体替换成了 xterm 终端，误删了已
 
 ### 54.2 C 批：建账号自动建用户家目录（OpenList）
 
-- 新增 `src/userDirs.js`：`provision(user)` 在建账号后幂等地在 OpenList 建 `/users/<username>` 家目录，写一条 `directories[]` 归属记录（`aclKind:'directory'`，owner = 该用户），并登记 `openlistMountOwners['user:<userId>']`。上游建目录失败不回滚账号创建，返回 `directory.error` 可稍后重试。
+- 新增 `src/userDirs.js`：`provision(user)` 在建账号后幂等地在 OpenList 建 `/workspace/users/<username>` 家目录，写一条 `directories[]` 归属记录（`aclKind:'directory'`，owner = 该用户），并登记 `openlistMountOwners['user:<userId>']`。上游建目录失败不回滚账号创建，返回 `directory.error` 可稍后重试。
+- 家目录必须落在 OpenList **已有挂载**下（246 上唯一挂载是 `/workspace`）；放到 OpenList 根 `/users` 会因无 storage 挂载报 `storage not found`（246 实地踩坑并修正）。
 - `POST /api/users` 改为异步建账号 + `await provision()`；账号禁用（`DELETE /api/users/:id`）只移除家目录归属记录、文件保留（`release()`），避免误删数据。
 - 新增 `GET /api/user-dirs`：管理员看全部家目录；普通用户看自己 + 被协作的目录（复用 `permissions.visible`）。
 - 前端「账号管理」加「用户目录」列，显示家目录路径 + `data-collab-open="directories|<id>"` 协作者按钮（复用通用协作者弹窗，owner/管理员可授予 read/write）。
 
 ### 54.3 目录隔离：从「挂载首段」升级为「家目录完整路径前缀」
 
-- `permissions.mountFileScopeAllows()` 优先用 `userDirs.allowsPath()`：`/users/alice` 只有 alice、alice 的 read/write 协作者、管理员可访问，`/users/bob` 对 alice 不可见；旧的自建挂载仍按首段匹配，`user:` 前缀记录不参与首段匹配（否则所有家目录首段都是 users 会互穿）。
-- `fileWriteScopeAllows()` 对落在 `/users/*` 的写操作追加 `userDirs.canWritePath()`：owner / write 协作者可写，**read 协作者只读**（这是冒烟测出的真实越权点，已修）。
-- `openlist.filterRootContent()` 对 `/users` 目录按 `allowedPrefixes()` 裁剪子目录；`mountSegmentsFor()` 把有家目录的用户在根目录放行 `users` 段。
+- `permissions.mountFileScopeAllows()` 优先用 `userDirs.allowsPath()`：`/workspace/users/alice` 只有 alice、alice 的 read/write 协作者、管理员可访问，`/workspace/users/bob` 对 alice 不可见；旧的自建挂载仍按首段匹配，`user:` 前缀记录不参与首段匹配（否则所有家目录首段都是 workspace 会互穿）。
+- `fileWriteScopeAllows()` 对落在 `/workspace/users/*` 的写操作追加 `userDirs.canWritePath()`：owner / write 协作者可写，**read 协作者只读**（这是冒烟测出的真实越权点，已修）。
+- `openlist.filterRootContent()` 对 `/workspace/users` 按 `allowedPrefixes()` 裁剪子目录、对 `/workspace` 只向普通用户显示 `users` 家容器（不暴露 secure/smoke-test 等工作区内容）；`mountSegmentsFor()` 把有家目录的用户在根目录放行 `workspace` 段。
 - **安全收口**：`/api/openlist/admin/api/*` 代理注入管理员 token，写操作（POST/PUT/DELETE 改上游存储/挂载/用户）在 `permissions.guard()` 里限管理员；只读 GET 保留给内嵌后台浏览，兼顾功能与隔离。
 - 存储页普通账号首次进入默认定位到 `/users/<username>`（`storageHomeInit` 一次性初始化），管理员保持根目录总览。
 

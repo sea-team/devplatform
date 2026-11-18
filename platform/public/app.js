@@ -2164,10 +2164,10 @@ function showDriverTemplate(driver, tpl) {
 
 let storageHomeInit = false;
 async function loadStorage() {
-  // C 批：普通账号首次进入存储页默认落在自己的家目录 /users/<username>；
+  // C 批：普通账号首次进入存储页默认落在自己的家目录 /workspace/users/<username>；
   // 管理员保持根目录，便于总览全部挂载。只初始化一次，之后尊重用户的路径选择。
   if (!storageHomeInit && currentUser && currentUser.role !== 'admin' && currentUser.username) {
-    currentStoragePath = `/users/${currentUser.username}`;
+    currentStoragePath = `/workspace/users/${currentUser.username}`;
     storageHomeInit = true;
   } else if (!storageHomeInit) storageHomeInit = true;
   $('#storage-path').value = currentStoragePath;
