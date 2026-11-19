@@ -3154,3 +3154,31 @@ v0.4.8 把「AI 运维」对话页整体替换成了 xterm 终端，误删了已
 - 新增 `npm run smoke:import` 冒烟 10 项全过：tar / tar.gz / zip(deflate) 真实归档导入、单层目录上提、`.git` 检测、纯 .git 包自动恢复、同名 409、无 .git 拒绝、zip-slip 拦截。
 - `npm run smoke:aiscope` / `smoke:userdirs` 回归全过，无破坏。
 - 说明：A~E 五批功能补充全部完成（A 协作者补全、B Git 写操作、C 用户家目录与隔离、D AI 按服务器 read 权限、E 压缩包上传解压恢复）。
+
+---
+
+## §57 v0.4.20：修复「周期性 git reset 还原未提交改动」
+
+### 57.1 现象与误判
+
+E 批开发期出现诡异现象：用编辑器改完已跟踪文件，几秒后再查改动就没了、`git status` 变干净；reflog 里每隔一段时间多出一条 `reset: moving to HEAD`。一度误判为「本机有后台进程周期性执行 git reset」，实际并无任何定时进程 / 钩子 / 自动化任务。
+
+### 57.2 真正根因
+
+元凶是 E 批自己新增的冒烟测试 `scripts/smoke-import.js`（每次改完代码跑它验证）：
+
+- 其「纯 .git 包自动恢复」用例用手工造的**残缺 .git**（只有 `HEAD` / `config`，没有 `objects/` / `refs/`），调用 `git reset --hard HEAD` 期望恢复工作树。
+- git 对 `-C <dir>` 遇到不完整仓库时，会**向父目录继续寻找外层仓库**。该冒烟的临时目录 `<repo>/_smoke_import/workspace/git-only` 恰好位于平台代码仓库 `devplatform/` 内部，于是 git 一路向上命中 `devplatform/.git`，把 `reset --hard HEAD` 打在了**平台自己的代码仓库**上——刚编辑未提交的改动被全部还原。
+- 独立验证：`git -C <残缺.git 且不在任何仓库树内> rev-parse` 报 `fatal: not a git repository`（正确行为）；同样的残缺 .git 放进 `devplatform/` 内却解析到 `devplatform/.git`（逃逸）。
+- 因 reset 目标恰为当前 HEAD，reflog 显示 `reset: moving to HEAD`，加剧了「外部进程」的误判。
+
+### 57.3 修复（双保险）
+
+- **核心**：`platform/src/workspaceGit.js` 新增 `assertSelfContainedRepo()`，`validate()` 在执行任何 Git 命令前强制校验目标 `.git` 是自包含仓库——必须是目录（拒绝 worktree 的 `gitdir:` 文件）、且含 `objects/`、`refs/`、`HEAD`。残缺仓库直接拒绝，从根本上阻断 git 向上逃逸误伤外层仓库。此为通用防线：任何导入 / Git 操作入口都受保护。
+- **测试隔离**：`scripts/smoke-import.js` 的临时根目录从 `<repo>/_smoke_import` 移到系统临时目录 `os.tmpdir()/devplatform-smoke-import`，彻底脱离代码仓库树；并用真实 `git init + commit` 造完整仓库，使「纯 .git 恢复」走真实成功路径；新增第 11 项断言直接锁定「残缺 .git 被拒绝（防逃逸）」。
+- 生产环境（246）工作区本就在容器 `/workspace`、不在平台代码树内，未受此问题影响；此修复主要消除本地开发 / 测试自伤与同类隐患。
+
+### 57.4 验证
+
+- 实时探针复现：未提交改动 + 跑旧 smoke → reflog 新增 reset、探针消失；修复后重跑 → reflog 无新增、探针存活、11 项冒烟全过。
+- `npm run check`、`smoke:import` 11/11、`smoke:userdirs` 13/13、`smoke:aiscope` 11/11、前端自检全部通过。

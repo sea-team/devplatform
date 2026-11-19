@@ -39,6 +39,36 @@ const MAX_ARG_LEN = 500; // 放宽以容纳 commit -m 的提交说明；危险�
 
 const shQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
+/**
+ * 防止「残缺 .git 向上逃逸」：git -C <dir> 遇到不完整/无效的 .git 时，
+ * 会继续向父目录寻找外层仓库并对它执行写命令（如 reset --hard），
+ * 从而误伤平台自身代码仓库。导入的纯 .git 包尤其容易触发（只有 HEAD/config，
+ * 缺 objects/refs）。这里要求目标目录自身就是一个自包含的有效 git 仓库。
+ * - .git 必须是目录（worktree 的 gitdir: 文件不适用于导入仓库，直接拒绝）；
+ * - 必须具备 objects/ 与 refs/ 两个核心目录；
+ * - HEAD 必须存在。
+ */
+function assertSelfContainedRepo(target, name) {
+  const gitDir = path.join(target, '.git');
+  let st;
+  try { st = fs.statSync(gitDir); } catch { throw new HttpError(404, `工作区内没有这个 Git 仓库：${name}`); }
+  if (!st.isDirectory()) {
+    throw new HttpError(400, `仓库 ${name} 的 .git 不是完整目录（可能是 worktree 链接），拒绝执行 Git 命令`);
+  }
+  for (const sub of ['objects', 'refs']) {
+    try {
+      if (!fs.statSync(path.join(gitDir, sub)).isDirectory()) {
+        throw new Error('not a dir');
+      }
+    } catch {
+      throw new HttpError(400, `仓库 ${name} 的 .git 不完整（缺少 ${sub}/），拒绝执行 Git 命令以避免误操作外层仓库`);
+    }
+  }
+  if (!fs.existsSync(path.join(gitDir, 'HEAD'))) {
+    throw new HttpError(400, `仓库 ${name} 的 .git 不完整（缺少 HEAD），拒绝执行 Git 命令`);
+  }
+}
+
 function scrub(text) {
   return String(text || '')
     .replace(/(https?:\/\/)[^/@\s:]+:[^/@\s]+@/gi, '$1******@')
@@ -54,6 +84,9 @@ function validate(repo, command, args) {
   if (!fs.existsSync(target) || !fs.existsSync(path.join(target, '.git'))) {
     throw new HttpError(404, `工作区内没有这个 Git 仓库：${name}`);
   }
+  // 关键防线：残缺 .git 会让 git 向上逃逸到外层仓库（平台自身代码库），
+  // 造成 reset/restore 等写命令误伤未提交改动。必须是自包含仓库才放行。
+  assertSelfContainedRepo(target, name);
   const cmd = String(command || '').trim();
   if (!ALLOWED_COMMANDS.has(cmd)) {
     throw new HttpError(400, `不支持的 Git 子命令：${cmd || '(空)'}。可用：${[...ALLOWED_COMMANDS].join(', ')}`);
