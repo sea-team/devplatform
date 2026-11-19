@@ -5847,6 +5847,33 @@ $('#repo-form').addEventListener('submit', async (e) => {
 });
 
 /** 克隆凭据方式切换：只展示当前方式需要的字段，避免残留值被误提交。 */
+/** v0.4.19 E 批：上传仓库压缩包导入为工作区仓库。 */
+$('#repo-import-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const file = form.elements.file.files[0];
+  if (!file) { toast('请选择仓库压缩包', true); return; }
+  if (file.size > 100 * 1024 * 1024) { toast('压缩包不能超过 100MB', true); return; }
+  const name = String(form.elements.name.value || '').trim();
+  const query = new URLSearchParams();
+  if (name) query.set('name', name);
+  query.set('filename', file.name);
+  toast(`正在上传并导入 ${file.name}（${fmtSize(file.size)}），请稍候…`);
+  try {
+    const response = await fetch(`/api/repos/import?${query.toString()}`, {
+      method: 'POST', headers: { 'content-type': 'application/octet-stream', ...authHeaders() },
+      body: await file.arrayBuffer(),
+    });
+    const json = await response.json();
+    if (!json.ok) throw new Error(json.error || '导入失败');
+    const d = json.data || {};
+    let msg = `已导入仓库 ${d.name}（${d.path || ''}）`;
+    if (d.gitOnly) msg += d.recovery && d.recovery.ok ? '，已自动从 .git 恢复工作树文件' : '，仅含 .git；工作树恢复未自动完成（见页面说明）';
+    else msg += '（含工作树文件）';
+    toast(msg); form.reset(); loadRepos();
+  } catch (err) { toast(err.message, true); }
+});
+
 function syncCloneAuthFields() {
   const mode = ($('#clone-auth-mode') && $('#clone-auth-mode').value) || 'source';
   const inline = mode === 'password' || mode === 'token';

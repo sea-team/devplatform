@@ -16,6 +16,7 @@ const { PROFILES, startBuild, deployBuild, opsAgent, READ_COMMANDS } = require('
 const remoteOps = require('./remoteOps');
 const extensions = require('./extensions');
 const gitSources = require('./gitSources');
+const repoImporter = require('./repoImporter');
 const gitRuntime = require('./gitRuntime');
 const environment = require('./environment');
 const dockerPanel = require('./dockerPanel');
@@ -494,6 +495,22 @@ app.post('/api/repos', wrap(async (req, res) => {
 app.post('/api/repos/clone', wrap(async (req, res) => {
   ok(res, await gitSources.cloneRepo(req.body || {}));
 }));
+
+// v0.4.19 E 批：上传 .git / 含 .git 的目录压缩包（.tar / .tar.gz / .tgz / .zip）导入为工作区仓库。
+// raw 路由 body 是二进制，仓库名等参数走 query。目标仓库名若已配置归属，仅所有者 + 可写协作者 + 管理员可导入覆盖。
+app.post('/api/repos/import', wrap(async (req, res) => {
+  const buf = req.body;
+  if (!Buffer.isBuffer(buf) || buf.length < 64) throw badRequest('请选择有效的仓库压缩包');
+  const q = req.query || {};
+  const name = String(q.name || '').slice(0, 120);
+  const filename = String(q.filename || '').slice(0, 200);
+  const format = String(q.format || '').slice(0, 12);
+  const repoName = name.replace(/\.tar(\.gz)?$|\.tgz$|\.zip$/i, '').replace(/[^A-Za-z0-9_.-]/g, '-');
+  if (!repoName || repoName === '.' || repoName === '..') throw badRequest('仓库名不合法');
+  const acl = (state().repoAcl || []).find((x) => x && x.id === `workspace:${repoName}`);
+  if (acl) permissions.assertCan(req.user, acl, 'write');
+  ok(res, await repoImporter.importRepo({ name: repoName, buffer: buf, filename, format, user: req.user }));
+}), { raw: true, bodyLimit: 100 * 1024 * 1024 });
 
 /* -------------------- 工作区仓库 Git 命令（v0.3.10） -------------------- */
 app.get('/api/repos/git/presets', (req, res) => ok(res, { items: workspaceGit.presets() }));

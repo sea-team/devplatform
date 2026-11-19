@@ -32,6 +32,8 @@ const workspaceGitSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform'
 const gitSourcesSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'gitSources.js'), 'utf8');
 const credsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'serviceCredentials.js'), 'utf8');
 const userDirsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'userDirs.js'), 'utf8');
+const archiveSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'archive.js'), 'utf8');
+const repoImporterSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'repoImporter.js'), 'utf8');
 const nativeSrc = fs.readFileSync(path.resolve(__dirname, '..', 'windows', 'native-services.ps1'), 'utf8');
 const errors = [];
 const note = (ok, label, extra = '') => {
@@ -404,6 +406,18 @@ note(engineSrc.includes("const permissions = require('./permissions')")
   && serverSrc.includes("user: req.user, // D 批：直调入口同样按服务器 read 权限收敛")
   && engineSrc.includes('你有权限访问的全部已登记服务器'),
 'D 批：AI 服务器范围经 permissions.visible 收敛（伪造/越权 id 裁掉），opsAgent 两入口均传 user');
+
+// v0.4.19 E 批
+note(archiveSrc.includes('function detectFormat') && archiveSrc.includes('function extractTar')
+  && archiveSrc.includes('function extractZip') && archiveSrc.includes('function safeRel')
+  && archiveSrc.includes('zlib.inflateRawSync') && archiveSrc.includes('function resolveInside')
+  && repoImporterSrc.includes('async function importRepo')
+  && repoImporterSrc.includes("command: 'reset', args: ['--hard', 'HEAD']")
+  && serverSrc.includes("app.post('/api/repos/import'") && serverSrc.includes('raw: true, bodyLimit: 100 * 1024 * 1024')
+  && serverSrc.includes("require('./repoImporter')")
+  && app.includes("'/api/repos/import?") && app.includes('id="repo-import-form"')
+  && html.includes('id="repo-import-file"'),
+'E 批：压缩包上传导入（tar/tgz/zip 纯 JS 解压 + zip-slip 防护 + 仅 .git 自动 reset 恢复）');
 
 // v0.4.14：所有代理地址输入框的 placeholder 都带 socks5 示例。
 note((html.match(/socks5:\/\/127\.0\.0\.1:1080/g) || []).length >= 5
