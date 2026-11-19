@@ -3109,3 +3109,26 @@ v0.4.8 把「AI 运维」对话页整体替换成了 xterm 终端，误删了已
 - `npm run check`（含 userDirs.js）+ 前端自检（新增 2 项锁定断言）全过。
 - `npm run smoke:userdirs` 隔离冒烟 13 项全过：alice/bob 家目录互不可见、read 协作者可读不可写、管理员全通、根目录放行、admin 代理写拦截、懒建幂等、canWritePath/ allowsPath 直校。
 - 246 实地探查：code-server 容器 `dp-code-server`（8080，密码来自平台 `.env`）、目录映射 `/home/coder/project`；容器内代登录拿 Cookie + 带 Cookie 访问 `?folder=` 返回 200，链路验证通过。OpenList 在线（Local 挂载 `/workspace`），文件 API 可用。
+
+---
+
+## §55 v0.4.18：功能补充 D 批（AI 运维 / 会话按服务器 read 权限过滤）
+
+### 55.1 问题（越权口）
+
+- AI 运维的服务器范围解析 `engine.scopedServers()` 原先从 `state().servers` **全量**按 id 取数：范围缺省 / `'all'` 时直接返回全部服务器，普通用户伪造 `serverScope` 里的他人 server id 即可让 AI 诊断 / 巡检 / 部署一台自己无 read 权限的主机（拿到 host、负载、磁盘、容器、只读命令输出，写授权下还能触发部署）。
+- 前端服务器选择器虽经 `/api/servers` 的 `filterResponse` 按 read 权限裁剪，但那只是出栈裁剪，不构成后端防线；`opsAgent` 服务端执行时没有 `user` 上下文，也不经过 `filterResponse`。
+- AI 会话页（dsh / DeepSeek Harness）不注入任何服务器凭据、无服务器选择链路，本次无需改动。
+
+### 55.2 修复：权限判定下沉到 AI 服务器出口
+
+- `engine.scopedServers(serverIds, user)` 候选池改为 `permissions.visible(user, 全部服务器)`：`'all'` / 未指定 = 用户有 read 权限的全部；数组 = 候选池 ∩ 选中 id（伪造 / 越权 id 被自动裁掉）；无 user 兜底返回空集。`opsAgent({..., user})` 接收 user 并透传，工具调用的 `allowedServerIds` 也来自收敛后的集合，模型「顺手」查范围外主机同样被拦。文案同步为「你有权限访问的全部已登记服务器」。
+- 两个调用入口都传 user：`POST /api/ai/ops`（直调）传 `req.user`；`aiSessions.send`（会话消息）传 user。
+- `aiSessions` 增加 `constrainScope()`：create / modify / send 落库的 serverScope 都先按可见服务器过滤，越权 id 不写进 state、不在会话详情回显（第二道防线，最终防线仍在 engine 执行 SSH 前）。
+- 前端 AI 运维「诊断 / 巡检范围」面板提示补充「仅显示你有权限访问的服务器」，与实际行为一致。
+
+### 55.3 验证
+
+- `npm run check` + 前端自检（新增 1 项锁定断言）全过。
+- 新增 `npm run smoke:aiscope` 冒烟 11 项全过：管理员 all=全量、普通用户 all=仅可见（owner / 协作者）、无 user 拒绝、伪造他人 id 被裁、选中数组 ∩ 可见、空数组=0 台、管理员越权 id 保留、create / detail 落库剔除越权 id。
+- `npm run smoke:userdirs` C 批 13 项回归全过，无破坏。

@@ -13,6 +13,7 @@
  */
 const { state, update, uid, HttpError, badRequest, notFound } = require('./core');
 const { opsAgent } = require('./engine');
+const permissions = require('./permissions');
 
 const MAX_SESSIONS_PER_USER = 60;
 const MAX_MESSAGES = 160;
@@ -26,6 +27,17 @@ const MAX_SCOPE_SERVERS = 50;
 function normalizeScope(value) {
   if (!Array.isArray(value)) return 'all';
   return [...new Set(value.map(String).filter(Boolean))].slice(0, MAX_SCOPE_SERVERS);
+}
+
+/**
+ * D 批：把会话范围里的 server id 收敛为当前用户 read 可见的，避免越权 id 落库 / 详情回显。
+ * 'all' 原样保留——engine.scopedServers 会按 user 收敛为「可见全集」。这是第二道防线，
+ * 最终防线在 engine 执行 SSH 之前。
+ */
+function constrainScope(user, scope) {
+  if (!Array.isArray(scope)) return scope;
+  const visibleIds = new Set(permissions.visible(user, state().servers || []).map((s) => s.id));
+  return scope.filter((id) => visibleIds.has(id));
 }
 
 const now = () => new Date().toISOString();
@@ -92,7 +104,7 @@ function create(user, body = {}) {
     title: String((body && body.title) || '新会话').slice(0, TITLE_MAX),
     providerId: String((body && body.providerId) || ''),
     allowWrite: Boolean(body && body.allowWrite),
-    serverScope: normalizeScope(body && body.serverScope),
+    serverScope: constrainScope(user, normalizeScope(body && body.serverScope)),
     messages: [],
     createdAt: now(),
     updatedAt: now(),
@@ -120,7 +132,7 @@ function modify(user, id, body = {}) {
     if (body.title !== undefined) target.title = String(body.title).slice(0, TITLE_MAX) || '新会话';
     if (body.providerId !== undefined) target.providerId = String(body.providerId || '');
     if (body.allowWrite !== undefined) target.allowWrite = Boolean(body.allowWrite);
-    if (body.serverScope !== undefined) target.serverScope = normalizeScope(body.serverScope);
+    if (body.serverScope !== undefined) target.serverScope = constrainScope(user, normalizeScope(body.serverScope));
     target.updatedAt = now();
   });
   return detail(user, id);
@@ -176,8 +188,8 @@ async function send(user, id, body = {}) {
   const providerId = String((body && body.providerId) || session.providerId || '');
   const allowWrite = body && body.allowWrite !== undefined
     ? Boolean(body.allowWrite) : Boolean(session.allowWrite);
-  const serverScope = body && body.serverScope !== undefined
-    ? normalizeScope(body.serverScope) : normalizeScope(session.serverScope);
+  const serverScope = constrainScope(user, body && body.serverScope !== undefined
+    ? normalizeScope(body.serverScope) : normalizeScope(session.serverScope));
   const userMessage = {
     id: uid('msg'), role: 'user', content,
     attachments: files, trace: [], at: now(),
@@ -209,6 +221,7 @@ async function send(user, id, body = {}) {
     const result = await opsAgent({
       providerId, prompt: content, allowWrite, history, attachments: files,
       serverIds: Array.isArray(serverScope) ? serverScope : undefined,
+      user, // D 批：AI 链路按服务器 read 权限收敛，伪造的 server id 在 engine 层被裁掉
     });
     assistant = {
       id: uid('msg'), role: 'assistant',

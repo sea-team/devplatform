@@ -393,6 +393,18 @@ note(userDirsSrc.includes('async function provision') && userDirsSrc.includes('f
   && app.includes('storageHomeInit'),
 'C 批：建账号建家目录 + 完整路径前缀隔离（read 协作者只读）+ 目录协作按钮 + admin 代理写收口 + 默认进家目录');
 
+// v0.4.18 D 批：AI 运维 / 会话按服务器 read 权限过滤（后端防线在 engine.scopedServers）。
+note(engineSrc.includes("const permissions = require('./permissions')")
+  && engineSrc.includes('function scopedServers(serverIds, user)')
+  && engineSrc.includes('permissions.visible(user || null, all)')
+  && engineSrc.includes('async function opsAgent({ providerId, prompt, allowWrite = false, history = [], attachments = [], serverIds, user })')
+  && engineSrc.includes('const servers = scopedServers(serverIds, user)')
+  && sessionsSrc.includes('function constrainScope(user, scope)')
+  && sessionsSrc.includes('user, // D 批：AI 链路按服务器 read 权限收敛')
+  && serverSrc.includes("user: req.user, // D 批：直调入口同样按服务器 read 权限收敛")
+  && engineSrc.includes('你有权限访问的全部已登记服务器'),
+'D 批：AI 服务器范围经 permissions.visible 收敛（伪造/越权 id 裁掉），opsAgent 两入口均传 user');
+
 // v0.4.14：所有代理地址输入框的 placeholder 都带 socks5 示例。
 note((html.match(/socks5:\/\/127\.0\.0\.1:1080/g) || []).length >= 5
   && app.includes('socks5://127.0.0.1:1080'),

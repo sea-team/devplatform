@@ -8,6 +8,7 @@ const { config, state, update, uid, safeWorkspacePath } = require('./core');
 const { sshExec, sftpPut, collectStatus, aiChat } = require('./integrations');
 const buildBackends = require('./buildBackends');
 const proxyModule = require('./proxy');
+const permissions = require('./permissions');
 
 /* --------------------------- 多语言构建 Profile -------------------------- */
 // 每个 profile 定义：识别文件、容器镜像、安装 / 编译 / 测试命令、产物目录。
@@ -414,15 +415,21 @@ function extractSuggestion(answer) {
   return { answer: cleaned, suggestion };
 }
 
-/** 会话级服务器范围：'all' / 未指定 = 全部；数组 = 仅选中的服务器（空数组 = 不选）。 */
-function scopedServers(serverIds) {
+/**
+ * D 批：会话级服务器范围先按「当前用户对服务器的 read 权限」收敛候选池，再应用会话选择。
+ * - 候选池 = permissions.visible(user, 全部服务器)：管理员全量，普通用户仅 owner / 协作者可读的。
+ * - 'all' / 未指定 = 候选池全部；数组 = 候选池 ∩ 选中的 id（伪造他人 server id 会被自动裁掉）。
+ * 这是 AI 链路唯一的服务器出口，无论从 /api/ai/ops 还是会话消息进入都经过此处。
+ */
+function scopedServers(serverIds, user) {
   const all = state().servers || [];
-  if (!Array.isArray(serverIds)) return all;
+  const pool = permissions.visible(user || null, all);
+  if (!Array.isArray(serverIds)) return pool;
   const set = new Set(serverIds.map(String));
-  return all.filter((s) => set.has(s.id));
+  return pool.filter((s) => set.has(s.id));
 }
 
-async function opsAgent({ providerId, prompt, allowWrite = false, history = [], attachments = [], serverIds }) {
+async function opsAgent({ providerId, prompt, allowWrite = false, history = [], attachments = [], serverIds, user }) {
   const provider = state().aiProviders.find((p) => p.id === providerId)
     || state().aiProviders.find((p) => p.enabled !== false);
   if (!provider) throw new Error('请先在「AI 服务」中配置一个模型服务');
@@ -430,11 +437,11 @@ async function opsAgent({ providerId, prompt, allowWrite = false, history = [], 
   const files = attachmentList(attachments);
   const turns = historyTurns(history);
   const withImages = provider.kind !== 'cli' && files.some((a) => a.kind === 'image');
-  const servers = scopedServers(serverIds);
+  const servers = scopedServers(serverIds, user);
   const allowedServerIds = new Set(servers.map((s) => s.id));
   const scopeNote = Array.isArray(serverIds)
     ? `本次会话只针对选中的 ${servers.length} 台服务器做诊断 / 巡检 / 运维，禁止查询或操作范围外的服务器。`
-    : '本次会话可使用全部已登记服务器。';
+    : '本次会话可使用你有权限访问的全部已登记服务器。';
   const system = [
     provider.kind === 'cli'
       ? '你是服务器运维助手。平台已提前采集好实时上下文并附在问题后面，请直接基于这些数据分析，不要假设可以自己调用工具。'
@@ -557,5 +564,5 @@ async function opsAgent({ providerId, prompt, allowWrite = false, history = [], 
 
 module.exports = {
   PROFILES, profileById, detectProfile,
-  startBuild, deployBuild, opsAgent, READ_COMMANDS,
+  startBuild, deployBuild, opsAgent, scopedServers, READ_COMMANDS,
 };

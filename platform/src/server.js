@@ -1520,6 +1520,7 @@ app.post('/api/ai/ops', wrap(async (req, res) => {
     providerId: req.body.providerId,
     prompt: String(req.body.prompt),
     allowWrite: Boolean(req.body.allowWrite),
+    user: req.user, // D 批：直调入口同样按服务器 read 权限收敛
   }));
 }));
 
