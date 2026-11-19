@@ -415,7 +415,7 @@ note(archiveSrc.includes('function detectFormat') && archiveSrc.includes('functi
   && repoImporterSrc.includes("command: 'reset', args: ['--hard', 'HEAD']")
   && serverSrc.includes("app.post('/api/repos/import'") && serverSrc.includes('raw: true, bodyLimit: 100 * 1024 * 1024')
   && serverSrc.includes("require('./repoImporter')")
-  && app.includes("'/api/repos/import?") && app.includes('id="repo-import-form"')
+  && app.includes('/api/repos/import?') && app.includes("$('#repo-import-form')")
   && html.includes('id="repo-import-file"'),
 'E 批：压缩包上传导入（tar/tgz/zip 纯 JS 解压 + zip-slip 防护 + 仅 .git 自动 reset 恢复）');
 
