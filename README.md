@@ -3132,3 +3132,25 @@ v0.4.8 把「AI 运维」对话页整体替换成了 xterm 终端，误删了已
 - `npm run check` + 前端自检（新增 1 项锁定断言）全过。
 - 新增 `npm run smoke:aiscope` 冒烟 11 项全过：管理员 all=全量、普通用户 all=仅可见（owner / 协作者）、无 user 拒绝、伪造他人 id 被裁、选中数组 ∩ 可见、空数组=0 台、管理员越权 id 保留、create / detail 落库剔除越权 id。
 - `npm run smoke:userdirs` C 批 13 项回归全过，无破坏。
+
+---
+
+## §56 v0.4.19：功能补充 E 批（仓库压缩包上传 / 解压 / 自动恢复）
+
+### 56.1 需求（14 项清单最后一项）
+
+> 除了仓库克隆到平台存储，还需要支持直接上传 .git 或整个目录（包含 .git）压缩包（.tar 或 .zip），上传成功自动解压，仅 .git 目录时自动执行文件恢复命令。
+
+### 56.2 实现（零第三方依赖）
+
+- 新增 `src/archive.js`：纯 Node 内置 zlib 实现 tar / tar.gz / tgz（移植 launcher ustar 解析 + GNU longname / PAX 扩展头）与 zip（手写 minimal 解析 + inflateRawSync，支持 store / deflate）。安全：条目名归一化、拒绝绝对路径 / 盘符 / UNC / NUL / `..`，落点 `path.resolve + startsWith` 白名单（zip-slip / tar-slip 双防），拒绝符号链接 / 设备文件，单文件 256MB / 总量 1GB / 20000 条目上限。
+- 新增 `src/repoImporter.js`：`importRepo()` 复用 `safeWorkspacePath` + 同名 409 校验；解压到暂存目录 → 单层包裹目录自动上提 → 必须有 `.git` → 移动到最终仓库目录；**仅当解压结果为「只有 .git、无工作树」**时执行 `git reset --hard HEAD` 从 .git 恢复工作树（走 workspaceGit 双通道：容器内 Git 或 SSH 宿主机；仓库尚无提交 / 无可用 Git 通道时降级为 warning，不阻断导入）。
+- `server.js` 新增 `POST /api/repos/import`：raw 二进制上传（100MB 上限），仓库名等参数走 query；目标仓库名若已配置 `repoAcl` 归属，要求 owner / 可写协作者 / 管理员写权限，新仓库名共享开放。
+- 前端「克隆到工作区」页新增「上传压缩包导入」卡片（file input + 目录名），raw fetch 上传，导入后刷新仓库列表并按 `gitOnly` / `recovery` 给出准确提示。
+
+### 56.3 验证
+
+- `npm run check` + 前端自检（新增 1 项锁定断言）全过。
+- 新增 `npm run smoke:import` 冒烟 10 项全过：tar / tar.gz / zip(deflate) 真实归档导入、单层目录上提、`.git` 检测、纯 .git 包自动恢复、同名 409、无 .git 拒绝、zip-slip 拦截。
+- `npm run smoke:aiscope` / `smoke:userdirs` 回归全过，无破坏。
+- 说明：A~E 五批功能补充全部完成（A 协作者补全、B Git 写操作、C 用户家目录与隔离、D AI 按服务器 read 权限、E 压缩包上传解压恢复）。
