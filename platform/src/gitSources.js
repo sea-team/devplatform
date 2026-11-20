@@ -621,6 +621,33 @@ async function cloneRepo({ sourceId, cloneUrl, name, branch, proxy, repoId,
     const remote = await cloneViaSshHost({
       args: [...args, hostTarget], resolved, secrets: allSecrets, hostTarget, server,
     });
+    // v0.4.23：SSH 克隆映射校验与回滚。
+    // 未配 HOST_WORKSPACE_DIR 时 hostWorkspaceDir 由 deployDir 推导，可能猜错宿主机目录，
+    // 导致克隆写到与平台无关的位置、容器内看不到仓库，却报「克隆成功」。
+    // 这里在容器内校验 target/.git 是否可见；不可见则删除宿主机上刚克隆的目录并抛明确错误。
+    const gitDir = path.join(target, '.git');
+    const visible = fs.existsSync(gitDir) && fs.existsSync(path.join(gitDir, 'objects'))
+      && fs.existsSync(path.join(gitDir, 'refs')) && fs.existsSync(path.join(gitDir, 'HEAD'));
+    if (!visible) {
+      // 尽力回滚：只删本次克隆的精确目标路径，失败也不掩盖主错误。
+      // 安全守卫：确认 hostTarget 是「工作区根 + 纯仓库名」，绝不可能是 /、~ 或含 .. 的路径。
+      let rollbackNote = '';
+      const safeToRemove = fb.hostWorkspaceDir && fb.hostWorkspaceDir !== '/'
+        && !/(^|\/)\.\.(\/|$)/.test(hostTarget)
+        && hostTarget.startsWith(fb.hostWorkspaceDir.replace(/\/+$/, '') + '/')
+        && path.posix.basename(hostTarget) === repoName;
+      if (safeToRemove) {
+        try {
+          const rb = await sshExec(server, `rm -rf ${shQuote(hostTarget)}`, 30000);
+          rollbackNote = rb.code === 0 ? '，已自动清理宿主机上的错误克隆目录' : '，且自动清理失败（需手动删除该目录）';
+        } catch { rollbackNote = '，且自动清理失败（需手动删除该目录）'; }
+      } else {
+        rollbackNote = '，但路径守卫未通过，未自动清理（请手动核对并删除宿主机上的残留目录）';
+      }
+      throw new HttpError(500,
+        `SSH 克隆在宿主机上完成，但平台工作区看不到仓库 .git —— 说明宿主机工作区路径映射不正确（当前推测为 ${fb.hostWorkspaceDir}，来源：${fb.source || '部署目录推导'}）${rollbackNote}。请在 .env 配置正确的 HOST_WORKSPACE_DIR（容器内 /workspace 对应的宿主机真实路径）后重试。`,
+        { errorCode: 'SSH_HOST_MAPPING_MISMATCH' });
+    }
     channel = 'ssh-host';
     channelLabel = `SSH 宿主机 ${server.name}（${server.host}）`;
     gitVersion = remote.gitVersion;

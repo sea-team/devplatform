@@ -298,6 +298,17 @@
   回归：前端自检新增 9 条护栏全部通过；行为级验证 7 项通过。
   说明：dist/ 与 platform.exe 需发布前执行 npm run build 重建。
 
+【本版修复 · v0.4.23】三项安全遗留问题按产品决策落地（README §60）：
+  1) AI baseURL 属地分级（SSRF）：公网地址所有账号可配，私网/本机/元数据地址仅管理员，
+     覆盖新增服务/获取模型/表单试跑三个入口；管理员的本机 Ollama 与内网 vLLM 场景保留。
+  2) SSH 克隆映射校验与回滚：克隆后校验容器内 .git 可见，映射猜错则带路径守卫删除宿主机
+     错误克隆目录并明确报错；映射正确的现有部署不受影响。
+  3) 2FA 账号级限速（5 次失败锁 1 分钟，防跨挑战爆破）；CLI 通道新增 DP_CLI_SECRET 共享密钥
+     （配置后须带 x-dp-cli-key；未配置兼容旧脚本），重置脚本同步支持。ADMIN_TOKEN 不受影响。
+  注意：设置 DP_CLI_SECRET 后，未更新带密钥头的旧重置脚本将无法走 CLI 通道。
+  回归：新增 npm run smoke:hardening 12/12；前端自检 +5 条护栏；全套 smoke 通过。
+  说明：dist/ 与 platform.exe 需发布前执行 npm run build 重建。
+
 下载哪个：
   1) devplatform-windows.zip       推荐 · 全量包：控制台 + 三项集成服务程序。
                                     START.bat 只启控制台；INSTALL.bat 离线装好服务。

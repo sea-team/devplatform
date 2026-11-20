@@ -34,6 +34,8 @@ const credsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src'
 const userDirsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'userDirs.js'), 'utf8');
 const archiveSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'archive.js'), 'utf8');
 const repoImporterSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'repoImporter.js'), 'utf8');
+const aiPolicySrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'aiNetworkPolicy.js'), 'utf8');
+const resetPwSrc = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', 'reset-admin-password.js'), 'utf8');
 const nativeSrc = fs.readFileSync(path.resolve(__dirname, '..', 'windows', 'native-services.ps1'), 'utf8');
 const errors = [];
 const note = (ok, label, extra = '') => {
@@ -172,6 +174,22 @@ note(app.includes("$('#repo-list') ? $$('#repo-list [data-copy]') : []"),
 '#8 data-copy 仅绑定仓库列表内按钮，不误抓模板弹窗的复制 JSON');
 note((app.match(/if \(!response\.ok\) throw new Error\(`服务端返回 HTTP \$\{response\.status\}/g) || []).length >= 3,
 '#9 三处裸 fetch 上传先查 response.ok 再解析 JSON');
+
+/* ---- v0.4.23：三项产品决策落地的安全加固护栏 ---- */
+note(aiPolicySrc.includes('function classify') && aiPolicySrc.includes('function assertAllowed')
+  && serverSrc.includes('aiNetworkPolicy.assertAllowed'),
+'SSRF: 新增地址属地分级模块并接入三处写入口');
+note((serverSrc.match(/aiNetworkPolicy\.assertAllowed/g) || []).length >= 3,
+'SSRF: 三个用户可控 baseURL 入口全部做属地校验');
+note(gitSourcesSrc.includes('SSH_HOST_MAPPING_MISMATCH') && gitSourcesSrc.includes('已自动清理宿主机上的错误克隆目录')
+  && gitSourcesSrc.includes('const safeToRemove'),
+'SSH 克隆: 校验容器内 .git 可见性，映射错则带路径守卫回滚并报明确错误');
+note(authSrc.includes('const rateKey = `2fa|${user.id}`') && authSrc.includes("二次验证尝试次数过多"),
+'2FA: 账号级失败限速（按 userId，5 次锁 1 分钟）');
+note(coreSrc.includes('cliSecret: env(\'DP_CLI_SECRET\')') && authSrc.includes('x-dp-cli-key')
+  && authSrc.includes('safeEqualStr') && envcfg.includes('DP_CLI_SECRET')
+  && resetPwSrc.includes('x-dp-cli-key') && resetPwSrc.includes('DP_CLI_SECRET'),
+'CLI 通道: 共享密钥 DP_CLI_SECRET 全链路（core 配置 + auth 校验 + 环境页 + 重置脚本）');
 // 附带修复：官方镜像的 tag 冒号不能被当成 registry 端口，否则构建容器永远找不到镜像。
 const { resolveImage } = require('../platform/src/core');
 note(resolveImage('node:22-bookworm', 'docker.m.daocloud.io/library/') === 'docker.m.daocloud.io/library/node:22-bookworm'

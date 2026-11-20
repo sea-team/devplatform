@@ -102,13 +102,16 @@ async function main() {
   const token = args.token || process.env.ADMIN_TOKEN || dotEnvValue('ADMIN_TOKEN');
   const headers = {};
   if (token) headers.authorization = `Bearer ${token}`;
+  // v0.4.23：平台若配置了 DP_CLI_SECRET，本机 CLI 通道还需带 x-dp-cli-key。
+  const cliSecret = process.env.DP_CLI_SECRET || dotEnvValue('DP_CLI_SECRET');
+  const cliHeaders = { ...headers, 'x-dp-cli': '1', ...(cliSecret ? { 'x-dp-cli-key': cliSecret } : {}) };
 
   // 显式 --api：只走远程接口，失败不回退（避免误改本机 state.json）。
   if (explicitApi) {
     const isLoopback = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(explicitApi);
     const result = await online(`${explicitApi}/api/auth/reset-password`,
       { username: args.username, password: args.password || undefined },
-      isLoopback ? { ...headers, 'x-dp-cli': '1' } : headers);
+      isLoopback ? cliHeaders : headers);
     console.log(`✔ 已重置 ${result.username} 的密码（在线生效，旧会话已失效）\n新密码：${result.password}`);
     return;
   }
@@ -122,7 +125,7 @@ async function main() {
     try {
       const result = await online(`${localBase}/api/auth/reset-password`,
         { username: args.username, password: args.password || undefined },
-        { ...headers, 'x-dp-cli': '1' });
+        cliHeaders);
       console.log(`✔ 已重置 ${result.username} 的密码（在线生效，旧会话已失效）\n新密码：${result.password}`);
       return;
     } catch (e) {

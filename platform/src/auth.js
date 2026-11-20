@@ -302,8 +302,19 @@ function isLoopback(req) {
   return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
 }
 
+/** 常量时间字符串比较，避免通过响应耗时逐字节猜共享密钥。 */
+function safeEqualStr(a, b) {
+  const x = Buffer.from(String(a || ''));
+  const y = Buffer.from(String(b || ''));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
 function isCliRequest(req, pathname) {
-  return isLoopback(req) && req.headers['x-dp-cli'] === '1' && CLI_PATHS.includes(pathname);
+  if (!isLoopback(req) || req.headers['x-dp-cli'] !== '1' || !CLI_PATHS.includes(pathname)) return false;
+  // v0.4.23：配置了 DP_CLI_SECRET 后必须带匹配的 x-dp-cli-key；未配置则保持旧行为兼容。
+  const secret = config.cliSecret;
+  if (secret && !safeEqualStr(req.headers['x-dp-cli-key'], secret)) return false;
+  return true;
 }
 
 function identity(req, parsed) {
@@ -380,6 +391,15 @@ function verify2fa(req, res, body) {
   if (rec.attempts > 5) { drop2faChallenge(totpToken); throw new HttpError(429, '尝试次数过多，请重新登录'); }
   const user = byId(rec.userId);
   if (!user || user.status === 'disabled') { drop2faChallenge(totpToken); throw new HttpError(401, '账号不可用'); }
+
+  // v0.4.23：账号级 2FA 限速。单次 challenge 的 5 次限制可被「重新登录拿新 token」绕过，
+  // 这里按 userId 再记一层（与登录限速同一套 attempts 表，用前缀区分），5 次失败锁 1 分钟，
+  // 堵住对 TOTP 6 位码的跨挑战爆破。
+  const rateKey = `2fa|${user.id}`;
+  const rate = attempts.get(rateKey);
+  if (rate && rate.lockedUntil > Date.now()) {
+    throw new HttpError(429, '二次验证尝试次数过多，请 1 分钟后重试');
+  }
   const method = (body && body.method) || 'totp';
   const code = String((body && body.code) || '').trim();
   let ok = false;
@@ -397,7 +417,13 @@ function verify2fa(req, res, body) {
   } else if (user.totpSecret) {
     ok = verifyTotp(base32Decode(user.totpSecret), code);
   }
-  if (!ok) throw new HttpError(401, '验证码错误');
+  if (!ok) {
+    const next = rate && rate.until > Date.now() ? { ...rate, count: rate.count + 1 } : { count: 1, until: Date.now() + LOCK_MS };
+    next.lockedUntil = next.count >= MAX_ATTEMPTS ? Date.now() + LOCK_MS : 0;
+    attempts.set(rateKey, next);
+    throw new HttpError(401, '验证码错误');
+  }
+  attempts.delete(rateKey);
   drop2faChallenge(totpToken);
   const token = createSession(user.id, req);
   update((s) => {

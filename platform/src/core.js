@@ -45,6 +45,9 @@ const config = {
   hostDataDir: env('HOST_DATA_DIR'),
   // 账号体系：.env 里的机器令牌仍作为管理员应急通道。
   adminToken: env('ADMIN_TOKEN'),
+  // 本机 CLI 通道共享密钥（v0.4.23）：配置后，回环 + x-dp-cli:1 之外还须带 x-dp-cli-key，
+  // 防止外部请求经同机反向代理转成回环来源后伪造 CLI 头重置管理员密码。未配置时保持兼容。
+  cliSecret: env('DP_CLI_SECRET'),
   // 默认值必须是「本机 / 源码直跑 / 单文件 exe」可解析的地址。
   // Docker compose 会显式注入 gitea:3000 / openlist:5244 等容器服务名覆盖这里；
   // 远程部署的容器则由 .env 显式注入宿主机地址，两种场景都不受影响。

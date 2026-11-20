@@ -38,6 +38,7 @@ const aiSessions = require('./aiSessions');
 const aiChatStore = require('./aiChat');
 const dshTerminal = require('./dshTerminal');
 const userDirs = require('./userDirs');
+const aiNetworkPolicy = require('./aiNetworkPolicy');
 
 // 面板里保存过的 OpenList 连接优先于 .env（不改文件、重启后仍然生效）。
 openlist.applyConfig();
@@ -1379,6 +1380,8 @@ app.post('/api/ai/providers', wrap(async (req, res) => {
     };
   } else {
     if (!b.baseURL || !b.model) throw new Error('API 服务需要 Base URL 与模型名称');
+    // SSRF 防护（v0.4.23）：公网地址所有账号可配；私网/本机/元数据地址仅管理员。
+    aiNetworkPolicy.assertAllowed(b.baseURL, req.user);
     provider = {
       ...common,
       baseURL: String(b.baseURL).replace(/\/+$/, ''),
@@ -1452,6 +1455,8 @@ app.post('/api/ai/test', wrap(async (req, res) => {
       proxy: formProxy,
     };
   } else {
+    // SSRF 防护（v0.4.23）：表单试跑的 baseURL 来自请求体，同样受属地分级约束。
+    aiNetworkPolicy.assertAllowed(b.baseURL, req.user);
     provider = {
       id: String(b.id || ''), kind, name: '临时测试', baseURL: String(b.baseURL || '').replace(/\/+$/, ''),
       model: String(b.model || ''), apiKey: String(b.apiKey || ''),
@@ -1478,6 +1483,8 @@ app.post('/api/ai/test', wrap(async (req, res) => {
 // 「获取可用模型」：用当前表单（尚未保存）的配置拉一次上游 /models 目录。
 app.post('/api/ai/models/fetch', wrap(async (req, res) => {
   const b = req.body || {};
+  // SSRF 防护（v0.4.23）：探测接口会由服务端直接请求 baseURL，同样受属地分级约束。
+  aiNetworkPolicy.assertAllowed(b.baseURL, req.user);
   const formProxy = String(b.proxy || '').includes('******') ? '' : String(b.proxy || '');
   let apiKey = String(b.apiKey || '');
   if (!apiKey && b.id) {

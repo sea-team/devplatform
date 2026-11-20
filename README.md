@@ -3271,3 +3271,49 @@ v0.4.21 安全审计时识别出 9 条前端问题（不涉及 XSS / 越权 / RC
 ### 59.4 构建说明
 
 本轮同样只改前端 `app.js` / `index.html` 与自检脚本，**`dist/` 与 `platform.exe` 未重建**。发布前需执行 `npm run build`。
+
+---
+
+## §60 v0.4.23：三项安全遗留问题的产品决策落地
+
+### 60.1 概述
+
+v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确认方案全部处理。新增 `platform/src/aiNetworkPolicy.js` 与 `scripts/smoke-hardening.js`（12 项硬化回归），版本 0.4.23。
+
+### 60.2 第一项：AI baseURL 属地分级（SSRF）— 方案 C 分级放行
+
+- **背景**：AI 服务的 baseURL 由服务端 `fetch(baseURL + /models)` 发起请求。普通账号若可填任意地址，就能让服务器访问内网 / 云元数据并把响应回显（SSRF）；但本机 Ollama（`127.0.0.1:11434`）是合法场景，不能一刀切拒绝私网。
+- **方案**：新增 `aiNetworkPolicy.js` 的 `classify()/assertAllowed()`：
+  - 公网地址：所有账号可配；
+  - 私网 / 本机 / 链路本地 / 云元数据 / CGNAT / 组播地址：仅管理员可配；
+  - 非法地址：一律拒绝。
+  - 覆盖三个用户可控入口：`POST /api/ai/providers`（新增/编辑）、`POST /api/ai/models/fetch`（获取模型）、`POST /api/ai/test`（表单试跑）。`/api/ai/chat` 用的是已保存服务（目标固定、用户不可改），不属 SSRF，不受限。
+- **边界**：域名默认按公网处理；DNS rebinding（域名解析到私网）属残余风险，需在出口层用防火墙/代理约束。管理员的 Ollama / 内网 vLLM 场景完整保留。
+
+### 60.3 第二项：SSH 克隆映射校验与回滚 — 方案 A
+
+- **背景**：未配 `HOST_WORKSPACE_DIR` 时，宿主机工作区路径由 `deployDir + /workspace` 推测（gitRuntime.js:224）。猜错则克隆写到与平台无关的机器，容器内看不到仓库，却报「克隆成功」。
+- **方案**：`gitSources.js` 的 SSH 克隆分支在克隆完成后，于容器内校验 `target/.git` 是否完整可见（`objects/` + `refs/` + `HEAD`）。不可见则：
+  - 通过 SSH 删除宿主机上刚克隆的目录（带路径守卫：拒绝根目录、`..`、basename 不符等，绝不误删）；
+  - 抛出明确错误（`SSH_HOST_MAPPING_MISMATCH`），提示配置正确的 `HOST_WORKSPACE_DIR`。
+- **兼容性**：映射正确的现有部署完全不受影响（校验通过即照常成功）；只把「静默失败」变成「自动回滚 + 明确报错」。
+
+### 60.4 第三项：2FA 限速 + CLI 通道加固 — 都修
+
+- **3a · 2FA 账号级限速**：`verify2fa()` 原来只有单次 challenge 内 5 次限制，可「重新登录拿新 token」绕过爆破 TOTP。现按 `userId` 再记一层失败计数（复用 attempts 表、`2fa|` 前缀），5 次失败锁 1 分钟，成功即清除。
+- **3b · CLI 共享密钥**：本机 CLI 通道（回环 + `x-dp-cli: 1` 头，可重置管理员密码）原来仅靠回环来源判定，同机反向代理可把外部请求转成回环来源并伪造头。现新增 `DP_CLI_SECRET`：
+  - 配置后，`isCliRequest()` 除回环 + 头外还要求 `x-dp-cli-key` 等于密钥（常量时间比较，防时序侧信道）；
+  - 未配置时保持旧行为兼容（不破坏现有脚本 / 发行版）；
+  - 全链路同步：`core.js` 配置 → `auth.js` 校验 → `envConfig.js` 环境页可见（敏感项）→ `scripts/reset-admin-password.js` 自动从环境变量/`.env` 读取并带头。
+  - `ADMIN_TOKEN` 应急通道不受影响。
+  - **注意**：一旦设置 `DP_CLI_SECRET`，未更新的旧重置脚本将无法走 CLI 通道（会提示改用 ADMIN_TOKEN 或离线模式）；请同步更新脚本或保持该环境变量为空。
+
+### 60.5 验证
+
+- `npm run smoke:hardening` 12/12：SSRF 属地分级 6 项、CLI 密钥双实例端到端 4 项（未配置兼容 / 缺 key 拒 / 错 key 拒 / 正确 key 通过）、2FA 账号级限速 2 项。
+- 前端自检新增 5 条静态护栏；`npm run check` 纳入两个新文件语法检查。
+- 全量回归：check、前端自检、smoke:security 49、auth 42、proxy-openlist 60、git 31、env 29、userdirs 13、aiscope 11、import 11。
+
+### 60.6 构建说明
+
+本轮改动后端 `src`、自检脚本与环境页文案，未触及前端 `app.js`，但**`dist/` 与 `platform.exe` 仍未重建**。发布前需执行 `npm run build`。
