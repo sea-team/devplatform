@@ -32,9 +32,12 @@ function owned(user, id, write = false) {
   if (!session) throw notFound('会话不存在或已被删除');
   if (isAdmin(user)) return session;
   if (session.ownerId && session.ownerId === user.id) return session;
-  if (write && !session.ownerId) deny();
-  if (!session.ownerId) deny();
-  return session;
+  // 历史会话没有 ownerId（升级前遗留）：仅管理员可接管，普通用户不可见。
+  // 安全修复（v0.4.21）：旧实现在这里落到末尾 `return session`，于是「ownerId 是别人」
+  // 的分支被直接放行 —— 任何登录用户只要知道会话 id，就能读取全部消息、修改/删除会话、
+  // 甚至以会话主人的额度发消息。这里必须硬拒绝；write 参数只是调用方语义，不再参与放行。
+  void write;
+  return deny();
 }
 
 function previewOf(session) {

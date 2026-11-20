@@ -161,10 +161,13 @@ async function install(serverId, spec) {
     parts.push(`-v ${shq(`${volumeName}:${spec.volumePath}`)}`);
   }
   parts.push(`--env-file ${shq(envFile)}`);
+  // docker run 的语法是 `IMAGE [COMMAND]`：镜像必须排在容器命令之前，
+  // 旧实现把 image push 在 command 之后，生成 `docker run ... redis-server ... redis:7.4`，
+  // CLI 会把 redis-server 当镜像去拉取而必然失败。
+  parts.push(shq(image));
   if (Array.isArray(spec.command) && spec.command.length) {
     parts.push(spec.command.map((c) => shq(String(c).slice(0, 400))).join(' '));
   }
-  parts.push(shq(image));
 
   const s = findServer(serverId);
   const writeEnv = `umask 077 && printf '%s' ${shq(envText)} > ${shq(envFile)} && chmod 600 ${shq(envFile)}`;

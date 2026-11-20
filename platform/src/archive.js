@@ -75,8 +75,10 @@ function detectFormat(buffer, filename = '') {
 function extractTar(buffer, dest, { gzip = false } = {}) {
   let buf = buffer;
   if (gzip) {
-    try { buf = zlib.gunzipSync(buffer); }
-    catch (e) { throw new HttpError(400, `gzip 解压失败：${e.message}`); }
+    // 必须在这里就设上限：gunzipSync 会先把整个归档解压成内存 Buffer，
+    // 旧写法解压完才比较大小，几百 KB 的压缩包就能要求 GB 级内存（解压炸弹）。
+    try { buf = zlib.gunzipSync(buffer, { maxOutputLength: MAX_TOTAL_BYTES }); }
+    catch (e) { throw new HttpError(400, `gzip 解压失败或解压后体积超过安全上限：${e.message}`); }
   }
   let off = 0;
   let entries = 0;
@@ -149,8 +151,9 @@ function readZipEntry(buf, off, dest) {
   let content;
   if (method === 0) content = data; // store
   else if (method === 8) {
-    try { content = zlib.inflateRawSync(data); }
-    catch (e) { throw new HttpError(400, `zip deflate 解压失败：${e.message}`); }
+    // 同 tar：inflate 前就限制解压后大小，避免「先爆内存再判超限」。
+    try { content = zlib.inflateRawSync(data, { maxOutputLength: MAX_FILE_BYTES }); }
+    catch (e) { throw new HttpError(400, `zip deflate 解压失败或解压后体积超过安全上限：${e.message}`); }
   } else throw new HttpError(400, `不支持的 zip 压缩方式：${method}`);
   return { rel, dir: /\/$/.test(rawName), content, nextOff: dataStart + compSize, rawName };
 }
@@ -165,10 +168,15 @@ function extractZip(buffer, dest) {
   let usedCentral = false;
   try {
     while (off + 30 <= buf.length && buf.readUInt32LE(off) === 0x04034b50) {
+      // data descriptor（flags bit 3）时 local header 里的 size 字段为 0，内容不可信：
+      // 必须在写盘之前转 central directory，否则会按错误长度落盘。
+      if (buf.readUInt16LE(off + 6) & 0x8) { usedCentral = true; break; }
       const e = readZipEntry(buf, off, dest);
       if (!e) break;
-      const flags = buf.readUInt16LE(off + 6);
-      if (e.rel && e.content && e.content.length) {
+      // 按「条目是否存在」判断，不看 content.length：0 字节文件与纯目录条目同样是
+      // 合法内容。旧写法直接跳过它们，导入只含 .git 的归档时会丢掉 objects/、
+      // refs/ 这类空目录，后续所有 git 命令都被判成「不是完整仓库」。
+      if (e.rel) {
         total += e.content.length;
         if (e.content.length > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) {
           throw new HttpError(400, '归档解压后体积超过安全上限，已拒绝');
@@ -183,7 +191,6 @@ function extractZip(buffer, dest) {
           out.push({ path: e.rel, dir: false, size: e.content.length });
         }
       }
-      if (flags & 0x8) { usedCentral = true; break; } // size 不可信，转 central directory
       off = e.nextOff;
       if (out.length > MAX_ENTRIES) throw new HttpError(400, `归档条目过多（上限 ${MAX_ENTRIES}）`);
     }
@@ -202,8 +209,8 @@ function extractZip(buffer, dest) {
       if (c.dir) { fs.mkdirSync(target, { recursive: true }); out.push({ path: c.rel, dir: true }); continue; }
       let content = buf.subarray(c.dataStart, c.dataStart + c.compSize);
       if (c.method === 8) {
-        try { content = zlib.inflateRawSync(content); }
-        catch (e) { throw new HttpError(400, `zip deflate 解压失败：${e.message}`); }
+        try { content = zlib.inflateRawSync(content, { maxOutputLength: MAX_FILE_BYTES }); }
+        catch (e) { throw new HttpError(400, `zip deflate 解压失败或解压后体积超过安全上限：${e.message}`); }
       } else if (c.method !== 0) throw new HttpError(400, `不支持的 zip 压缩方式：${c.method}`);
       total += content.length;
       if (content.length > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) {

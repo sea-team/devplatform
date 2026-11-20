@@ -1621,6 +1621,10 @@ function olResult(text) {
 
 function renderOpenlistStatus(status) {
   storageState.connection = status || null;
+  // 内嵌 OpenList 后台需要管理员 token（后端 /api/openlist/admin 已限管理员），
+  // 普通账号不展示该入口，避免点开只看到 403。
+  const embedToggle = $('#openlist-embed-toggle');
+  if (embedToggle) embedToggle.hidden = !(currentUser && currentUser.role === 'admin');
   const online = Boolean(status && status.online);
   const label = status && (status.connectionLabel || status.label) ? `「${status.connectionLabel || status.label}」` : '';
   $('#openlist-status-text').textContent = online ? '● 在线' : '● 离线 / 未配置';

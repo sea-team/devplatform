@@ -123,7 +123,18 @@ function createApp({ adminToken = '', staticDir = '', errorStatus = null, authGa
     put: (p, h, o) => register('PUT', p, h, o),
     delete: (p, h, o) => register('DELETE', p, h, o),
     listen: (port, callback) => {
-      const server = http.createServer((req, res) => { dispatch(req, res); });
+      const server = http.createServer((req, res) => {
+        // dispatch 是 async 函数：分发层的身份解析（Cookie / 路径解码）等在路由 try
+        // 之外执行，任何漏网异常都会变成 unhandledRejection，而 Node ≥ 15 默认把它
+        // 升级成未捕获异常并终止进程——单个畸形请求即可打挂整个控制台。统一兜底。
+        Promise.resolve(dispatch(req, res)).catch((error) => {
+          console.error('[devplatform] 请求处理异常：', (error && error.stack) || error);
+          try {
+            if (!res.headersSent) sendJSON(res, 500, { ok: false, error: '服务器内部错误', status: 500 });
+            else res.end();
+          } catch { /* 连接已断开，忽略 */ }
+        });
+      });
       server.listen(port, callback);
       return server;
     },

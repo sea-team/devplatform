@@ -261,6 +261,29 @@
      api-audit 319 请求 0 个 500、无头浏览器四功能实测（目录选择 / 图标操作列不溢出 /
      驱动 93 项 / 内嵌后台 SPA 渲染 title=admin | OpenList、runtimeErrors=[]）。
 
+【本版修复 · v0.4.21】全面安全审核修复（README §58）：
+  经一轮全面安全审计，改动 21 个文件 + 新增回归脚本 scripts/smoke-security-fixes.js。
+  1) 严重（P0，全部修复）：
+     - 畸形 Cookie 不再打挂进程（解码失败降级 + dispatch 统一 catch + unhandledRejection 兜底）；
+     - AI 会话越权：去掉末尾兜底放行，非 owner 一律 403；
+     - 普通账号不再能执行任意程序：CLI 类 AI 服务 / 本地程序接口 / CLI 测试与对话全部限管理员，
+       AI 运维引擎增加角色校验；
+     - 导入 .git 不再触发命令执行：只保留 config 数据描述键、丢弃可执行配置、清空自带 hooks，
+       在 git reset --hard 之前净化；
+     - OpenList 换地址不再沿用上一连接的凭据（避免凭据外带）；
+     - Redis 恢复不再清库（重定向作用于整组命令），空备份拒绝恢复。
+  2) 高危（P1，修复 10/12）：OpenList 后台代理限管理员；权限 id 预筛与 server target 越权堵住；
+     SSH 构建上传前建目录、远程装扩展顺序修正；dsh 跨帧事件不再丢失；Git 拒绝工作区外读文件选项；
+     解压加内存上限防解压炸弹；代理地址脱敏修正、NO_PROXY 匹配与 IPv6 修正；OpenList 下载
+     同源限 token + 流式大小限制。另修复上传 code 校验、回执脱敏、2FA 匿名接口 401、
+     超时杀整个进程树。
+  3) 行为变化：普通账号不可用本地 CLI 类 AI（API 型不受影响）、看不到内嵌 OpenList 后台入口；
+     有 ACL 的仓库权限真正生效；上传失败如实报错。
+  4) 回归：npm run check（40 模块）、前端自检、npm run smoke:security 49/49（新增）、
+     smoke-auth 42/42、smoke-proxy-openlist 60/60、smoke:git 31/31、smoke:env 29/29、
+     smoke:userdirs 13/13、smoke:aiscope 11/11、smoke:import 11/11。
+  说明：本版为安全加固版，单文件发行版（dist/、platform.exe）需发布前执行 npm run build 重建。
+
 下载哪个：
   1) devplatform-windows.zip       推荐 · 全量包：控制台 + 三项集成服务程序。
                                     START.bat 只启控制台；INSTALL.bat 离线装好服务。

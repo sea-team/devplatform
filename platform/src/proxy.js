@@ -141,9 +141,13 @@ function maskUrl(value) {
   if (DIRECT_WORDS.has(raw.toLowerCase())) return '直接连接';
   try {
     const u = new URL(raw);
-    if (u.username || u.password) {
+    const hasAuth = Boolean(u.username || u.password);
+    // 不能用 raw.replace(`${u.username}:${u.password}@`)：URL 会把密码里的 @ / 空格
+    // 转成 %40 / %20，而原文是字面字符，替换永远不命中 → 明文密码原样下发。
+    // 这里改为按解析结果重建，只保留协议、脱敏凭据、主机与路径。
+    if (hasAuth) {
       const auth = `${u.username ? '******' : ''}${u.password ? ':******' : ''}@`;
-      return raw.replace(`${u.username}:${u.password}@`, auth).replace(`${u.username}@`, auth);
+      return `${u.protocol}//${auth}${u.host}${u.pathname === '/' ? '' : u.pathname}${u.search}${u.hash}`;
     }
     return raw;
   } catch { return raw.replace(/\/\/[^/@]*@/, '//******@'); }
@@ -198,12 +202,13 @@ function matchRule(rules, ctx) {
 
 /** NO_PROXY 判定：支持精确、.后缀、* 通配以及 IPv4 CIDR。 */
 function shouldBypass(target, noProxy) {
-  const host = hostOf(target);
+  // IPv6 的 URL.hostname 带方括号（[::1]），而 NO_PROXY 里通常写 ::1，先归一化。
+  const host = hostOf(target).replace(/^\[|\]$/g, '');
   if (!host) return false;
   const list = String(noProxy || '').split(/[,;\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
   for (const entry of list) {
     if (entry === '*') return true;
-    const bare = entry.replace(/^\./, '');
+    const bare = entry.replace(/^\./, '').replace(/^\[|\]$/g, '');
     if (entry.startsWith('.')) {
       if (host === bare || host.endsWith(`.${bare}`)) return true;
     } else if (entry.includes('/')) {
@@ -220,7 +225,9 @@ function shouldBypass(target, noProxy) {
       if (ip === null || net === null) continue;
       const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
       if ((ip & mask) === (net & mask)) return true;
-    } else if (host === bare || host.endsWith(`.${bare}`) || host.startsWith(`${bare}.`)) {
+    } else if (host === bare || host.endsWith(`.${bare}`)) {
+      // 只允许「精确」或「真子域」命中。旧实现还接受了 host.startsWith(`${bare}.`)，
+      // 于是 NO_PROXY=github.com 会连 github.com.evil.com 一起直连（判断方向反了）。
       return true;
     }
   }

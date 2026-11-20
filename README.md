@@ -3182,3 +3182,60 @@ E 批开发期出现诡异现象：用编辑器改完已跟踪文件，几秒后
 
 - 实时探针复现：未提交改动 + 跑旧 smoke → reflog 新增 reset、探针消失；修复后重跑 → reflog 无新增、探针存活、11 项冒烟全过。
 - `npm run check`、`smoke:import` 11/11、`smoke:userdirs` 13/13、`smoke:aiscope` 11/11、前端自检全部通过。
+
+---
+
+## §58 v0.4.21：全面安全审核修复（DeepSeek 审计）
+
+### 58.1 概述
+
+对平台做一轮全面安全审计，共改动 21 个文件 + 新增 1 个回归脚本（`scripts/smoke-security-fixes.js`，394 行增 / 95 行删）。P0 严重问题全部修复，P1 高危 12 项修复 10 项，其余 2 项及若干治理类问题按原因保留并说明（见 58.6）。新增 `npm run smoke:security`，49 项安全回归可随时重跑。
+
+### 58.2 严重（P0，全部修复）
+
+| 问题 | 修复 |
+| --- | --- |
+| 畸形 Cookie 打挂进程 | `auth.js` 的 `cookieValue()` 对解码失败降级为无效 Cookie；`mini.js` 给 `dispatch` 统一 catch；`server.js` 增加 `unhandledRejection` 兜底。 |
+| AI 会话越权 | `aiChat.js` / `aiSessions.js` 去掉末尾的兜底放行，非 owner 一律 403；历史无归属会话仅管理员可接管。 |
+| 普通账号可执行任意程序 | `cli` 类型服务、`/api/ai/local/*`、`/api/ai/test(cli)`、`/api/ai/chat(cli)` 全部限管理员；`engine.js` 的 `opsAgent` 增加角色校验，覆盖「AI 运维会话」入口。 |
+| 导入 `.git` 触发命令执行 | `repoImporter.js` 新增 `sanitizeImportedGit()`：只保留 `core`/`branch`/`remote`/`user`/`init` 的数据描述键，丢弃 `filter`/`diff.external`/`include`/`fsmonitor`/`sshCommand` 等可执行配置，清空自带 hooks；在 `git reset --hard` 之前执行。 |
+| OpenList 凭据外带 | `openlist.js` 的 `applyConfig()` 只在目标地址与 `.env` 相同时才回退 `.env` 凭据，换地址不再沿用上一连接的 token / 密码。 |
+| Redis 恢复清库 | `backup.js` 把重定向改为作用于整组 `{ ...; } < file`；空备份拒绝恢复。 |
+
+### 58.3 高危（P1，修复 10 / 12）
+
+- `server.js`：`/api/openlist/admin` 及其 API 代理改为仅管理员（前端隐藏普通用户入口）。
+- `permissions.js`：删除「id 必须含下划线」的预筛，并正确收集 `target=server:<id>`，堵住跨用户删仓库与 Docker target 越权。
+- `buildBackends.js`：上传前 `mkdir -p`，SSH 构建恢复可用；`remoteDocker.js`：IMAGE 排到容器命令之前，远程装扩展可用。
+- `dshTerminal.js`：新增跨帧行切分器，NDJSON 事件不再因跨帧丢失（`dshSessionId` / 回答正文不断尾）。
+- `workspaceGit.js`：拒绝 `--no-index` / `--file` / `--pathspec-from-file` 等可读工作区外文件的选项。
+- `archive.js`：gzip / inflate 加 `maxOutputLength`，解压炸弹不再先撑爆内存。
+- `proxy.js`：重写 `maskUrl()`（密码含 `@` 不再明文下发）；修正 `NO_PROXY` 匹配方向与 IPv6。
+- `openlist.js`：下载仅在同源时附带管理员 token，并改为流式计数限制大小。
+- 顺带修复：`integrations.js` 上传校验业务 `code`；`envConfig.js` 写回执脱敏；`auth.js` 匿名 `GET /api/auth/2fa` 由 500 改为 401；`buildBackends.js` / `engine.js` 超时杀整个进程树（POSIX 进程组 + Windows `taskkill /T`）。
+
+### 58.4 验证
+
+- `npm run check`（40 个模块语法）、`node scripts/check-frontend.js`（前端自检）全部通过。
+- `npm run smoke:security` 49/49（新增）；`smoke-auth` 42/42、`smoke-proxy-openlist` 60/60、`smoke:git` 31/31、`smoke:env` 29/29、`smoke:userdirs` 13/13、`smoke:aiscope` 11/11、`smoke:import` 11/11。
+- 两次一次性端到端验证（未入库）：恶意 `.git` zip 对照组执行了 smudge 命令并生成标记文件，走平台 `importRepo()` 后标记文件不存在、config 无残留、工作树正常恢复；同一 Redis 恢复命令串旧写法产出 0 字节且 AOF 被删，新写法内容完整。
+
+### 58.5 行为变化（需知悉）
+
+- 普通账号不能再使用「本地 AI 程序（CLI）」（仅管理员）；API 类型服务不受影响。
+- 普通账号看不到「内嵌 OpenList 后台」入口。
+- 有 ACL 归属的仓库现在真正生效（此前因 id 不含下划线被整段跳过）；无 ACL 仍是原有「共享可写」语义。
+- OpenList 切换连接后，若新地址未填凭据，不再沿用上一条连接的凭据。
+- 上传失败如实报错，不再「静默成功」。
+
+### 58.6 未修复（需产品决策，建议下一轮）
+
+- AI `baseURL` 的 SSRF：平台需允许指向内网 / 本机（Ollama 场景合法），无法简单按私网拒绝；建议仅管理员可配置服务端地址，或加地址白名单。
+- 无 `HOST_WORKSPACE_DIR` 时的 SSH 克隆路径猜测（`gitRuntime.js:224`）：改严格会破坏现有可跑部署，建议克隆后校验容器内 `target/.git` 再回滚。
+- dsh 持久会话不回收 / 会话目录不删、AI 运维附件无大小上限：属资源治理，改动面较大。
+- 2FA 无账号级限速、`x-dp-cli` 本机通道可被反代放大：有文档说明的既有设计。
+- 前端 9 条状态类问题（存储列表竞态、日志定时器、SSE 重连、全选复位、双击发送、构建表单重置、双转义、`data-copy` 全局绑定、裸 `fetch`）：不涉及安全，未在本轮修改。
+
+### 58.7 构建说明
+
+本次修复只涉及后端 `src` 与回归脚本，**单文件发行版（`dist/`、`platform.exe`）未重建**。发布前需执行 `npm run build` 重建 bundle 与发行包。

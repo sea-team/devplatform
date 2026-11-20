@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
-const { config, state, update, uid, safeWorkspacePath } = require('./core');
+const { config, state, update, uid, safeWorkspacePath, HttpError } = require('./core');
 const { sshExec, sftpPut, collectStatus, aiChat } = require('./integrations');
 const buildBackends = require('./buildBackends');
 const proxyModule = require('./proxy');
@@ -95,12 +95,15 @@ function runProcess(command, args, options = {}) {
         ...proxyModule.envFor(proxyModule.resolve('docker', { itemId: 'build' })),
       },
       shell: false,
+      windowsHide: true,
+      // POSIX 独立进程组：超时时能整组杀掉，避免只杀 bash 而 npm / node 继续写 dist。
+      detached: process.platform !== 'win32',
     });
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill('SIGKILL');
+      buildBackends.killTree(child);
       reject(new Error('构建超时'));
     }, config.buildTimeoutMs);
     const finish = (fn, value) => {
@@ -433,6 +436,12 @@ async function opsAgent({ providerId, prompt, allowWrite = false, history = [], 
   const provider = state().aiProviders.find((p) => p.id === providerId)
     || state().aiProviders.find((p) => p.enabled !== false);
   if (!provider) throw new Error('请先在「AI 服务」中配置一个模型服务');
+  // 安全兜底（v0.4.21）：kind=cli 的本地程序会在平台宿主机 / WSL 里以平台进程权限
+  // 执行命令行，等价于任意代码执行。此类服务只允许管理员使用，普通账号一律拒绝——
+  // 直调 /api/ai/ops 与「AI 运维会话」两条入口都会经过本函数。
+  if (provider.kind === 'cli' && !(user && user.role === 'admin')) {
+    throw new HttpError(403, '本地 AI 程序（CLI）仅管理员可用；请联系管理员在「AI 服务」中改用 API 类型服务');
+  }
 
   const files = attachmentList(attachments);
   const turns = historyTurns(history);

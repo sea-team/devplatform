@@ -104,7 +104,7 @@ function assignOwner(payload, user, previous) {
 }
 
 function findResourceById(id) {
-  if (!id || typeof id !== 'string' || !id.includes('_')) return null;
+  if (!id || typeof id !== 'string') return null;
   for (const collection of COLLECTIONS) {
     const item = (state()[collection] || []).find((x) => x && x.id === id);
     if (item) return { collection, item };
@@ -115,7 +115,11 @@ function findResourceById(id) {
 /** 从 params / query / body / 路径里收集可能的资源 id。 */
 function collectIds(req, pathname) {
   const ids = new Set();
-  const add = (v) => { if (typeof v === 'string' && v.includes('_')) ids.add(v); };
+  // 注意：不能再用「id 必须包含下划线」来预筛。仓库 / 目录这类外部对象的 id 形如
+  // `workspace:foo`、`gitsrc_x:org/repo`，前缀里没有下划线，旧写法会把它们整段跳过，
+  // 于是 guard() 对它们永远放行（已有 repoAcl 归属也拦不住）。这里按「非空字符串」
+  // 收集，再由 findResourceById 精确匹配，匹配不到才视为非资源参数。
+  const add = (v) => { if (typeof v === 'string' && v.trim()) ids.add(v.trim()); };
   Object.values(req.params || {}).forEach(add);
   const body = req.body && !Buffer.isBuffer(req.body) && typeof req.body === 'object' ? req.body : {};
   const query = req.query || {};
@@ -123,6 +127,10 @@ function collectIds(req, pathname) {
     'buildId', 'deployId', 'templateId', 'providerId', 'backupId']) {
     add(query[key]); add(body[key]);
   }
+  // Docker / 远程面板用 `target=server:<srv_id>` 表达「在哪台服务器上操作容器 / 卷 / 网络」。
+  // 不收这个 id 就等于不校验目标主机归属：普通账号可以对别人的服务器删容器、exec、删卷。
+  const target = String(query.target || body.target || '');
+  if (target.startsWith('server:')) add(target.slice('server:'.length));
   // 构建接口把「构建成功后自动部署」的目标服务器藏在 body.deploy.serverId 里，
   // 顶层扫描不到。不收集它，普通用户就能借自动部署在他人的 SSH 主机上执行任意命令。
   if (body.deploy && typeof body.deploy === 'object') add(body.deploy.serverId);

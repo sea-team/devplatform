@@ -204,7 +204,7 @@ function resetOpenlistToken() { _openlistToken = ''; }
 async function openlistUpload(remotePath, buffer) {
   const token = await openlistToken();
   const url = `${config.openlistUrl}/api/fs/put`;
-  return httpJSON(url, {
+  const raw = await httpJSON(url, {
     method: 'PUT',
     proxy: proxyModule.forGlobal(url).proxy,
     headers: {
@@ -216,6 +216,16 @@ async function openlistUpload(remotePath, buffer) {
     body: buffer,
     timeout: 120000,
   });
+  // 与 openlist() 一致：OpenList 用「HTTP 200 + body.code != 200」表达业务错误
+  // （磁盘满、存储被禁用、路径不存在…）。不检查会让上传接口把失败当成功返回，
+  // 用户以为文件已保存，实际根本没写进去。
+  if (raw && typeof raw === 'object' && 'code' in raw && Number(raw.code) !== 200) {
+    const detail = String(raw.message || '未知错误');
+    throw new HttpError(Number(raw.code) === 403 ? 403 : 400,
+      `OpenList 上传失败（code=${raw.code}）：${detail}`,
+      { errorCode: 'UPSTREAM_BAD_REQUEST', upstream: true, hint: '检查目标路径是否存在、存储是否可用、磁盘空间是否充足' });
+  }
+  return raw;
 }
 
 const openlistApi = {

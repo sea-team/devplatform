@@ -25,17 +25,41 @@ const proxyModule = require('./proxy');
 
 const shq = remoteDocker.shq;
 
+/**
+ * 杀掉整个进程树（v0.4.21）。
+ * 只对直接子进程 kill 会留下真正的构建进程继续跑：Linux 上 `bash -c "npm ci && ..."` 里
+ * 被 SIGKILL 的是 bash，npm/node 会被 init 收养继续写 dist；WSL 场景更糟——被杀的只是
+ * Windows 侧 `wsl.exe`，发行版里的进程完全不受影响。平台已把构建标记为 failed，后台却
+ * 仍在跑，重试后多个构建并发写同一目录。
+ * POSIX 用进程组（spawn 时 detached 使其成为组长），Windows 用 taskkill /T。
+ */
+function killTree(child) {
+  if (!child || child.exitCode !== null) return;
+  if (process.platform === 'win32') {
+    try {
+      const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+      killer.on('error', () => { try { child.kill('SIGKILL'); } catch { /* noop */ } });
+      return;
+    } catch { /* 回退到单进程 kill */ }
+  } else {
+    try { process.kill(-child.pid, 'SIGKILL'); return; } catch { /* 进程组不存在时回退 */ }
+  }
+  try { child.kill('SIGKILL'); } catch { /* noop */ }
+}
+
 function runProcess(cmd, args, { cwd, onData, timeoutMs = 900000, stdinText = '' } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
-      cwd, shell: false,
+      cwd, shell: false, windowsHide: true,
+      // POSIX：独立进程组，超时时可以整组杀掉（见 killTree）。
+      detached: process.platform !== 'win32',
       env: { ...process.env, ...proxyModule.envFor(proxyModule.resolve('docker', { itemId: 'build-backend' })) },
     });
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill('SIGKILL');
+      killTree(child);
       reject(new Error('构建超时'));
     }, timeoutMs);
     const finish = (fn, value) => {
@@ -166,6 +190,10 @@ async function runRemoteBuild({ image, script, abs, artifact, buildId, onData, t
 
   onData(`[ssh] 目标服务器 ${server.name} (${server.host})\n`);
   await runProcess('tar', ['-czf', localTar, '-C', abs, '.'], { cwd: abs, onData, timeoutMs: 300000 });
+  // 远端目录必须先建出来：base 带 buildId、每次都是新目录，而 sftpPut 只做
+  // createWriteStream，不会创建父目录 → 上传必然 SSH_FX_NO_SUCH_FILE。
+  // 旧实现把 mkdir 放在上传之后的远端脚本里，导致 SSH 构建后端从未成功过。
+  await sshExec(server, `mkdir -p ${shq(base)}`, 20000);
   await sftpPut(server, localTar, srcTar);
   fs.rmSync(localTar, { force: true });
 
@@ -201,4 +229,4 @@ async function runRemoteBuild({ image, script, abs, artifact, buildId, onData, t
   return code;
 }
 
-module.exports = { detectBackends, resolveBackend, runBuild, runProcess, winToWsl, pickServer };
+module.exports = { detectBackends, resolveBackend, runBuild, runProcess, winToWsl, pickServer, killTree };

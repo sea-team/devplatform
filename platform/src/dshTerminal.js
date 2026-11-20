@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { StringDecoder } = require('string_decoder');
 const dockerApi = require('./dockerApi');
 const { HttpError, config } = require('./core');
 
@@ -171,7 +172,8 @@ function renderPatch(sessionDir, provider, modelOverride) {
 
 /**
  * Docker 多路复用流解析器：跨 chunk 累积，按 8 字节头拆分 stdout / stderr 帧。
- * 回调 (streamNo, text)。
+ * 回调 (streamNo, payloadBuffer)。注意一帧 ≠ 一行：帧边界与行边界无关，
+ * 调用方必须自己做跨帧的行缓存（见 createLineSplitter）。
  */
 function makeDemux(onChunk) {
   let buf = Buffer.alloc(0);
@@ -182,9 +184,40 @@ function makeDemux(onChunk) {
       if (size > buf.length - 8) break; // 帧未收全，等下一个 chunk
       const streamNo = buf[0];
       const payload = buf.subarray(8, 8 + size);
-      onChunk(streamNo, payload.toString('utf8'));
+      onChunk(streamNo, payload);
       buf = buf.subarray(8 + size);
     }
+  };
+}
+
+/**
+ * 跨 chunk 的行切分（v0.4.21）。
+ *
+ * dsh 的 NDJSON 事件是「一行一个 JSON」，但 Docker attach 的一帧只反映进程某次
+ * write，长回答 / 大工具结果很容易被切成多帧。旧实现把每一帧单独 split('\n') 并
+ * JSON.parse，于是跨帧的事件两半都解析失败、被当作原始文本打印后丢弃：
+ *   - 丢 session 事件 → dshSessionId 不保存 → 下一轮没有 --session-id，上下文断掉；
+ *   - 丢 text 增量 → textParts 缺段，且 sawText 已为 true，final 兜底不再输出全文 → 落库回答缺尾。
+ * 这里用 StringDecoder 处理跨帧的多字节字符，只在收到完整行时回调。
+ */
+function createLineSplitter(onLine) {
+  const decoder = new StringDecoder('utf8');
+  let pending = '';
+  const emit = (line) => { if (String(line).trim()) onLine(line); };
+  return {
+    push(chunk) {
+      pending += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+      let idx;
+      while ((idx = pending.indexOf('\n')) >= 0) {
+        const line = pending.slice(0, idx);
+        pending = pending.slice(idx + 1);
+        emit(line);
+      }
+    },
+    flush() {
+      pending += decoder.end();
+      if (pending) { const line = pending; pending = ''; emit(line); }
+    },
   };
 }
 
@@ -243,47 +276,51 @@ async function runTask(session, task, patch) {
       undefined, { stream: true, timeout: 0 });
     cur.res = res;
     let stderrBuf = '';
-    const demux = makeDemux((streamNo, text) => {
-      if (cur.done) return;
-      if (streamNo === 2) { stderrBuf += text; return; }
-      handleStdout(text);
-    });
+    const stderrDecoder = new StringDecoder('utf8');
 
-    const handleStdout = (text) => {
-      for (const line of text.split('\n')) {
-        const raw = line.trim();
-        if (!raw) continue;
-        let ev;
-        try { ev = JSON.parse(raw); } catch { frame(session, raw + '\r\n'); continue; }
-        // 结构化事件通道：所有 NDJSON 事件原样转发给「AI 会话」页。
-        emitEvent(session, ev);
-        if (ev.type === 'session' && ev.sessionId) {
-          session.dshSessionId = ev.sessionId;
-        } else if (ev.type === 'status') {
-          trace.push({ phase: ev.phase, turn: ev.turn, step: ev.step, at: ev.at || '' });
-          if (ev.phase === 'turn_start') sysLine(session, `\r\n\x1b[36m▸ 第 ${ev.turn} 轮\x1b[0m`);
-        } else if (ev.type === 'text' || ev.type === 'reasoning') {
-          // dsh 的 text/reasoning 增量实时回显，final 到达后不再重复输出全文。
-          const piece = String(ev.text || '');
-          if (piece) {
-            if (ev.type === 'text') { sawText = true; textParts.push(piece); }
-            else trace.push({ phase: 'reasoning', text: piece.slice(0, 400) });
-            frame(session, piece);
-          }
-        } else if (ev.type === 'final') {
-          finalText = String(ev.text || '');
-          if (ev.reason && ev.reason.kind === 'error') {
-            errored = true;
-            const msg = (ev.reason.error && ev.reason.error.message) || '未知错误';
-            lastErr = msg;
-            sysLine(session, `\r\n\x1b[31m✖ ${msg}\x1b[0m`);
-          } else if (finalText && !sawText) {
-            // 没有 text 增量的兜底：直接输出 final 全文。
-            frame(session, `\r\n${finalText}\r\n`);
-          }
+    const handleLine = (line) => {
+      const raw = line.trim();
+      if (!raw) return;
+      let ev;
+      try { ev = JSON.parse(raw); } catch { frame(session, raw + '\r\n'); return; }
+      // 结构化事件通道：所有 NDJSON 事件原样转发给「AI 会话」页。
+      emitEvent(session, ev);
+      if (ev.type === 'session' && ev.sessionId) {
+        session.dshSessionId = ev.sessionId;
+      } else if (ev.type === 'status') {
+        trace.push({ phase: ev.phase, turn: ev.turn, step: ev.step, at: ev.at || '' });
+        if (ev.phase === 'turn_start') sysLine(session, `\r\n\x1b[36m▸ 第 ${ev.turn} 轮\x1b[0m`);
+      } else if (ev.type === 'text' || ev.type === 'reasoning') {
+        // dsh 的 text/reasoning 增量实时回显，final 到达后不再重复输出全文。
+        const piece = String(ev.text || '');
+        if (piece) {
+          if (ev.type === 'text') { sawText = true; textParts.push(piece); }
+          else trace.push({ phase: 'reasoning', text: piece.slice(0, 400) });
+          frame(session, piece);
+        }
+      } else if (ev.type === 'final') {
+        finalText = String(ev.text || '');
+        if (ev.reason && ev.reason.kind === 'error') {
+          errored = true;
+          const msg = (ev.reason.error && ev.reason.error.message) || '未知错误';
+          lastErr = msg;
+          sysLine(session, `\r\n\x1b[31m✖ ${msg}\x1b[0m`);
+        } else if (finalText && !sawText) {
+          // 没有 text 增量的兜底：直接输出 final 全文。
+          frame(session, `\r\n${finalText}\r\n`);
         }
       }
     };
+    // 行缓存放在 demux 之外：一帧可能是半行，多帧才拼成一条完整事件。
+    const stdoutLines = createLineSplitter(handleLine);
+    const demux = makeDemux((streamNo, payload) => {
+      if (cur.done) return;
+      if (streamNo === 2) {
+        stderrBuf = (stderrBuf + stderrDecoder.write(payload)).slice(-8000);
+        return;
+      }
+      stdoutLines.push(payload);
+    });
 
     await new Promise((resolve) => {
       res.on('data', demux);
@@ -298,6 +335,11 @@ async function runTask(session, task, patch) {
       }, TASK_TIMEOUT_MS);
     });
     clearTimeout(cur.timer);
+    // 收尾：把最后一段没有换行结尾的内容也处理掉（否则最后一条事件会丢）。
+    if (!cur.done) {
+      stdoutLines.flush();
+      stderrBuf = (stderrBuf + stderrDecoder.end()).slice(-8000);
+    }
 
     // 清理容器
     try { await dockerApi.removeContainer(created.Id, true); } catch { /* noop */ }
@@ -554,4 +596,6 @@ function submitWithEvents(state, sid, input, user) {
 module.exports = {
   openSession, attachStream, submit, interrupt, close, active,
   attachEventStream, sessionInfo, submitWithEvents,
+  // 供自检脚本直接验证跨帧行切分（无副作用）
+  createLineSplitter,
 };

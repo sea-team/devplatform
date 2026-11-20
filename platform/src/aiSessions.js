@@ -57,9 +57,10 @@ function owned(user, id, write = false) {
   if (isAdmin(user)) return session;
   if (session.ownerId && session.ownerId === user.id) return session;
   // 历史会话没有 ownerId（升级前遗留）：仅管理员可接管，普通用户不可见。
-  if (write && !session.ownerId) deny();
-  if (!session.ownerId) deny();
-  return session;
+  // 安全修复（v0.4.21）：旧实现末尾 `return session` 放行了「ownerId 是别人」的分支，
+  // 任何登录用户知道会话 id 即可读取/追加消息、删除会话。此处必须硬拒绝。
+  void write;
+  return deny();
 }
 
 function previewOf(session) {

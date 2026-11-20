@@ -176,14 +176,20 @@ async function restoreBackup(backupId, { confirm = false, instanceId = '' } = {}
   const recipe = RECIPES[recipeKey];
   if (!recipe) throw new Error('找不到对应的恢复模板');
   const data = fs.readFileSync(fileOf(record.id));
+  if (!data.length) throw new Error('备份文件为空（0 字节），已拒绝恢复，避免把线上数据清空');
 
   if (local) {
     const cid = containerIdOf(inst);
     const containerFile = manifest.backupFile || `/tmp/dp-restore-${record.id}.dump`;
     const dir = containerFile.replace(/\/[^/]+$/, '') || '/tmp';
     await docker.putArchive(cid, dir, tarWrap(path.basename(containerFile), data));
+    // 重定向必须作用于「整条恢复脚本」。旧写法 `cmd1 && cmd2 < file` 里 `<` 只绑定
+    // 链尾的 cmd2，而 execContainerTimed 没有开 stdin（AttachStdin:false）：
+    // redis 的 `cat > /data/dump.rdb` 会立即读到 EOF，把线上 RDB 截成 0 字节、
+    // 随后又删掉 AOF，整条命令还 exit 0 —— 备份没恢复、数据全丢、界面报成功。
+    // 用 `{ ...; } < file` 让分组内所有命令共享该文件作为 stdin。
     const restored = await docker.execContainerTimed(cid,
-      ['sh', '-c', `${recipe.restore} < ${containerFile}`], 600000);
+      ['sh', '-c', `{ ${recipe.restore}; } < ${containerFile}`], 600000);
     await docker.execContainerTimed(cid, ['sh', '-c', `rm -f ${containerFile}`], 30000).catch(() => {});
     if (restored.exitCode !== 0) {
       throw new Error(`恢复命令失败（exit ${restored.exitCode}）：${String(restored.output).slice(0, 300)}`);

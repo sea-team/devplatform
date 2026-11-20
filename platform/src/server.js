@@ -975,9 +975,11 @@ app.put('/api/openlist/files/upload', wrap(async (req, res) => {
 // 这里把后台 SPA、静态资源、API 全部代理到平台同源路径下，并在 HTML 里注入 token，
 // 让 SPA 从 localStorage 读到 token 自动登录；API 请求也由后端注入 Authorization。
 app.get('/api/openlist/admin', wrap(async (req, res) => {
-  // HTML 入口不 requireAdmin：iframe.src 导航请求不带 Authorization 头，requireAdmin 会 401。
-  // 安全由 authGate 登录检查 + OpenList 上游 token 鉴权保证；普通用户即便打开也只看到
-  // 自己有权的内容（OpenList 后台管理操作仍需管理员 token，已由代理注入）。
+  // 安全（v0.4.21）：这个入口会把 OpenList 的管理员 token 注入 HTML（让内嵌后台自动
+  // 登录）。token 是全站凭据，等同于 OpenList 超级管理员，绝不能下发给普通账号——
+  // 之前不加 requireAdmin，任何登录用户打开即可拿到 token 直连 5244 读写所有家目录。
+  // 账号体系走 Cookie 会话，iframe 导航会带上会话，管理员不受影响。
+  requireAdmin(req);
   const token = await openlist.getToken();
   const resp = await fetch(`${config.openlistUrl}/@manage`, { headers: { Authorization: token } });
   let html = await resp.text();
@@ -1001,9 +1003,9 @@ async function proxyOpenlistStatic(req, res, upstream) {
   res.end(buf);
 }
 
-// 静态资源与 API 代理不额外 requireAdmin：浏览器加载 SPA 的 <script src> 不会带
-// Authorization 头，requireAdmin 会把它们全部 401 导致后台白屏。安全由两层保证 ——
-// 平台 authGate 已要求登录；OpenList 上游用注入的管理员 token 自行鉴权。
+// 静态资源不额外 requireAdmin：浏览器加载 SPA 的 <script src> 不带 Authorization 头，
+// 强校验会让后台白屏。这里只代理无凭据的静态文件，真正的数据接口在下面的
+// proxyOpenlistApi 里按管理员校验。
 app.get('/api/openlist/admin/assets/*', wrap(async (req, res) => {
   await proxyOpenlistStatic(req, res, `/assets/${req.params[0]}`);
 }));
@@ -1012,6 +1014,9 @@ app.get('/api/openlist/admin/manifest.json', wrap(async (req, res) => {
 }));
 
 async function proxyOpenlistApi(req, res) {
+  // 安全（v0.4.21）：代理会给上游注入 OpenList 管理员 token，因此 GET 也必须限管理员。
+  // 之前只拦了非 GET，普通账号一个 GET 就能列出全部挂载（含 Addition 里的存储凭据）。
+  requireAdmin(req);
   const token = await openlist.getToken();
   const upstream = `/api/${req.params[0]}`;
   const qs = req.url.includes('?') ? '?' + req.url.split('?').slice(1).join('?') : '';
@@ -1342,6 +1347,9 @@ app.post('/api/ai/providers', wrap(async (req, res) => {
   const b = req.body || {};
   requireBody(b, ['name', 'kind']);
   const kind = b.kind === 'cli' ? 'cli' : 'api';
+  // 安全（v0.4.21）：kind=cli 会在平台宿主机 / WSL 里以平台进程权限执行程序，
+  // 属于「任意代码执行」能力，只允许管理员创建 / 修改；普通账号只能用 API 类型服务。
+  if (kind === 'cli') requireAdmin(req);
   const existing = b.id ? state().aiProviders.find((p) => p.id === b.id) : null;
   const common = {
     id: b.id || uid('ai'),
@@ -1396,12 +1404,18 @@ app.delete('/api/ai/providers/:id', wrap(async (req, res) => {
 }));
 
 // 检测宿主机与 WSL 中已安装的 AI 程序（结果缓存 5 分钟，refresh=1 强制重扫）。
+// 属于本机能力探测（暴露宿主机装了哪些程序），仅管理员可用。
 app.get('/api/ai/local/programs', wrap(async (req, res) => {
+  requireAdmin(req);
   ok(res, detectLocalPrograms(req.query.refresh === '1'));
 }));
 
 // 保存前先用当前表单配置试跑一次本地 CLI。
+// 安全（v0.4.21）：这里会用请求体里的 command / customCommand / extraArgs / prompt
+// 直接 spawn 本地进程（`/bin/sh -c`、`cmd.exe /c` 都能通过命令正则），
+// 不限制角色就等于把「以平台权限执行任意命令」开放给所有登录账号。仅管理员可调。
 app.post('/api/ai/local/test', wrap(async (req, res) => {
+  requireAdmin(req);
   const b = req.body || {};
   const provider = {
     id: String(b.id || ''), kind: 'cli', name: '临时测试',
@@ -1422,9 +1436,11 @@ app.post('/api/ai/local/test', wrap(async (req, res) => {
 }));
 
 // 用当前表单配置试跑一次（API 与本地 CLI 通用），保存前即可验证。
+// CLI 分支会真正 spawn 本地程序，仅管理员可用（原因同 /api/ai/local/test）。
 app.post('/api/ai/test', wrap(async (req, res) => {
   const b = req.body || {};
   const kind = b.kind === 'cli' ? 'cli' : 'api';
+  if (kind === 'cli') requireAdmin(req);
   let provider;
   const formProxy = String(b.proxy || '').includes('******') ? '' : String(b.proxy || '');
   if (kind === 'cli') {
@@ -1511,6 +1527,9 @@ const findProvider = (id) => {
 app.post('/api/ai/chat', wrap(async (req, res) => {
   requireBody(req.body, ['prompt']);
   const baseProvider = findProvider(req.body.providerId);
+  // 历史遗留的 cli 类型服务同样受「仅管理员」约束：普通账号即便拿到了服务 id，
+  // 也不能借它 spawn 本地进程（见 /api/ai/local/test 的说明）。
+  if (baseProvider.kind === 'cli') requireAdmin(req);
   // 允许传入具体模型（AI 会话/连通性测试选择模型时），仅覆盖模型名，其余配置沿用服务。
   const modelOverride = String(req.body.model || '').trim();
   const provider = (modelOverride && baseProvider.kind !== 'cli')
@@ -1908,6 +1927,13 @@ const server = app.listen(config.port, () => {
   console.log(`[devplatform] 工作区: ${config.workspaceDir} | 运行模式: 正常（无演示数据）`);
   // 环境体检是异步的，不阻塞 HTTP 监听；失败也只记录日志，不影响平台启动。
   environment.boot().catch((e) => console.log(`[env] 启动体检异常：${e.message}`));
+});
+
+// 兜底：任何遗漏的异步拒绝只记录日志，不允许它终止整个控制台进程。
+// mini.js 的 dispatch 已就地收敛请求级异常，这里是最后一道防线（后台任务、SSE、
+// 定时器等处的偶发 reject 不应让平台对所有用户不可用）。
+process.on('unhandledRejection', (reason) => {
+  console.error('[devplatform] 未处理的异步异常：', (reason && reason.stack) || reason);
 });
 
 // 引导器 reload / 更新时发 SIGTERM：先停止接新请求，SSE 长连接最多等 2s 后退出，

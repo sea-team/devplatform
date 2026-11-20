@@ -404,7 +404,15 @@ function write(values = {}, options = {}) {
     const line = `${item.key}=${item.value}`;
     if (item.defined && lineIndex.has(item.key)) next[lineIndex.get(item.key)] = line;
     else next.push(line);
-    changes.push({ key: item.key, before: item.before, after: item.value, created: !item.defined });
+    // 变更回执同样要脱敏：read() 里敏感值一律掩码，写回执如果带明文，
+    // token / 密码会出现在浏览器 devtools、反代访问日志与前端状态里。
+    const sensitive = Boolean((SPEC_BY_KEY.get(item.key) || {}).sensitive);
+    changes.push({
+      key: item.key,
+      before: sensitive ? (item.before ? maskValue(item.before) : '') : item.before,
+      after: sensitive ? maskValue(item.value) : item.value,
+      created: !item.defined,
+    });
   }
   // 去掉末尾多余的空行，保证文件以单个换行结束。
   while (next.length > 1 && !String(next[next.length - 1]).trim()) next.pop();

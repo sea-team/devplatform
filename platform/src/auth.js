@@ -240,7 +240,13 @@ function cookieValue(header, name) {
   for (const part of String(header || '').split(';')) {
     const idx = part.indexOf('=');
     if (idx < 0) continue;
-    if (part.slice(0, idx).trim() === name) return decodeURIComponent(part.slice(idx + 1).trim());
+    if (part.slice(0, idx).trim() !== name) continue;
+    const raw = part.slice(idx + 1).trim();
+    // 畸形百分号编码（如 `Cookie: dp_session=%`）会让 decodeURIComponent 抛 URIError。
+    // identity() 在 mini.js 分发层的 try 之外调用本函数，async 抛错会升级成
+    // unhandledRejection → Node 22 默认直接终止进程：一个匿名请求即可打挂整个平台。
+    // 这里必须把解码失败收敛成「无效 Cookie」，绝不能把异常抛给调用方。
+    try { return decodeURIComponent(raw); } catch { return raw; }
   }
   return '';
 }
@@ -481,6 +487,10 @@ function disable2fa(user) {
 }
 
 function twoFactorStatus(user) {
+  // /api/auth/2fa 同时在公开路径白名单里（POST 是登录第二步的验证码校验）。
+  // GET 是自服务查询，匿名访问时 req.user 为 null，旧实现直接 byId(user.id)
+  // 抛 TypeError → 500 并回显内部错误文本。这里收敛成 401。
+  if (!user || !user.id) throw new HttpError(401, '请先登录后再查看二次验证状态');
   const u = byId(user.id);
   if (!u) throw notFound('账号不存在');
   return { enabled: Boolean(u.totpEnabled), recoveryCount: Array.isArray(u.totpRecovery) ? u.totpRecovery.length : 0 };

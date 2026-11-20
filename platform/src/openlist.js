@@ -64,6 +64,7 @@ const safeDir = (p) => {
 const ENV_CONN_ID = 'env-default';
 const MASK = '******';
 const keep = (value, saved) => (String(value || '').includes(MASK) ? (saved || '') : String(value || ''));
+const normalizeUrl = (value) => String(value || '').trim().replace(/\/+$/, '');
 
 function envConnection() {
   return {
@@ -119,12 +120,16 @@ function publicConnection(c) {
 function applyConfig() {
   const active = activeConnection();
   if (!active) return;
-  // 「面板连接优先」只覆盖真的填了值的字段：历史上无条件覆盖，导致保存过
-  // 不带密码的连接后，.env 里的有效凭据在重启时被静默清空（OpenList 变未配置）。
-  if (active.url) config.openlistUrl = String(active.url || ENV.url).replace(/\/+$/, '');
-  if (active.user) config.openlistUser = String(active.user);
-  if (active.token) config.openlistToken = String(active.token);
-  if (active.password) config.openlistPassword = String(active.password);
+  // 凭据必须跟随它所属的连接。旧实现只覆盖「有值」的字段，于是新建一条只填 URL、
+  // 不填 token / password 的连接并设为当前后：URL 换成了攻击者的地址，而 token /
+  // password 仍是上一条（管理员）连接的 → 平台把管理员 token（或管理员账号密码）
+  // 发到任意主机。这里只有「目标地址与 .env 相同」才允许回退到 .env 凭据。
+  const url = normalizeUrl(active.url) || normalizeUrl(ENV.url);
+  config.openlistUrl = url;
+  const sameTarget = url.toLowerCase() === normalizeUrl(ENV.url).toLowerCase();
+  config.openlistUser = String(active.user || (sameTarget ? ENV.user : '') || 'admin');
+  config.openlistToken = String(active.token || (sameTarget ? ENV.token : '') || '');
+  config.openlistPassword = String(active.password || (sameTarget ? ENV.password : '') || '');
 }
 
 /** 旧接口：返回当前连接（含多连接清单），前端与文档可继续沿用。 */
@@ -625,8 +630,12 @@ async function download(p, maxBytes = 100 * 1024 * 1024) {
   const info = await link(p);
   if (!info.rawUrl) throw new Error('OpenList 未返回下载地址（可能是虚拟目录）');
   const chosen = proxyModule.forGlobal(info.rawUrl);
+  // raw_url 可能指向 S3 / OneDrive / WebDAV 等第三方对象存储。跨源请求绝不能带
+  // OpenList 的管理员 token —— 否则下载一个文件就等于把全站存储凭据交给对方主机。
+  let sameOrigin = false;
+  try { sameOrigin = new URL(info.rawUrl).origin === new URL(config.openlistUrl).origin; } catch { sameOrigin = false; }
   const init = {
-    headers: { Authorization: await openlistApi.token() },
+    headers: sameOrigin ? { Authorization: await openlistApi.token() } : {},
     signal: AbortSignal.timeout(120000),
   };
   if (chosen.proxy) init.dispatcher = proxyModule.dispatcher(chosen.proxy);
@@ -634,10 +643,30 @@ async function download(p, maxBytes = 100 * 1024 * 1024) {
   if (!response.ok) throw new Error(`下载失败：HTTP ${response.status}`);
   const length = Number(response.headers.get('content-length') || 0);
   if (length > maxBytes) throw new Error(`文件超过 ${Math.round(maxBytes / 1024 / 1024)} MB 限制，请使用直链下载`);
-  const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.length > maxBytes) throw new Error('文件过大，已中止下载');
+  // 边读边计数：旧实现先 arrayBuffer() 再比 maxBytes，chunked / 谎报长度的超大
+  // 响应会先把整个文件读进内存，直接打爆平台进程。
+  const chunks = [];
+  let size = 0;
+  if (response.body && typeof response.body.getReader === 'function') {
+    const reader = response.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > maxBytes) {
+        try { await reader.cancel(); } catch { /* noop */ }
+        throw new Error('文件过大，已中止下载');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } else {
+    const whole = Buffer.from(await response.arrayBuffer());
+    size = whole.length;
+    if (size > maxBytes) throw new Error('文件过大，已中止下载');
+    chunks.push(whole);
+  }
   return {
-    buffer,
+    buffer: Buffer.concat(chunks, size),
     filename: info.name || path.posix.basename(info.path) || 'download.bin',
     contentType: response.headers.get('content-type') || 'application/octet-stream',
   };

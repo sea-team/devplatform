@@ -34,6 +34,10 @@ const WRITE_COMMANDS = new Set([
 // 破坏性写操作（前端需二次确认；仓库级写权限仍由 server 路由校验）。
 const DESTRUCTIVE_COMMANDS = new Set(['reset', 'revert', 'merge', 'checkout', 'restore']);
 const FORBIDDEN_ARGS = /[;&|`$<>\n\r\\]|^\s*-c\s*$|--exec|--upload-pack|--receive-pack|--git-dir|--work-tree|--config-env/;
+// 会把「工作区外路径」带进 git 的合法选项：仅靠上面的字符黑名单拦不住
+// （`git diff --no-index /app/data/state.json /tmp/x` 一个斜杠都不违规，却能把
+// 平台凭据库读出来；`--file` / `--pathspec-from-file` 同理）。按选项名单独拒绝。
+const FORBIDDEN_OPTIONS = /^(?:--no-index|--file|--pathspec-from-file|--output(?:-directory)?|--exec|--upload-pack|--receive-pack|--git-dir|--work-tree|--config-env|-F)(?:=|$)/;
 const MAX_ARGS = 12;
 const MAX_ARG_LEN = 500; // 放宽以容纳 commit -m 的提交说明；危险字符仍由 FORBIDDEN_ARGS 拦截
 
@@ -94,7 +98,7 @@ function validate(repo, command, args) {
   const list = Array.isArray(args) ? args.map((a) => String(a)) : [];
   if (list.length > MAX_ARGS) throw new HttpError(400, `参数过多（最多 ${MAX_ARGS} 个）`);
   for (const a of list) {
-    if (a.length > MAX_ARG_LEN || FORBIDDEN_ARGS.test(a)) {
+    if (a.length > MAX_ARG_LEN || FORBIDDEN_ARGS.test(a) || FORBIDDEN_OPTIONS.test(a.trim())) {
       throw new HttpError(400, `参数含不允许的字符或选项：${a.slice(0, 60)}`);
     }
   }
