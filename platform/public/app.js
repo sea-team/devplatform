@@ -67,6 +67,8 @@ const storageState = {
 };
 const proxyState = { config: null, entities: null };
 let logTimer = null;
+// 存储列表请求序号：快速切目录时，晚到的旧响应必须丢弃，避免「列表=A、路径=B」导致删除/重命名误伤别处。
+let storageLoadSeq = 0;
 let selectedBuildId = null;
 let detectedPrograms = null;
 let detectedOnce = false;
@@ -1027,7 +1029,7 @@ async function loadRepos() {
       // v0.4.16 B 批：未克隆到平台存储的远端仓库不显示「IDE 打开」；代理按钮统一收到「编辑」里处理。
       return `<tr>
         <td><b>${esc(r.name)}</b><div class="desc muted">${esc(r.fullName)}</div></td>
-        <td>${badge(esc(r.sourceLabel), r.sourceId === 'builtin-gitea' ? 'blue' : 'amber')}</td>
+        <td>${badge(r.sourceLabel, r.sourceId === 'builtin-gitea' ? 'blue' : 'amber')}</td>
         <td>${esc(r.description || '-')}${r.private ? ' ' + badge('私有', 'gray') : ''}</td>
         <td class="muted">${esc(fmtTime(r.updatedAt))}</td>
         <td class="actions"><div class="ext-actions">
@@ -1056,7 +1058,8 @@ async function loadRepos() {
       switchView('repo-clone');
       toast('已填入克隆表单，点击「克隆到工作区」执行');
     }));
-    $$('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
+    // 只绑定仓库列表内的复制按钮；全局 [data-copy] 会误抓驱动模板弹窗的「复制 JSON」（无值），把剪贴板写成空串。
+    ($('#repo-list') ? $$('#repo-list [data-copy]') : []).forEach((b) => b.addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(b.dataset.copy); toast('克隆地址已复制'); }
       catch { toast('复制失败，请手动选择', true); }
     }));
@@ -1780,6 +1783,9 @@ function renderFileList(d) {
   storageState.files = d.content || [];
   storageState.listData = d;
   storageState.selected.clear();
+  // 列表重建后选择集已清空，表头的全选框不在 #file-list 内，需显式复位，否则显示「全选」但无选中项。
+  const selectAll = $('#storage-select-all');
+  if (selectAll) selectAll.checked = false;
   const sort = storageState.sort;
   const items = sortFileItems(storageState.files, sort);
   const dirCount = items.filter((f) => f.isDir).length;
@@ -2175,14 +2181,19 @@ async function loadStorage() {
     storageHomeInit = true;
   } else if (!storageHomeInit) storageHomeInit = true;
   $('#storage-path').value = currentStoragePath;
+  // 请求序号：本页读取的是 currentStoragePath 的快照；若期间用户切了目录（发起新请求），
+  // 旧响应晚到时序号已失效，直接丢弃，绝不渲染旧列表，防止选择集/路径错配导致删除误伤。
+  const seq = ++storageLoadSeq;
+  const pathSnapshot = currentStoragePath;
   const settled = (p) => Promise.resolve(p).catch((e) => ({ error: e.message }));
   const [status, files, mounts, drivers, connections] = await Promise.all([
     settled(api('/openlist/status')),
-    settled(api(`/openlist/files?path=${encodeURIComponent(currentStoragePath)}`)),
+    settled(api(`/openlist/files?path=${encodeURIComponent(pathSnapshot)}`)),
     settled(api('/openlist/storages')),
     settled(api('/openlist/drivers')),
     settled(api('/openlist/connections')),
   ]);
+  if (seq !== storageLoadSeq) return; // 已有更新的请求，丢弃本次晚到响应
   renderOpenlistStatus(status);
   renderOpenlistConnections(connections);
   renderStorageDegraded([files, mounts, drivers]);
@@ -2259,8 +2270,9 @@ async function uploadFiles(fileList) {
         headers: { 'content-type': 'application/octet-stream', ...authHeaders() },
         body: await file.arrayBuffer(),
       });
+      if (!response.ok) throw new Error(`服务端返回 HTTP ${response.status}（网关可能未转发到平台）`);
       const json = await response.json();
-      if (!json.ok) throw new Error(json.error);
+      if (!json.ok) throw new Error(json.error || '上传失败');
       toast(`已上传 ${file.name}`);
     } catch (e) { toast(`${file.name} 上传失败：${e.message}`, true); }
   }
@@ -2420,8 +2432,13 @@ async function loadBuilds() {
     $('#executor-label').textContent = `构建后端：${profiles.executor === 'auto' ? '自动降级' : profiles.executor}`;
     const backendItems = backends.items || [];
     if ($('#build-backend')) {
+      const prevBackend = $('#build-backend').value;
       $('#build-backend').innerHTML = `<option value="auto">自动选择（推荐，当前配置 ${esc(backends.current)}）</option>`
         + backendItems.map((b) => `<option value="${esc(b.id)}"${b.available ? '' : ' disabled'}>${esc(b.label)}${b.available ? ' · 可用' : ' · 不可用'}</option>`).join('');
+      // 刷新构建列表不应重置用户已选的编译环境；仅当选项仍存在（且未禁用）时恢复。
+      for (const o of $('#build-backend').options) {
+        if (o.value === prevBackend && !o.disabled) { $('#build-backend').value = prevBackend; break; }
+      }
     }
     if ($('#build-backends')) {
       $('#build-backends').textContent = backendItems.map((b) => `${b.available ? '●' : '○'} ${b.label}：${b.detail}`).join('　|　')
@@ -2431,8 +2448,12 @@ async function loadBuilds() {
       $('#profile-select').innerHTML = '<option value="auto">自动识别</option>'
         + profiles.items.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
     }
+    const prevServer = $('#deploy-server').value;
     $('#deploy-server').innerHTML = '<option value="">选择服务器</option>'
       + servers.items.map((s) => `<option value="${esc(s.id)}">${esc(s.name)} (${esc(s.host)})</option>`).join('');
+    for (const o of $('#deploy-server').options) {
+      if (o.value === prevServer) { $('#deploy-server').value = prevServer; break; }
+    }
 
     $('#build-list').innerHTML = (builds.items || []).length ? builds.items.map((b) => `
       <div class="list-item">
@@ -2505,7 +2526,7 @@ $('#build-del-selected').addEventListener('click', async () => {
 async function watchLog(id) {
   selectedBuildId = id;
   $('#log-target').textContent = `构建 ${id}`;
-  if (logTimer) clearInterval(logTimer);
+  if (logTimer) { clearInterval(logTimer); logTimer = null; }
   const tick = async () => {
     try {
       const d = await api(`/builds/${id}/log`);
@@ -3283,6 +3304,8 @@ async function connectTerminal(tab, server) {
       try { reason = JSON.parse(event.data).reason || reason; } catch { /* noop */ }
       if (state) { state.textContent = reason; state.className = 'chip'; }
       if (c.term) c.term.write(`\r\n\x1b[90m[${reason}]\x1b[0m\r\n`);
+      // 后端以 200 结束 SSE 流；不 close() 会被浏览器当成断线每 3 秒自动重连、刷屏。
+      if (c.source) { try { c.source.close(); } catch { /* noop */ } c.source = null; }
       c.sid = null;
     });
     c.source.onerror = () => {
@@ -4185,15 +4208,16 @@ async function sendAIChatMessage() {
   const input = $('#ach-input');
   const content = (input ? input.value : '').trim();
   if (!content) { toast('请输入内容', true); return; }
+  // 在任何 await 之前抢锁：否则双击会在锁置位前并发进入，建出两个会话/发两条消息。
+  aiChatState.sending = true;
   if (!aiChatState.currentId) {
     try {
       const p = achCurrentSelection();
       const s = await api('/ai/chats', { method: 'POST', body: { providerId: p.providerId, model: p.model } });
       aiChatState.currentId = s.id; await achLoadSessions(s.id);
-    } catch (e) { toast(e.message, true); return; }
+    } catch (e) { aiChatState.sending = false; toast(e.message, true); return; }
   }
 
-  aiChatState.sending = true;
   aiChatState.streamText = '';
   aiChatState.streamTrace = [];
   aiChatState.lastDone = false;
@@ -5759,6 +5783,7 @@ $('#docker-load-form').addEventListener('submit', async (e) => {
         headers: { 'content-type': 'application/octet-stream', ...authHeaders() },
         body: await file.arrayBuffer(),
       });
+      if (!response.ok) throw new Error(`服务端返回 HTTP ${response.status}（网关可能未转发到平台）`);
       const json = await response.json();
       if (!json.ok) throw new Error(json.error || '导入失败');
       toast(json.data && json.data.loaded ? `已导入 ${json.data.loaded}` : '镜像导入完成');
@@ -5868,6 +5893,7 @@ $('#repo-import-form').addEventListener('submit', async (e) => {
       method: 'POST', headers: { 'content-type': 'application/octet-stream', ...authHeaders() },
       body: await file.arrayBuffer(),
     });
+    if (!response.ok) throw new Error(`服务端返回 HTTP ${response.status}（网关可能未转发到平台）`);
     const json = await response.json();
     if (!json.ok) throw new Error(json.error || '导入失败');
     const d = json.data || {};

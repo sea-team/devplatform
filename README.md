@@ -3239,3 +3239,35 @@ E 批开发期出现诡异现象：用编辑器改完已跟踪文件，几秒后
 ### 58.7 构建说明
 
 本次修复只涉及后端 `src` 与回归脚本，**单文件发行版（`dist/`、`platform.exe`）未重建**。发布前需执行 `npm run build` 重建 bundle 与发行包。
+
+---
+
+## §59 v0.4.22：9 项前端状态 / 体验类 bug 修复
+
+### 59.1 概述
+
+v0.4.21 安全审计时识别出 9 条前端问题（不涉及 XSS / 越权 / RCE，属状态与体验类），本轮一并修复。均为 `platform/public/app.js` 的行级改动，静态资源缓存戳升到 `20261120a`，新增 9 条前端自检断言防回归。
+
+### 59.2 修复清单
+
+| # | 问题 | 修复 |
+| --- | --- | --- |
+| 1 | `loadStorage` 无请求序号，晚到响应让「列表=A、全局路径=B」，删除 / 重命名可能作用到错误目录 | 加模块级 `storageLoadSeq`，每次调用递增并快照 `currentStoragePath`；响应回来时序号失效直接丢弃，只渲染最新请求。 |
+| 2 | `watchLog` 只 `clearInterval` 不置 null，切到第二台运行中构建后日志不再刷新 | `clearInterval` 后 `logTimer = null`，使 `!logTimer` 判断成立、能启动新定时器。 |
+| 3 | 终端 SSE `closed` 只改文案不 `close()`，后端 200 结束流 → 每 3 秒自动重连刷屏 | `closed` 事件里 `c.source.close()` 并置 null，阻断浏览器自动重连。 |
+| 4 | 列表重建清空选择集但不复位「全选」复选框 | `renderFileList` 清 `selected` 时显式把 `#storage-select-all.checked = false`（该复选框在 thead、不在重建范围内）。 |
+| 5 | `sending` 锁在 `await` 之后才置位，连点两次会建两个会话 / 发两条消息 | 锁提前到首个 `await` 之前，并在创建会话失败的提前 return 分支复位。 |
+| 6 | `loadBuilds` 无条件重建下拉，重置用户选的编译环境 / 目标服务器 | 重建前保存 `#build-backend` / `#deploy-server` 的 value，仅当新选项仍存在（且未禁用）时恢复。 |
+| 7 | `badge(esc(x))` 双层转义，源名含 `&<>` 时显示 `&amp;` | `badge()` 内置 `esc()`，调用处去掉外层 `esc()`。 |
+| 8 | `$$('[data-copy]')` 全局绑定，仓库页把驱动模板弹窗的「复制 JSON」覆盖成空串 | 改为只绑定 `#repo-list` 内的复制按钮（`$$('#repo-list [data-copy]')`）。 |
+| 9 | 3 处裸 `fetch`（上传 / Docker 导入 / 仓库导入）不查 `res.ok` 就 `json()`，网关返 HTML 报 `Unexpected token '<'` | 三处均在 `json()` 前加 `!response.ok` 检查，先报 HTTP 状态。 |
+
+### 59.3 验证
+
+- `node scripts/check-frontend.js` 新增 9 条静态护栏（`#1`~`#9`），全部通过；前端自检全套通过。
+- 行为级验证 7 项：请求序号晚到丢弃 / 双击只建 1 会话 / 下拉选项存在与消失两种恢复分支 / badge 单次转义 / 非 ok 响应先报 HTTP 状态，全部通过。
+- 静态资源缓存戳 `20261116a` → `20261120a`（`index.html` 两处 + 自检常量）。
+
+### 59.4 构建说明
+
+本轮同样只改前端 `app.js` / `index.html` 与自检脚本，**`dist/` 与 `platform.exe` 未重建**。发布前需执行 `npm run build`。

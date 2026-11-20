@@ -112,7 +112,7 @@ note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
 // 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
-const CACHE_STAMP = '20261116a';
+const CACHE_STAMP = '20261120a';
 const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
 note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
 
@@ -148,6 +148,30 @@ note(html.includes('id="view-ide-config"') && html.includes('id="ide-browse"')
   && html.includes('id="ide-dir-modal"') && app.includes('/ide/dirs')
   && app.includes('function openIdeDirPicker') && app.includes("'ide-config': loadIde"),
 '在线 IDE 拆成工作台与配置两页，项目目录可浏览选择');
+
+/* ---- v0.4.22：9 项状态 / 体验类前端 bug 的回归护栏 ---- */
+note(app.includes('let storageLoadSeq = 0') && app.includes('const seq = ++storageLoadSeq')
+  && app.includes('if (seq !== storageLoadSeq) return;') && app.includes('const pathSnapshot = currentStoragePath'),
+'#1 存储列表请求序号：晚到响应被丢弃，防止列表/路径错配导致误删');
+note(app.includes('if (logTimer) { clearInterval(logTimer); logTimer = null; }'),
+'#2 watchLog 切换时 clearInterval 后置 null，日志定时刷新不失效');
+note(app.includes("addEventListener('closed'") && app.includes('c.source.close(); } catch { /* noop */ } c.source = null;'),
+'#3 终端 SSE closed 时 close() 并置 null，防止后端 200 结束流后自动重连刷屏');
+note(app.includes("if (selectAll) selectAll.checked = false;"),
+'#4 文件列表重建时复位全选复选框');
+note(/aiChatState\.sending = true;[\s\S]{0,120}if \(!aiChatState\.currentId\)/.test(app)
+  && app.includes('} catch (e) { aiChatState.sending = false; toast(e.message, true); return; }'),
+'#5 AI 会话发送锁在首个 await 前置位，防双击建双会话');
+note(app.includes('const prevBackend = $(\'#build-backend\').value')
+  && app.includes('const prevServer = $(\'#deploy-server\').value')
+  && app.includes('for (const o of $(\'#deploy-server\').options)'),
+'#6 刷新构建列表时保留已选编译环境 / 目标服务器');
+note(!app.includes('badge(esc(') && app.includes('badge(r.sourceLabel,'),
+'#7 badge 不再双层转义（badge 内置 esc，调用处不重复）');
+note(app.includes("$('#repo-list') ? $$('#repo-list [data-copy]') : []"),
+'#8 data-copy 仅绑定仓库列表内按钮，不误抓模板弹窗的复制 JSON');
+note((app.match(/if \(!response\.ok\) throw new Error\(`服务端返回 HTTP \$\{response\.status\}/g) || []).length >= 3,
+'#9 三处裸 fetch 上传先查 response.ok 再解析 JSON');
 // 附带修复：官方镜像的 tag 冒号不能被当成 registry 端口，否则构建容器永远找不到镜像。
 const { resolveImage } = require('../platform/src/core');
 note(resolveImage('node:22-bookworm', 'docker.m.daocloud.io/library/') === 'docker.m.daocloud.io/library/node:22-bookworm'

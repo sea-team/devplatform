@@ -284,6 +284,20 @@
      smoke:userdirs 13/13、smoke:aiscope 11/11、smoke:import 11/11。
   说明：本版为安全加固版，单文件发行版（dist/、platform.exe）需发布前执行 npm run build 重建。
 
+【本版修复 · v0.4.22】9 项前端状态 / 体验类 bug（README §59）：
+  均为 app.js 行级改动，不涉及安全；静态资源缓存戳升到 20261120a。
+  1) 存储列表加请求序号，快速切目录时晚到响应被丢弃，避免删/重命名误伤错误目录；
+  2) watchLog 切构建后定时器正确重启，日志持续刷新；
+  3) 终端 SSE 收到 closed 后主动 close，不再每 3 秒自动重连刷屏；
+  4) 文件列表重建时复位全选复选框；
+  5) AI 会话发送锁在首个 await 前置位，双击不再建两个会话；
+  6) 刷新构建列表保留已选编译环境 / 目标服务器；
+  7) badge 去掉双层转义；
+  8) data-copy 只绑仓库列表，不再误抓模板弹窗的复制按钮；
+  9) 三处裸 fetch 上传先查 response.ok 再解析，网关返 HTML 时给出明确 HTTP 错误。
+  回归：前端自检新增 9 条护栏全部通过；行为级验证 7 项通过。
+  说明：dist/ 与 platform.exe 需发布前执行 npm run build 重建。
+
 下载哪个：
   1) devplatform-windows.zip       推荐 · 全量包：控制台 + 三项集成服务程序。
                                     START.bat 只启控制台；INSTALL.bat 离线装好服务。
