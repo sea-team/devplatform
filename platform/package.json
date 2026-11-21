@@ -1,6 +1,6 @@
 {
   "name": "devplatform-console",
-  "version": "0.4.25",
+  "version": "0.4.26",
   "private": true,
   "description": "统一 Web 开发管理平台控制台与 API 网关",
   "main": "src/server.js",
@@ -10,6 +10,7 @@
     "dev": "node launcher/launcher.js --dev",
     "build": "node build.mjs",
     "build:bundle": "node build.mjs --bundle-only",
+    "typecheck": "node ../scripts/typecheck.js",
     "smoke:git": "node ../scripts/smoke-git-runtime.js",
     "smoke:env": "node ../scripts/smoke-environment.js",
     "smoke:api": "node ../scripts/smoke-api-status.js",
@@ -30,7 +31,9 @@
     "undici": "^6.21.1"
   },
   "devDependencies": {
+    "@types/node": "^20.19.9",
     "esbuild": "^0.28.2",
-    "postject": "^1.0.0-alpha.6"
+    "postject": "^1.0.0-alpha.6",
+    "typescript": "^5.6.3"
   }
 }

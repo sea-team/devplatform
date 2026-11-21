@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "target": "es2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "types": ["node"],
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.js"]
+}

@@ -325,6 +325,15 @@ v0.4.25 · 2026-11-21 · 修复「上传压缩包导入」跨页常驻
   - 护栏：前端自检新增 2 条断言（导入表单归属 view-repo-clone；所有 .card 必须位于某个 page 容器内、无游离元素），防止同类跨页常驻问题复发。
   - 缓存戳刷新为 20261121b。246 已部署验证（0.4.24/normal，体检 8/0/0，仅前端资源变更）。
 
+v0.4.26 · 2026-11-21 · 接入渐进式类型检查（不影响运行 / 构建 / 部署）
+  本版新增：
+  - 背景：评估"整体改用 Go 换强类型 / 低内存 / 部署便利"后，实测 246 上平台仅占 16.78MiB（0.21%，机器上最轻容器之一），内存非瓶颈；三项诉求均可低代价达成，无需重写。详见 README §63。
+  - 棘轮式 checkJs：新增 platform/tsconfig.typecheck.json、scripts/typecheck.js、scripts/typecheck-baseline.json（基线 78）。错误数不超基线即通过，新增类型问题才 exit 1；只许收敛不许回退，收敛后可 --update-baseline 下调。
+  - npm run typecheck：全量 platform/src（36 模块约 2.2 万行）实测 78 错 / 14 文件，多为 JSDoc 稀疏导致的推断问题、非真实 bug。
+  - 依赖 typescript / @types/node 仅入 devDependencies；部署与 Dockerfile 用 --omit=dev，生产镜像不含 TS。
+  - 修复 Windows 下 .bin/tsc.cmd 需 shell:true 的静默失败误报（否则空输出被误判为"0 错误通过"）。
+  - 前端自检 +1 条设施完整性护栏；未改任何运行时代码，无需重新部署 246。
+
 下载哪个：
   1) devplatform-windows.zip       推荐 · 全量包：控制台 + 三项集成服务程序。
                                     START.bat 只启控制台；INSTALL.bat 离线装好服务。

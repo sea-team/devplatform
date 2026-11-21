@@ -139,6 +139,23 @@ note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升
   note(stray === 0, '所有 card 均位于 page 容器内，无跨页常驻元素', `游离 card=${stray}`);
 }
 
+// v0.4.25：渐进式类型检查设施（棘轮基线）完整性——不跑 tsc，仅校验文件齐备与基线合法。
+{
+  const root = path.resolve(__dirname, '..');
+  const tcConfig = path.join(root, 'platform', 'tsconfig.typecheck.json');
+  const tcScript = path.join(__dirname, 'typecheck.js');
+  const tcBaseline = path.join(__dirname, 'typecheck-baseline.json');
+  let ok = fs.existsSync(tcConfig) && fs.existsSync(tcScript) && fs.existsSync(tcBaseline);
+  let maxErrors = -1;
+  if (ok) {
+    try { maxErrors = Number(JSON.parse(fs.readFileSync(tcBaseline, 'utf8')).maxErrors); } catch { ok = false; }
+    ok = ok && Number.isInteger(maxErrors) && maxErrors >= 0;
+    ok = ok && /checkJs/.test(fs.readFileSync(tcConfig, 'utf8')) && /tsc/.test(fs.readFileSync(tcScript, 'utf8'));
+    ok = ok && /typecheck/.test(fs.readFileSync(path.join(root, 'platform', 'package.json'), 'utf8'));
+  }
+  note(ok, '渐进式类型检查设施齐备（tsconfig / 脚本 / 基线）', `基线=${maxErrors}`);
+}
+
 // v0.3.10：IDE 登录凭据、总览运行主机卡片、仓库文件 / 终端 / Git 操作。
 note(html.includes('id="ide-cred"') && html.includes('id="ide-cred-reveal"')
   && html.includes('id="host-info-body"') && html.includes('id="repo-git-modal"')

@@ -3385,3 +3385,27 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 - 前端自检全通过（含 2 条新护栏）；`node --check app.js` 通过。
 - 246 已部署：健康检查 `0.4.24 / normal`（仅前端资源变更，未改后端版本字符串）、体检 8/0/0；线上 `index.html` 核验缓存戳 `20261121b`、表单位于 `view-repo-clone` 内。
 - 本版仅改前端 `index.html`、`scripts/check-frontend.js`、`package.json`/`package-lock.json` 版本号与文档；`dist/` 与 `platform.exe` 由 CI 在发布 tag 时重建。
+
+---
+
+## §63 渐进式类型检查（可选，不影响运行 / 构建 / 部署）
+
+评估"是否整体改用 Go 换取强类型 / 低内存 / 部署便利"后，结论是三项诉求均可低代价达成，无需重写：
+- **内存**：实测 246 上 `devplatform` 容器仅 **16.78 MiB**（占 7.8GiB 的 0.21%），是机器上最轻的容器之一（最大的 tdx-quant-app 为 1.04 GiB，60 倍），平台内存不是瓶颈。
+- **部署**：现有 SEA 单文件 + 复用镜像容器方案已绕过 Debian 9 / glibc 2.24 / Docker Hub 不可达的限制。
+- **强类型**：给现有 JS 加 `checkJs` 类型检查即可，无需换语言。临时 PoC 实测全量 `platform/src`（36 模块 / 约 2.2 万行）仅 78 个类型错误、集中在 14 个文件，抽查"可疑真 bug"均为 TS 对 JS 的误报。
+
+### 63.1 机制：棘轮式基线
+
+不要求一次性清零（那 78 个多为 JSDoc 注解稀疏导致的推断问题，非真实错误），而是**锁定基线、只许下降**：
+
+- `platform/tsconfig.typecheck.json`：独立的类型检查配置（`allowJs` + `checkJs` + `noEmit`；用独立文件名避免 esbuild 打包时误读）。
+- `scripts/typecheck-baseline.json`：基线 `maxErrors: 78`。
+- `scripts/typecheck.js`：跑 `tsc` 并统计 `error TS` 行数，按文件聚合打印。**错误数 ≤ 基线 → 通过；> 基线 → exit 1**（新增类型问题立刻拦截）。未安装 TS 时优雅跳过（exit 0）。
+- 命令：`cd platform && npm run typecheck`；收敛后可用 `node ../scripts/typecheck.js --update-baseline` 下调基线。
+
+### 63.2 依赖与影响面
+
+- `typescript` / `@types/node` 仅加入 `devDependencies`。部署与 Dockerfile 均用 `npm install --omit=dev`，**生产镜像不含 TS**；只有 CI 的 `npm ci` 与本地开发会安装。
+- 已验证：新增 tsconfig 与依赖后，`npm run build`（生成 v0.4.25 的 dist/exe）、`npm run check`、`check-frontend.js` 全部通过，运行与构建零影响。
+- 定位新增错误：`cd platform && npx tsc -p tsconfig.typecheck.json --pretty false`。
