@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261121a" />
+  <link rel="stylesheet" href="/style.css?v=20261121b" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -271,16 +271,6 @@
           </div>
         </section>
 
-        <div class="card" style="margin-top:14px">
-          <div class="card-head"><h2>上传压缩包导入</h2><span class="muted">无法联网克隆时，直接上传仓库压缩包</span></div>
-          <form id="repo-import-form" class="form">
-            <label>仓库压缩包（.tar / .tar.gz / .tgz / .zip，≤100MB）<input type="file" name="file" id="repo-import-file" accept=".tar,.tar.gz,.tgz,.zip" required /></label>
-            <label>本地目录名（可选）<input name="name" id="repo-import-name" placeholder="留空则用压缩包文件名（不含扩展名）" /></label>
-            <div class="form-actions"><button class="btn btn-primary" type="submit">上传并导入到工作区</button></div>
-          </form>
-          <div class="notice">支持<b>整个仓库目录</b>（含 <code>.git</code> + 工作树文件）或<b>仅 <code>.git</code> 目录</b>的压缩包；<code>myrepo/.git</code> 这类单层包裹目录会自动上提一层。若包内<b>只有 <code>.git</code>、没有工作树文件</b>，导入后会自动执行 <code>git reset --hard HEAD</code> 恢复文件（需仓库已有提交且当前环境有可用 Git 通道，否则可在「Git 运行时」配置后手动 <code>git checkout</code>）。归档内绝对路径、<code>..</code> 穿越、符号链接会被拒绝，单文件解压上限 256MB。</div>
-        </div>
-
         <!-- Git 运行时（v0.4.4：从「克隆到工作区」拆成独立子页） -->
         <section class="page" id="view-git-runtime">
           <div class="subnav">
@@ -358,6 +348,16 @@
               <b>代理优先级</b>：本次指定 &gt; 单个仓库代理 &gt; Git Host 匹配规则 &gt; Git 分组代理 &gt; 全局代理；<code>direct</code> 表示强制直连。更多说明见「代理配置」页。<br />
               <b>Git 运行时</b>：克隆需要 Git 可执行文件。容器内没有 Git 时，平台会自动改用已登记的 SSH 宿主机（依据 <code>HOST_WORKSPACE_DIR</code> 挂载映射）执行，效果等同本地克隆；也可在上方直接指定 Git 路径。容器镜像缺 Git 不会再出现 <code>spawn git ENOENT</code>。
             </div>
+          </div>
+
+          <div class="card" style="margin-top:14px">
+            <div class="card-head"><h2>上传压缩包导入</h2><span class="muted">无法联网克隆时，直接上传仓库压缩包</span></div>
+            <form id="repo-import-form" class="form">
+              <label>仓库压缩包（.tar / .tar.gz / .tgz / .zip，≤100MB）<input type="file" name="file" id="repo-import-file" accept=".tar,.tar.gz,.tgz,.zip" required /></label>
+              <label>本地目录名（可选）<input name="name" id="repo-import-name" placeholder="留空则用压缩包文件名（不含扩展名）" /></label>
+              <div class="form-actions"><button class="btn btn-primary" type="submit">上传并导入到工作区</button></div>
+            </form>
+            <div class="notice">支持<b>整个仓库目录</b>（含 <code>.git</code> + 工作树文件）或<b>仅 <code>.git</code> 目录</b>的压缩包；<code>myrepo/.git</code> 这类单层包裹目录会自动上提一层。若包内<b>只有 <code>.git</code>、没有工作树文件</b>，导入后会自动执行 <code>git reset --hard HEAD</code> 恢复文件（需仓库已有提交且当前环境有可用 Git 通道，否则可在「Git 运行时」配置后手动 <code>git checkout</code>）。归档内绝对路径、<code>..</code> 穿越、符号链接会被拒绝，单文件解压上限 256MB。</div>
           </div>
         </section>
 
@@ -1876,6 +1876,6 @@
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
   <script src="/vendor/qrcode.js"></script>
-  <script src="/app.js?v=20261121a"></script>
+  <script src="/app.js?v=20261121b"></script>
 </body>
 </html>

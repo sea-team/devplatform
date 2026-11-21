@@ -315,7 +315,15 @@ v0.4.24 · 2026-11-21 · 全面评审 P0/P1/P2 全修
   - P1：远程 SFTP 列表加请求序号（防误删错误目录）；IDE 代登录按仓库 read 权限收口；core.update 改快照事务（防状态分裂）；AI 使用类接口 providerId 不再误判越权；CodeMirror 不再被 innerHTML+= 摧毁；openExtRepos 首开等待加载。
   - P2：sftpPut 出错销毁流；git 超时杀整进程组；AI 引擎 open 单飞防泄漏；远程构建临时目录 finally 清理；远程扩展 rebuild 修状态机；syncDbGate 并发锁；限速表加惰性清理与上限。
   - 验证：前端自检新增 16 条护栏，全量回归零失败；705KB state 下 update 平均 11.65ms/次。
-  - 注意：本版改了前端 app.js/index.html，缓存戳刷新为 20261121a。Windows 单文件发行版需 npm run build 后才是本版代码。
+  -   注意：本版改了前端 app.js/index.html，缓存戳刷新为 20261121a。Windows 单文件发行版需 npm run build 后才是本版代码。
+
+v0.4.25 · 2026-11-21 · 修复「上传压缩包导入」跨页常驻
+  本版修复：
+  - 现象：「上传压缩包导入」卡片出现在环境配置等所有页面顶部。
+  - 根因：该卡片在 index.html 里游离于所有 <section class="page"> 之外，而页面切换 CSS 只作用于 .page 内元素，导致它不受视图切换约束、每页常驻。
+  - 修复：将该卡片整体移入「Git 仓库 → 克隆到工作区」页（view-repo-clone）——它本就是无法联网克隆时的替代入口；事件按 id 绑定，移动 DOM 无副作用。
+  - 护栏：前端自检新增 2 条断言（导入表单归属 view-repo-clone；所有 .card 必须位于某个 page 容器内、无游离元素），防止同类跨页常驻问题复发。
+  - 缓存戳刷新为 20261121b。246 已部署验证（0.4.24/normal，体检 8/0/0，仅前端资源变更）。
 
 下载哪个：
   1) devplatform-windows.zip       推荐 · 全量包：控制台 + 三项集成服务程序。

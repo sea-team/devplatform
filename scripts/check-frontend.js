@@ -114,9 +114,30 @@ note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
 // 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
-const CACHE_STAMP = '20261121a';
+const CACHE_STAMP = '20261121b';
 const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
 note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
+
+// v0.4.24 补丁：所有 .card 必须落在某个 <section class="page"> 内，否则会脱离视图切换
+// 而常驻显示在每个页面（曾导致「上传压缩包导入」出现在环境配置等无关页）。同时确认
+// 仓库导入表单归位到「克隆到工作区」页。
+{
+  const lines = html.split('\n');
+  const formLine = lines.findIndex((l) => l.includes('id="repo-import-form"'));
+  let start = -1, end = -1;
+  for (let i = formLine - 1; i >= 0; i--) { if (/<section class="page"/.test(lines[i])) { start = i; break; } }
+  for (let i = formLine - 1; i < lines.length; i++) { if (/<\/section>/.test(lines[i])) { end = i; break; } }
+  const sectionId = start >= 0 ? (lines[start].match(/id="([^"]+)"/) || [])[1] : '';
+  note(formLine >= 0 && sectionId === 'view-repo-clone' && formLine > start && formLine < end,
+    '上传压缩包导入表单归属「克隆到工作区」页', `section=${sectionId}`);
+  let depth = 0, stray = 0;
+  for (const line of lines) {
+    if (/<section class="page"/.test(line)) depth++;
+    if (/<div class="card"/.test(line) && depth === 0) stray++;
+    if (/<\/section>/.test(line)) depth = Math.max(0, depth - 1);
+  }
+  note(stray === 0, '所有 card 均位于 page 容器内，无跨页常驻元素', `游离 card=${stray}`);
+}
 
 // v0.3.10：IDE 登录凭据、总览运行主机卡片、仓库文件 / 终端 / Git 操作。
 note(html.includes('id="ide-cred"') && html.includes('id="ide-cred-reveal"')

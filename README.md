@@ -3356,3 +3356,32 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 - 全量回归：check、security 49、hardening 12、auth 42、proxy-openlist 60、git 31、env 29、userdirs 13、aiscope 11、import 11，零失败。
 - XSS、路径穿越、错误崩溃三类经核验未发现新问题。
 - 本轮改前端 `app.js`/`index.html` 与后端 `src`，缓存戳需刷新；**`dist/` 与 `platform.exe` 未重建**，发布 Windows 单文件版前需 `npm run build`。
+
+---
+
+## §62 v0.4.25 · 修复「上传压缩包导入」跨页常驻
+
+用户反馈：环境配置等页面顶部也出现「上传压缩包导入」卡片。
+
+### 62.1 根因
+
+`platform/public/index.html` 中该 `<div class="card">` 游离于所有 `<section class="page">` 之外（夹在「新建仓库」与「Git 运行时」两个 section 之间）。页面切换由 CSS `.page{display:none}` / `.page.active{display:block}` 控制，只作用于 `.page` 内元素；游离 card 不受约束，因此在每个页面常驻显示。
+
+### 62.2 修复
+
+- 将该 card 整体移入「Git 仓库 → 克隆到工作区」section（`view-repo-clone`）末尾——它本就是"无法联网克隆时直接上传仓库压缩包"的替代入口，归属克隆页语义正确。
+- 表单事件通过 `#repo-import-form` 的 id 绑定，与 DOM 位置无关，移动后功能不受影响。
+- 静态资源缓存戳 `20261121a` → `20261121b`，避免浏览器缓存旧页面。
+
+### 62.3 回归护栏
+
+`scripts/check-frontend.js` 新增 2 条断言，防止同类问题复发：
+
+- 导入表单必须归属 `view-repo-clone` section（校验其位于该 section 起止行之间）。
+- 全文件所有 `<div class="card">` 必须位于某个 `<section class="page">` 内（逐行跟踪 section 深度），游离元素数为 0。
+
+### 62.4 验证与发布
+
+- 前端自检全通过（含 2 条新护栏）；`node --check app.js` 通过。
+- 246 已部署：健康检查 `0.4.24 / normal`（仅前端资源变更，未改后端版本字符串）、体检 8/0/0；线上 `index.html` 核验缓存戳 `20261121b`、表单位于 `view-repo-clone` 内。
+- 本版仅改前端 `index.html`、`scripts/check-frontend.js`、`package.json`/`package-lock.json` 版本号与文档；`dist/` 与 `platform.exe` 由 CI 在发布 tag 时重建。
