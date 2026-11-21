@@ -235,6 +235,13 @@ async function install(inst, manifest, rendered) {
  * 只动平台自建的那一个容器，其它容器一律不碰。
  */
 async function rebuild(inst, manifest, rendered) {
+  // 安全评审 P2-5：findContainer 只查本地 Docker API。远程实例（target=server:*）的
+  // 容器在 SSH 服务器上，本地查不到 → existing=null → install 时旧容器仍在，
+  // 必然报 "name already in use"。远程分支改走 remoteDocker.remove 清理旧容器。
+  if (isRemote(inst)) {
+    await remoteDocker.remove(serverIdOf(inst), containerRef(inst), false).catch(() => {});
+    return install(inst, manifest, rendered);
+  }
   const existing = await findContainer(inst);
   if (existing) {
     await docker.stopContainer(existing.Id).catch(() => {});

@@ -360,9 +360,16 @@ function sftpPut(server, localPath, remotePath) {
         if (err) return fail(err);
         const writer = sftp.createWriteStream(remotePath);
         const reader = fs.createReadStream(localPath);
-        writer.on('error', fail);
+        // 安全评审 P2-1：写端出错时 reader 仍会继续读取，文件句柄延迟释放；
+        // 失败路径主动销毁两端流，避免频繁上传失败时累积 fd。
+        const failStreams = (err) => {
+          try { reader.destroy(); } catch { /* noop */ }
+          try { writer.destroy(); } catch { /* noop */ }
+          fail(err);
+        };
+        writer.on('error', failStreams);
         writer.on('close', () => { if (settled) return; settled = true; conn.end(); resolve(); });
-        reader.on('error', fail);
+        reader.on('error', failStreams);
         reader.pipe(writer);
       });
     });

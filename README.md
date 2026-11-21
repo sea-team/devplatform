@@ -3317,3 +3317,42 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 ### 60.6 构建说明
 
 本轮改动后端 `src`、自检脚本与环境页文案，未触及前端 `app.js`，但**`dist/` 与 `platform.exe` 仍未重建**。发布前需执行 `npm run build`。
+
+---
+
+## §61 v0.4.24 · 全面评审 P0/P1/P2 全修
+
+三路并行评审（后端路由 / 前端安全边界 / 运维基础设施）+ 逐条独立核验，对每条发现实证后再定级。此前已修复项不重复。本轮共修 16 项，前端自检新增 16 条静态护栏。
+
+### 61.1 P0（确凿高危，已实证）
+
+- **Docker 全部写接口无鉴权**：`/api/docker/*` 的停删容器/卷/镜像/网络、exec、导入镜像均无 `requireAdmin`，`guard()` 也无对应分支、`collectIds` 收不到归属 id → 普通账号带 `confirm=true` 即可执行。实证普通用户对 4 类写路由 guard 全 `true`，对照 `services/setup` 正确 `false`。修复：`permissions.js` 的 `GLOBAL_WRITE_PATTERNS` 加 `/^\/api\/docker\//`（仅非 read 生效，GET 列表/日志仍开放）。
+- **deployDir 命令注入数据源**：`POST /api/servers` 的 `deployDir` 无校验，且普通用户可新增服务器；该值会经 fallback 进入 `gitRuntime.probeHostGit` 的 SSH 命令。修复：`deployDir` 加 POSIX 绝对路径白名单（拒绝 `..` 与 shell 元字符）。
+- **probeHostGit shell 转义**：原用 `JSON.stringify` 当 shell 引号，`$(...)` / 反引号在双引号内仍执行。改用 `gitRuntime.js` 内联 `shq()` 单引号转义（纵深防御，即使存量脏数据也不被注入）。
+- 说明：命令注入链经核验被降级——命令在 `deployDir` 所属服务器本地执行，能改该值者本就控制该机，跨权限危害有限；但两个编码缺陷仍一并修掉。
+
+### 61.2 P1（中高 / 中）
+
+- **远程 SFTP 文件列表竞态**：`loadRemoteFiles` 无请求序号（与已修的 `loadStorage` 同构），快速切目录时晚到响应污染 `tab.ctx.path`，导致删除/重命名误伤错误目录。修复：`tab.ctx.loadSeq` 序号校验，丢弃晚到响应。
+- **IDE 代登录越权**：`/api/ide/open` 把管理员口令换来的 code-server 会话下发给任意登录用户。修复：目标仓库有 ACL 时要求 `read` 权限，保留无 ACL 共享仓库与免密功能。
+- **core.update 非事务**：mutator 直接改 `_state`，抛错则部分改动留在内存但不落盘，形成「内存有、磁盘无」状态分裂。修复：JSON 深拷贝快照 + try/catch，异常回滚内存。实测 705KB state 下 11.65ms/次，开销可接受。
+- **providerId 误判**：放行白名单原只覆盖 `/api/ai/sessions`，`/api/ai/ops`/`chat`/`chats`/`models`/`tools` 的选型参数 providerId 被误判为 write 资源，导致共享 AI 服务对 read 协作者 403。修复：扩展放行到全部使用类入口；服务写接口 `POST/DELETE /api/ai/providers` 仍走归属校验。
+- **CodeMirror 被毁**：OpenList 编辑器用 `body.innerHTML +=` 追加提示，序列化重建容器摧毁 CodeMirror 实例。修复：HTML 固定 `#ol-ed-preview` 节点，JS 只切文本与显隐。
+- **openExtRepos 首开为空**：未 `await loadRepos()` 就渲染。改为 async + await。
+
+### 61.3 P2（低危 / 资源治理）
+
+- `sftpPut` 出错时销毁读写两端流（不泄漏 fd）。
+- `gitRuntime.exec` 超时用独立进程组整组杀（POSIX `process.kill(-pid)` / Windows `taskkill /T`），不留 git 孤儿进程。
+- AI 会话引擎 open 加 per-chat 单飞（含 provider/model 维度），并发不泄漏 dsh 引擎。
+- 远程构建临时目录清理移入 `finally`，失败不残留。
+- 远程扩展 `rebuild` 改走 `remoteDocker.remove` 清理旧容器（原 `findContainer` 只查本地 Docker，远程必然 "name already in use"）。
+- `syncDbGate` 加单飞锁，并发增删实例不产生孤儿容器。
+- `attempts` / `pending2fa` 加惰性过期清理 + 1 万条硬上限，防内存无界增长。
+
+### 61.4 验证与构建说明
+
+- 前端自检新增 16 条 P0/P1/P2 静态护栏，全过。
+- 全量回归：check、security 49、hardening 12、auth 42、proxy-openlist 60、git 31、env 29、userdirs 13、aiscope 11、import 11，零失败。
+- XSS、路径穿越、错误崩溃三类经核验未发现新问题。
+- 本轮改前端 `app.js`/`index.html` 与后端 `src`，缓存戳需刷新；**`dist/` 与 `platform.exe` 未重建**，发布 Windows 单文件版前需 `npm run build`。

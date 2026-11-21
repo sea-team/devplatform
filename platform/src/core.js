@@ -242,65 +242,75 @@ function save() {
 }
 
 function update(mutator) {
-  // 记录更新前的归属快照：编辑型 handler 常用「构造新对象整体替换」，
-  // 如果新对象漏带 ownerId / collaborators，这里能恢复，避免资源变成无人所有、
-  // 普通用户编辑后反而看不到自己的数据（v0.4.1）。
-  const before = new Map();
-  const beforeIds = new Set();
-  for (const key of OWNED_COLLECTIONS) {
-    for (const item of (state()[key] || [])) {
-      if (!item || !item.id) continue;
-      before.set(`${key}:${item.id}`, {
-        ownerId: item.ownerId || '',
-        collaborators: Array.isArray(item.collaborators) ? item.collaborators : null,
-      });
-      beforeIds.add(item.id);
-    }
-  }
-  const result = mutator(state());
-  // 新增资源归当前账号；已有资源只恢复被误删的归属，绝不改成当前用户。
-  const user = currentUser();
-  const canOwn = Boolean(user && user.id && user.id !== '__legacy__' && user.id !== '__cli__');
-  for (const key of OWNED_COLLECTIONS) {
-    for (const item of (_state[key] || [])) {
-      if (!item || typeof item !== 'object' || !item.id) continue;
-      const prev = before.get(`${key}:${item.id}`);
-      if (prev) {
-        if (!item.ownerId && prev.ownerId) item.ownerId = prev.ownerId;
-        if (!Array.isArray(item.collaborators) && prev.collaborators) item.collaborators = prev.collaborators;
-      } else if (canOwn && !item.ownerId) {
-        item.ownerId = user.id;
+  // 安全评审 P1-3：更新非事务——mutator 直接改 _state，若中途抛错，部分改动已留在
+  // 内存但 save() 不会执行，形成「内存有、磁盘无」的分裂状态（保存成功却重启丢失）。
+  // 这里先对 _state 做 JSON 深拷贝快照，任何异常都回滚内存。state 由 JSON 持久化，
+  // 必然 JSON 安全，故不用 structuredClone（后者遇到 Buffer/函数会抛错）。
+  const snapshot = JSON.parse(JSON.stringify(state()));
+  try {
+    // 记录更新前的归属快照：编辑型 handler 常用「构造新对象整体替换」，
+    // 如果新对象漏带 ownerId / collaborators，这里能恢复，避免资源变成无人所有、
+    // 普通用户编辑后反而看不到自己的数据（v0.4.1）。
+    const before = new Map();
+    const beforeIds = new Set();
+    for (const key of OWNED_COLLECTIONS) {
+      for (const item of (state()[key] || [])) {
+        if (!item || !item.id) continue;
+        before.set(`${key}:${item.id}`, {
+          ownerId: item.ownerId || '',
+          collaborators: Array.isArray(item.collaborators) ? item.collaborators : null,
+        });
+        beforeIds.add(item.id);
       }
-      if (!Array.isArray(item.collaborators)) item.collaborators = [];
     }
-  }
-  // v0.4.4 级联清理：对象删除时同步移除以该对象 id 为键的单项代理覆盖；
-  // 账号被禁用 / 删除时移除它在所有资源上的协作者条目，避免下次保存报「协作者账号不存在」。
-  // 放在 update() 里可覆盖所有删除入口，无需逐个 handler 记得调用。
-  const liveIds = new Set();
-  for (const key of OWNED_COLLECTIONS) {
-    for (const item of (_state[key] || [])) if (item && item.id) liveIds.add(item.id);
-  }
-  const removedIds = [...beforeIds].filter((id) => !liveIds.has(id));
-  if (removedIds.length && _state.proxy && _state.proxy.overrides) {
-    for (const dict of Object.values(_state.proxy.overrides)) {
-      if (!dict || typeof dict !== 'object') continue;
-      for (const id of removedIds) delete dict[id];
-    }
-  }
-  const activeUserIds = new Set((_state.users || [])
-    .filter((u) => u && u.status !== 'disabled').map((u) => u.id));
-  if (activeUserIds.size) {
+    const result = mutator(state());
+    // 新增资源归当前账号；已有资源只恢复被误删的归属，绝不改成当前用户。
+    const user = currentUser();
+    const canOwn = Boolean(user && user.id && user.id !== '__legacy__' && user.id !== '__cli__');
     for (const key of OWNED_COLLECTIONS) {
       for (const item of (_state[key] || [])) {
-        if (Array.isArray(item.collaborators)) {
-          item.collaborators = item.collaborators.filter((c) => c && activeUserIds.has(c.userId));
+        if (!item || typeof item !== 'object' || !item.id) continue;
+        const prev = before.get(`${key}:${item.id}`);
+        if (prev) {
+          if (!item.ownerId && prev.ownerId) item.ownerId = prev.ownerId;
+          if (!Array.isArray(item.collaborators) && prev.collaborators) item.collaborators = prev.collaborators;
+        } else if (canOwn && !item.ownerId) {
+          item.ownerId = user.id;
+        }
+        if (!Array.isArray(item.collaborators)) item.collaborators = [];
+      }
+    }
+    // v0.4.4 级联清理：对象删除时同步移除以该对象 id 为键的单项代理覆盖；
+    // 账号被禁用 / 删除时移除它在所有资源上的协作者条目，避免下次保存报「协作者账号不存在」。
+    // 放在 update() 里可覆盖所有删除入口，无需逐个 handler 记得调用。
+    const liveIds = new Set();
+    for (const key of OWNED_COLLECTIONS) {
+      for (const item of (_state[key] || [])) if (item && item.id) liveIds.add(item.id);
+    }
+    const removedIds = [...beforeIds].filter((id) => !liveIds.has(id));
+    if (removedIds.length && _state.proxy && _state.proxy.overrides) {
+      for (const dict of Object.values(_state.proxy.overrides)) {
+        if (!dict || typeof dict !== 'object') continue;
+        for (const id of removedIds) delete dict[id];
+      }
+    }
+    const activeUserIds = new Set((_state.users || [])
+      .filter((u) => u && u.status !== 'disabled').map((u) => u.id));
+    if (activeUserIds.size) {
+      for (const key of OWNED_COLLECTIONS) {
+        for (const item of (_state[key] || [])) {
+          if (Array.isArray(item.collaborators)) {
+            item.collaborators = item.collaborators.filter((c) => c && activeUserIds.has(c.userId));
+          }
         }
       }
     }
+    save();
+    return result;
+  } catch (e) {
+    _state = snapshot; // 回滚到更新前，避免脏状态继续被后续请求使用
+    throw e;
   }
-  save();
-  return result;
 }
 
 const uid = (prefix) => `${prefix}_${crypto.randomBytes(6).toString('hex')}`;

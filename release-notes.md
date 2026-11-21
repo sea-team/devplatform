@@ -309,6 +309,14 @@
   回归：新增 npm run smoke:hardening 12/12；前端自检 +5 条护栏；全套 smoke 通过。
   说明：dist/ 与 platform.exe 需发布前执行 npm run build 重建。
 
+v0.4.24 · 2026-11-21 · 全面评审 P0/P1/P2 全修
+  本版修复（三路并行评审 + 逐条实证，共 16 项）：
+  - P0 高危：Docker 全部写接口加管理员校验（普通账号原可删容器/卷/镜像）；服务器 deployDir 加白名单；probeHostGit 改用 shq 转义，杜绝命令注入。
+  - P1：远程 SFTP 列表加请求序号（防误删错误目录）；IDE 代登录按仓库 read 权限收口；core.update 改快照事务（防状态分裂）；AI 使用类接口 providerId 不再误判越权；CodeMirror 不再被 innerHTML+= 摧毁；openExtRepos 首开等待加载。
+  - P2：sftpPut 出错销毁流；git 超时杀整进程组；AI 引擎 open 单飞防泄漏；远程构建临时目录 finally 清理；远程扩展 rebuild 修状态机；syncDbGate 并发锁；限速表加惰性清理与上限。
+  - 验证：前端自检新增 16 条护栏，全量回归零失败；705KB state 下 update 平均 11.65ms/次。
+  - 注意：本版改了前端 app.js/index.html，缓存戳刷新为 20261121a。Windows 单文件发行版需 npm run build 后才是本版代码。
+
 下载哪个：
   1) devplatform-windows.zip       推荐 · 全量包：控制台 + 三项集成服务程序。
                                     START.bat 只启控制台；INSTALL.bat 离线装好服务。

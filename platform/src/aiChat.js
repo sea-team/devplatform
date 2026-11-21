@@ -18,6 +18,11 @@ const MAX_MESSAGES = 200;
 const MAX_CONTENT = 200 * 1024;
 const TITLE_MAX = 48;
 
+// 安全评审 P2-3：同一会话的并发 open 复用同一个 openEngine Promise，避免
+// 「读空 sid → await 创建 → 写回」竞态各自启动 dsh 引擎，导致后完成者覆盖 sid、
+// 先完成者的引擎再无引用而无法 close（进程/容器泄漏）。
+const engineOpenInFlight = new Map();
+
 const now = () => new Date().toISOString();
 const chats = () => (Array.isArray(state().aiChats) ? state().aiChats : []);
 const isAdmin = (user) => Boolean(user && user.role === 'admin');
@@ -153,6 +158,17 @@ function clearMessages(user, id) {
  * 并持久化 engineSid；已有则复用。返回引擎 sid 与模型信息。
  */
 async function openEngine(stateObj, user, id, providerOverride = '', modelOverride = '') {
+  // 单飞：同一 chatId 的并发请求共享同一个打开过程，杜绝重复创建 dsh 引擎。
+  const key = `${user && user.id || ''}|${id}|${providerOverride || ''}|${modelOverride || ''}`;
+  const inflight = engineOpenInFlight.get(key);
+  if (inflight) return inflight;
+  const task = openEngineInner(stateObj, user, id, providerOverride, modelOverride)
+    .finally(() => { if (engineOpenInFlight.get(key) === task) engineOpenInFlight.delete(key); });
+  engineOpenInFlight.set(key, task);
+  return task;
+}
+
+async function openEngineInner(stateObj, user, id, providerOverride = '', modelOverride = '') {
   const session = owned(user, id, true);
   let engineSid = String(session.engineSid || '');
   let info = null;

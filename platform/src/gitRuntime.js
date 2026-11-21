@@ -19,6 +19,9 @@ const os = require('os');
 const { spawn, spawnSync } = require('child_process');
 const { config, state, update } = require('./core');
 
+/** POSIX 单引号转义：包住用户可控值后再拼进 SSH shell 命令，避免 $()/反引号/分号注入。 */
+const shq = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+
 /** 当前进程所在系统的发行版名称：容器里是 Alpine，Windows exe 里是 Windows 版本号。 */
 function localOsName() {
   try {
@@ -123,7 +126,10 @@ async function probeHostGit({ force = false, timeoutMs = 8000 } = {}) {
       const { sshExec } = require('./integrations');
       const server = (state().servers || []).find((s) => s.id === fb.serverId);
       if (!server) throw new Error(`SSH 服务器 ${fb.serverId} 不存在`);
-      const dir = JSON.stringify(fb.hostWorkspaceDir || '/workspace');
+      // 安全评审：JSON.stringify 只做 JSON 引号转义，双引号内的 $(...) / 反引号
+      // 仍会被 shell 执行。hostWorkspaceDir 可能来自服务器 deployDir（用户可控），
+      // 必须用单引号 shell 转义（shq）包裹，杜绝命令注入。
+      const dir = shq(fb.hostWorkspaceDir || '/workspace');
       // v0.3.10：同一次 SSH 顺带采集宿主机发行版 / 内核 / 主机名，
       // 让「运行平台」能明确区分容器（Alpine）与真正跑 Git 的宿主机（Debian 9.13）。
       const command = [
@@ -283,6 +289,9 @@ function exec(args, { env = process.env, timeoutMs = 300000, onData = null } = {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(r.bin, args, {
       shell: false, env, windowsHide: true,
+      // 安全评审 P2-2：独立进程组，超时可整组杀，避免 git-remote-https /
+      // git-upload-pack 等子进程变孤儿继续持锁 .git 或占网络。
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -290,6 +299,13 @@ function exec(args, { env = process.env, timeoutMs = 300000, onData = null } = {
     const timer = timeoutMs > 0 ? setTimeout(() => {
       if (settled) return;
       settled = true;
+      try {
+        if (process.platform === 'win32') {
+          require('child_process').spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+        } else if (child.pid) {
+          process.kill(-child.pid, 'SIGKILL'); // 负 pid = 整进程组
+        }
+      } catch { /* 进程已退出 */ }
       child.kill('SIGKILL');
       reject(new Error('Git 执行超时'));
     }, timeoutMs) : null;

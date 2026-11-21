@@ -21,6 +21,27 @@ const MAX_ATTEMPTS = 5;
 const LOCK_MS = 60 * 1000;
 const attempts = new Map();
 
+// 安全评审 P2-7：attempts / pending2fa 都是进程内 Map，若不清理会随
+// 失败登录 / 未完成 2FA 挑战无限增长。写入时惰性清理过期项，并设硬上限。
+const MAX_RATE_ENTRIES = 10000;
+function pruneMap(map, isExpired) {
+  const now = Date.now();
+  for (const [k, v] of map) {
+    try { if (isExpired(v, now)) map.delete(k); } catch { map.delete(k); }
+  }
+  // 仍超上限时淘汰最早插入的条目（Map 保序）。
+  let overflow = map.size - MAX_RATE_ENTRIES;
+  if (overflow > 0) for (const k of map.keys()) { if (overflow-- <= 0) break; map.delete(k); }
+}
+function rateExpired(v, now) {
+  if (!v) return true;
+  // 2FA 挑战：expiresAt 过期即可清理。
+  if (v.expiresAt) return v.expiresAt <= now;
+  // 登录限速：until 过期且不在锁定期才清理，避免误删仍在 429 锁定的记录。
+  if (v.until) return v.until <= now && !(v.lockedUntil > now);
+  return false;
+}
+
 const PUBLIC_PATHS = ['/api/health', '/api/auth/login', '/api/auth/status', '/api/auth/2fa'];
 const CLI_PATHS = ['/api/auth/reset-password', '/api/system/reload'];
 const TOKEN_USER = Object.freeze({ id: '__admin_token__', username: 'admin(token)', role: 'admin', via: 'token' });
@@ -137,6 +158,7 @@ function create2faChallenge(userId) {
   const now = Date.now();
   for (const [k, v] of pending2fa) if (v.expiresAt <= now) pending2fa.delete(k);
   const token = crypto.randomBytes(24).toString('hex');
+  pruneMap(pending2fa, rateExpired); // 已有过期清理，这里再补硬上限
   pending2fa.set(token, { userId, expiresAt: now + 5 * 60 * 1000, attempts: 0 });
   return token;
 }
@@ -364,6 +386,7 @@ function login(req, res, body) {
   if (!user || user.status === 'disabled' || !verifyPassword(password, user.passwordHash)) {
     const next = rec && rec.until > Date.now() ? { ...rec, count: rec.count + 1 } : { count: 1, until: Date.now() + LOCK_MS };
     next.lockedUntil = next.count >= MAX_ATTEMPTS ? Date.now() + LOCK_MS : 0;
+    pruneMap(attempts, rateExpired);
     attempts.set(key, next);
     throw new HttpError(401, '账号或密码错误');
   }
@@ -420,6 +443,7 @@ function verify2fa(req, res, body) {
   if (!ok) {
     const next = rate && rate.until > Date.now() ? { ...rate, count: rate.count + 1 } : { count: 1, until: Date.now() + LOCK_MS };
     next.lockedUntil = next.count >= MAX_ATTEMPTS ? Date.now() + LOCK_MS : 0;
+    pruneMap(attempts, rateExpired);
     attempts.set(rateKey, next);
     throw new HttpError(401, '验证码错误');
   }

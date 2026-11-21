@@ -114,7 +114,7 @@ note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
 // 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
-const CACHE_STAMP = '20261120a';
+const CACHE_STAMP = '20261121a';
 const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
 note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
 
@@ -190,6 +190,44 @@ note(coreSrc.includes('cliSecret: env(\'DP_CLI_SECRET\')') && authSrc.includes('
   && authSrc.includes('safeEqualStr') && envcfg.includes('DP_CLI_SECRET')
   && resetPwSrc.includes('x-dp-cli-key') && resetPwSrc.includes('DP_CLI_SECRET'),
 'CLI 通道: 共享密钥 DP_CLI_SECRET 全链路（core 配置 + auth 校验 + 环境页 + 重置脚本）');
+
+// ===== v0.4.24 安全评审 P0/P1/P2 全修静态护栏 =====
+const gitRtSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'gitRuntime.js'), 'utf8');
+const buildBeSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'buildBackends.js'), 'utf8');
+const extRtSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'extRuntime.js'), 'utf8');
+const extLifeSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'extLifecycle.js'), 'utf8');
+note(permSrc.includes("/^\\/api\\/docker\\//") && permSrc.includes('Docker 写操作'),
+'P0: Docker 全部写接口纳入全局写保护（含 delete 容器/卷/网络/镜像）');
+note(serverSrc.includes('部署目录不合法') && serverSrc.includes('^\\/[A-Za-z0-9_.\\/-]+$'),
+'P0: 服务器 deployDir 白名单校验，杜绝 shell 元字符');
+note(gitRtSrc.includes('const shq =') && gitRtSrc.includes('const dir = shq(') && !gitRtSrc.includes('const dir = JSON.stringify'),
+'P0: probeHostGit 用 shq 单引号转义替代 JSON.stringify');
+note(coreSrc.includes('const snapshot = JSON.parse(JSON.stringify(state()))') && coreSrc.includes('_state = snapshot; // 回滚'),
+'P1: core.update 快照事务，mutator 抛错回滚内存防状态分裂');
+note(serverSrc.includes("assertCan(req.user, acl, 'read')") && serverSrc.includes('repoSegment'),
+'P1: /api/ide/open 按仓库 read 权限代登录，堵住越权拿 IDE 会话');
+note(permSrc.includes('/api\\/ai\\/(?:sessions|chats|chat|ops|models|tools)'),
+'P1: AI 使用类接口的 providerId 选型参数不再被误判为 write 资源');
+note(app.includes('tab.ctx.loadSeq') && app.includes('seq !== tab.ctx.loadSeq'),
+'P1: 远程 SFTP 文件列表加请求序号，丢弃晚到响应防误删');
+note(html.includes('id="ol-ed-preview"') && app.includes('preview.hidden = editable') && !app.includes("body.innerHTML += `<div class=\"ed-preview\""),
+'P1: OpenList 编辑器用固定预览节点，不再 innerHTML+= 摧毁 CodeMirror');
+note(app.includes('async function openExtRepos') && app.includes('await loadRepos()'),
+'P1: openExtRepos 等待仓库列表加载完成再渲染');
+note(integrationsSrc.includes('const failStreams =') && integrationsSrc.includes('reader.destroy()'),
+'P2: sftpPut 出错时销毁读写两端流，不泄漏 fd');
+note(gitRtSrc.includes('detached: process.platform !==') && gitRtSrc.includes('process.kill(-child.pid'),
+'P2: gitRuntime.exec 超时杀整进程组，不留 git 孤儿进程');
+note(aiChatSrc.includes('engineOpenInFlight') && aiChatSrc.includes('openEngineInner'),
+'P2: AI 会话引擎 open 单飞，并发不泄漏 dsh 引擎');
+note(buildBeSrc.includes('} finally {') && buildBeSrc.includes('rm -rf ${shq(base)}'),
+'P2: 远程构建临时目录在 finally 中清理，失败不残留');
+note(extRtSrc.includes('if (isRemote(inst))') && extRtSrc.includes('remoteDocker.remove(serverIdOf(inst)'),
+'P2: 远程扩展 rebuild 走 remoteDocker.remove 清理旧容器');
+note(extLifeSrc.includes('dbgateSyncInFlight') && extLifeSrc.includes('syncDbGateInner'),
+'P2: syncDbGate 单飞锁，并发增删实例不产生孤儿容器');
+note(authSrc.includes('MAX_RATE_ENTRIES') && authSrc.includes('pruneMap(attempts'),
+'P2: attempts/pending2fa 惰性清理 + 硬上限，防内存无界增长');
 // 附带修复：官方镜像的 tag 冒号不能被当成 registry 端口，否则构建容器永远找不到镜像。
 const { resolveImage } = require('../platform/src/core');
 note(resolveImage('node:22-bookworm', 'docker.m.daocloud.io/library/') === 'docker.m.daocloud.io/library/node:22-bookworm'

@@ -1928,12 +1928,17 @@ async function loadOlEditor(encoding = 'auto') {
     const editable = d.editable !== false && d.kind === 'text';
     setOlEditorValue(editable ? (d.content || '') : '');
     const area = $('#ol-ed-area');
-    const cmEl = document.querySelector('.ol-ed-body .CodeMirror');
+    const cmEl = olEditorState.cm && typeof olEditorState.cm.getWrapperElement === 'function'
+      ? olEditorState.cm.getWrapperElement() : document.querySelector('.ol-ed-body .CodeMirror');
     if (cmEl) cmEl.style.display = editable ? '' : 'none'; // 从二进制文件切回文本时恢复编辑器
     if (area && !olEditorState.cm) area.style.display = editable ? 'block' : 'none';
-    const body = document.querySelector('.ol-ed-body');
-    if (body && !editable) {
-      body.innerHTML += `<div class="ed-preview">${esc(d.warning || '该文件不能按文本编辑，请使用下载 / 上传。')}</div>`;
+    // 安全评审 P1-2：不能用 innerHTML += 往 .ol-ed-body 追加提示——那会序列化并重建
+    // 整个容器，摧毁在位的 CodeMirror 实例（cm 变量仍指向游离节点，编辑器看似冻结）。
+    // 改用固定的 #ol-ed-preview 节点，仅切换文本与显隐。
+    const preview = $('#ol-ed-preview');
+    if (preview) {
+      preview.textContent = d.warning || '该文件不能按文本编辑，请使用下载 / 上传。';
+      preview.hidden = editable;
     }
     if (olEditorState.cm) {
       try { olEditorState.cm.setOption('mode', resolveMode(d.mode)); olEditorState.cm.refresh(); } catch { /* noop */ }
@@ -1978,9 +1983,9 @@ function openOlEditor(path, name) {
   const sub = $('#ol-editor-path');
   if (title) title.textContent = `编辑 · ${olEditorState.name}`;
   if (sub) sub.textContent = path;
-  const body = document.querySelector('.ol-ed-body');
-  // 上一次打开二进制文件时追加的提示先清掉，避免重复叠加。
-  if (body) Array.from(body.querySelectorAll('.ed-preview')).forEach((el) => el.remove());
+  // 上一次打开二进制文件时的提示先隐藏（固定节点，不移除，避免破坏 CodeMirror 容器）。
+  const preview = $('#ol-ed-preview');
+  if (preview) preview.hidden = true;
   const modal = $('#ol-editor-modal');
   if (modal) modal.hidden = false;
   ensureOlCodeMirror();
@@ -2812,10 +2817,14 @@ async function loadRemoteFiles(tab) {
   const pane = tab.pane;
   const box = q(pane, 'fs-list');
   if (!box) return;
+  // 安全评审 P1-1：与 loadStorage 同构的请求序号。快速切目录（双击进入 + 面包屑返回）
+  // 时，晚到的旧响应不得覆盖 tab.ctx.path，否则删除/重命名会作用到错误目录。
+  const seq = (tab.ctx.loadSeq = (tab.ctx.loadSeq || 0) + 1);
+  const pathSnapshot = tab.ctx.path;
   box.innerHTML = '<div class="muted" style="padding:14px">读取中…</div>';
   try {
-    const data = await api(`/servers/${tab.ctx.serverId}/files?path=${encodeURIComponent(tab.ctx.path)}`);
-    if (!tabs.has(tab.id)) return;
+    const data = await api(`/servers/${tab.ctx.serverId}/files?path=${encodeURIComponent(pathSnapshot)}`);
+    if (seq !== tab.ctx.loadSeq || !tabs.has(tab.id)) return; // 已有更新的目录请求，丢弃晚到响应
     tab.ctx.path = data.path;
     tab.ctx.parent = data.parent;
     tab.ctx.items = data.items || [];
@@ -4584,9 +4593,11 @@ function renderExtReposOptions() {
     </label>`).join('');
 }
 
-function openExtRepos(id) {
+async function openExtRepos(id) {
   extState.reposInstanceId = id;
-  if (!repoState.items.length) loadRepos();
+  // 安全评审 P1-3：等待仓库列表加载完成再渲染，否则首次打开（未访问过仓库页）时
+  // repoState.items 为空，会误显示「还没有可用仓库」。
+  if (!repoState.items.length) await loadRepos();
   $('#ext-repos-title').textContent = `绑定仓库 · ${id}`;
   renderExtReposOptions();
   $('#ext-repos-card').hidden = false;

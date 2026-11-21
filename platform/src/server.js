@@ -757,6 +757,14 @@ app.post('/api/ide/open', wrap(async (req, res) => {
   const repoPath = String(req.body.repoPath || '').trim();
   const abs = safeWorkspacePath(repoPath);
   if (!fs.existsSync(abs)) throw new Error(`工作区内不存在目录：${repoPath || '/'}`);
+  // 安全评审 P1-2：代登录会把管理员口令换来的 code-server 会话下发给调用者，
+  // 因此只允许对该仓库有 read 权限的账号打开。无 ACL 的仓库沿用共享语义；
+  // 根路径（工作区总览）不做仓库级收口，仍可打开 IDE（只是不代登录越权目录）。
+  const repoSegment = repoPath.split(/[\\/]/).filter(Boolean)[0];
+  if (repoSegment && repoSegment !== '.' && repoSegment !== '..') {
+    const acl = (state().repoAcl || []).find((x) => x && x.id === `workspace:${repoSegment}`);
+    if (acl) permissions.assertCan(req.user, acl, 'read');
+  }
   // 本机 VS Code serve-web 直接用平台工作区的绝对路径；只有 code-server 容器部署
   // 才把宿主目录映射成 /home/coder/project。旧版一律返回容器路径，本机直跑时
   // IDE 打开的是一个根本不存在的 Linux 目录，看起来就像「IDE 不能用」。
@@ -1168,6 +1176,12 @@ app.post('/api/servers', wrap(async (req, res) => {
   if (!req.body.password && !req.body.privateKey && !req.body.privateKeyPath) {
     throw new Error('需要登录密码、私钥 PEM 或私钥文件路径其一');
   }
+  // 安全评审：deployDir 会被拼进宿主机 SSH 命令（gitRuntime.probeHostGit / 自动部署），
+  // 必须限制为纯 POSIX 绝对路径，杜绝 $(...) / 反引号 / 分号等 shell 元字符注入。
+  const deployDir = String(req.body.deployDir || '/data/platform');
+  if (!/^\/[A-Za-z0-9_.\/-]+$/.test(deployDir) || /(^|\/)\.\.(\/|$)/.test(deployDir)) {
+    throw new HttpError(400, '部署目录不合法：需为绝对路径，且只含字母、数字、_ . / -');
+  }
   const previous = req.body.id ? state().servers.find((s) => s.id === req.body.id) : null;
   const keepSecret = (value, saved) => (String(value || '').includes('******') ? (saved || '') : (value || ''));
   // 编辑时显式保留归属与协作者；core.update 另有快照兜底，双重防止「保存后丢失资源」。
@@ -1179,7 +1193,7 @@ app.post('/api/servers', wrap(async (req, res) => {
     privateKey: keepSecret(req.body.privateKey, previous && previous.privateKey),
     privateKeyPath: req.body.privateKeyPath || '',
     passphrase: keepSecret(req.body.passphrase, previous && previous.passphrase),
-    deployDir: String(req.body.deployDir || '/data/platform'),
+    deployDir,
     // 单个服务器代理：留空继承「服务器代理 → 全局代理」，填 direct 明确直连
     proxy: proxy.validateUrl(keepSecret(req.body.proxy, previous && previous.proxy)),
     createdAt: (previous && previous.createdAt) || new Date().toISOString(),

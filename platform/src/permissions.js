@@ -54,6 +54,10 @@ const GLOBAL_WRITE_PATTERNS = [
   // 无法登记并启用自己的 OpenList、write 协作者也无法编辑被授权的连接。
   /^\/api\/services\/setup(?:\/|$)/,                 // 一键安装（后端已 requireAdmin，双保险）
   /^\/api\/services\/credentials(?:\/|$)/,           // 集成服务账号 / 口令（明文与写操作仅管理员）
+  // 安全评审 P0：Docker 写操作（停删容器/卷/镜像/网络、exec、导入镜像）是全主机破坏性操作，
+  // 既无归属对象可判定，也不该被 target=local 的 collectIds 空集放行。一律仅管理员。
+  // 本列表只在 guard 的「非 read」分支生效，GET（列表/日志/inspect/stats）不受影响。
+  /^\/api\/docker\//,
 ];
 
 const isAdmin = (user) => Boolean(user && user.role === 'admin');
@@ -204,10 +208,13 @@ function guard(req, pathname) {
   if (!user) return false;
   if (user.via === 'cli') return true;             // CLI 白名单路径在 auth.authorize 里二次限制
   if (isAdmin(user)) return true;
-  // AI 对话会话的归属由 aiSessions 模块逐入口校验（不在归属集合内）。
-  // body 里的 providerId 只是「选用哪个服务」，不能按 write 该服务商资源来判定，
+  // AI 对话/运维的归属由 aiSessions / aiChat 模块逐入口校验（不在归属集合内）。
+  // body 里的 providerId 只是「选用哪个服务」的选型参数，不能按 write 该服务商资源判定，
   // 否则只被授予 read 协作的账号将无法使用共享 AI 服务。
-  if (/^\/api\/ai\/sessions(?:\/|$)/.test(String(pathname || ''))) return true;
+  // 安全评审 P1-4：原放行只覆盖 /api/ai/sessions，遗漏了同样带 providerId 的使用类入口
+  // （chat / ops / chats / models-fetch / models 目录），导致共享服务对普通账号 403。
+  // 注意「服务本身」的写接口 POST/DELETE /api/ai/providers 不在此列，仍走 providerId 归属校验。
+  if (/^\/api\/ai\/(?:sessions|chats|chat|ops|models|tools)(?:\/|$)/.test(String(pathname || ''))) return true;
   const method = String(req.method || 'GET').toUpperCase();
   const action = method === 'GET' || method === 'HEAD' ? 'read'
     : method === 'DELETE' ? 'delete' : 'write';

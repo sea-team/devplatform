@@ -193,39 +193,42 @@ async function runRemoteBuild({ image, script, abs, artifact, buildId, onData, t
   // 远端目录必须先建出来：base 带 buildId、每次都是新目录，而 sftpPut 只做
   // createWriteStream，不会创建父目录 → 上传必然 SSH_FX_NO_SUCH_FILE。
   // 旧实现把 mkdir 放在上传之后的远端脚本里，导致 SSH 构建后端从未成功过。
-  await sshExec(server, `mkdir -p ${shq(base)}`, 20000);
-  await sftpPut(server, localTar, srcTar);
-  fs.rmSync(localTar, { force: true });
+  try {
+    await sshExec(server, `mkdir -p ${shq(base)}`, 20000);
+    await sftpPut(server, localTar, srcTar);
+    fs.rmSync(localTar, { force: true });
 
-  const remoteScript = [
-    'set -e',
-    `mkdir -p ${shq(workDir)}`,
-    `tar -xzf ${shq(srcTar)} -C ${shq(workDir)}`,
-    `docker run --rm --name ${shq(`dp-build-${buildId}`)} -v ${shq(`${workDir}:/src`)} -w /src ${shq(fullImage)} sh -c ${shq(script)}`,
-    `if [ -d ${shq(`${workDir}/${artifact}`)} ]; then tar -czf ${shq(outTar)} -C ${shq(`${workDir}/${artifact}`)} .; else echo '[ssh] 未生成产物目录' >&2; fi`,
-  ].join(' && ');
-  onData(`[ssh] 远程容器镜像 ${fullImage}\n`);
-  const r = await sshExec(server, remoteScript, Math.max(timeoutMs, 120000));
-  if (r.stdout) onData(`${r.stdout}\n`);
-  if (r.stderr) onData(`${r.stderr}\n`);
+    const remoteScript = [
+      'set -e',
+      `mkdir -p ${shq(workDir)}`,
+      `tar -xzf ${shq(srcTar)} -C ${shq(workDir)}`,
+      `docker run --rm --name ${shq(`dp-build-${buildId}`)} -v ${shq(`${workDir}:/src`)} -w /src ${shq(fullImage)} sh -c ${shq(script)}`,
+      `if [ -d ${shq(`${workDir}/${artifact}`)} ]; then tar -czf ${shq(outTar)} -C ${shq(`${workDir}/${artifact}`)} .; else echo '[ssh] 未生成产物目录' >&2; fi`,
+    ].join(' && ');
+    onData(`[ssh] 远程容器镜像 ${fullImage}\n`);
+    const r = await sshExec(server, remoteScript, Math.max(timeoutMs, 120000));
+    if (r.stdout) onData(`${r.stdout}\n`);
+    if (r.stderr) onData(`${r.stderr}\n`);
 
-  let code = r.code;
-  if (code === 0 && artifact) {
-    try {
-      const buf = await remoteOps.readFile(server, outTar, 512 * 1024 * 1024);
-      fs.writeFileSync(localOut, buf);
-      const artifactAbs = path.join(abs, artifact);
-      fs.mkdirSync(artifactAbs, { recursive: true });
-      await runProcess('tar', ['-xzf', localOut, '-C', artifactAbs], { cwd: abs, onData, timeoutMs: 300000 });
-      onData(`[ssh] 产物已回传：${artifact}/\n`);
-    } catch (e) {
-      onData(`[ssh] 产物回传失败（构建本身已成功）：${e.message}\n`);
-      code = 1;
-    } finally {
-      fs.rmSync(localOut, { force: true });
+    let code = r.code;
+    if (code === 0 && artifact) {
+      try {
+        const buf = await remoteOps.readFile(server, outTar, 512 * 1024 * 1024);
+        fs.writeFileSync(localOut, buf);
+        const artifactAbs = path.join(abs, artifact);
+        fs.mkdirSync(artifactAbs, { recursive: true });
+        await runProcess('tar', ['-xzf', localOut, '-C', artifactAbs], { cwd: abs, onData, timeoutMs: 300000 });
+        onData(`[ssh] 产物已回传：${artifact}/\n`);
+      } catch (e) {
+        onData(`[ssh] 产物回传失败（构建本身已成功）：${e.message}\n`);
+        code = 1;
+      } finally {
+        fs.rmSync(localOut, { force: true });
+      }
     }
+  } finally {
+    await sshExec(server, `rm -rf ${shq(base)}`, 30000).catch(() => {});
   }
-  await sshExec(server, `rm -rf ${shq(base)}`, 30000).catch(() => {});
   return code;
 }
 

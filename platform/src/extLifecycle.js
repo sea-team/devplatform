@@ -57,7 +57,17 @@ function renderEnvLocal(manifest, inst) {
  * 重建 DbGate 容器以刷新 CONNECTIONS 环境变量（Docker 不允许改运行中容器的 Env）。
  * 命名卷保留，用户登录与查询历史不丢；失败只记录错误，不影响主操作结果。
  */
+// 安全评审 P2-6：syncDbGate 作为安装/删除其它实例的收尾被多处并发调用，
+// 加单飞锁避免两条链路同时重建 DbGate 容器产生孤儿 / 状态错乱。
+let dbgateSyncInFlight = null;
+
 async function syncDbGate() {
+  if (dbgateSyncInFlight) return dbgateSyncInFlight;
+  dbgateSyncInFlight = syncDbGateInner().finally(() => { dbgateSyncInFlight = null; });
+  return dbgateSyncInFlight;
+}
+
+async function syncDbGateInner() {
   const dbg = dbgateSync.dbGateInstance();
   if (!dbg) return { synced: false, reason: '未安装 DbGate 实例' };
   try {
