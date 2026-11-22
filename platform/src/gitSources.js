@@ -90,6 +90,14 @@ function publicSource(s) {
   const authType = AUTH_TYPES.includes(s.authType) ? s.authType : 'token';
   // v0.3.8 三态：true 强制跳过 / false 强制严格 / undefined 跟随全局 .env。
   const insecure = s.insecure === true ? 'on' : (s.insecure === false ? 'off' : 'auto');
+  // 本源独立设置的代理（代理页单项覆盖），脱敏回显；与「最终生效代理」effectiveProxy 区分：
+  // effectiveProxy 是整条链解析结果，proxyOverride 只反映本源表单里填的那个值。
+  const override = (proxyModule.readConfig().overrides.git || {})[s.id];
+  const rawOverride = override && override.url ? String(override.url) : '';
+  // direct 保持关键字，不能走 maskUrl（否则回填成「直接连接」再提交会被判非法）。
+  const proxyOverride = rawOverride
+    ? (rawOverride.toLowerCase() === 'direct' ? 'direct' : proxyModule.maskUrl(rawOverride))
+    : '';
   return {
     id: s.id, label: s.label, type: s.type, baseUrl: s.baseUrl,
     username: s.username || '', authType, builtin: Boolean(s.builtin),
@@ -100,10 +108,24 @@ function publicSource(s) {
     hasCreds: hasCreds(s),
     tokenMasked: s.token ? `${String(s.token).slice(0, 3)}******${String(s.token).slice(-3)}` : '',
     passwordMasked: s.password ? `******${String(s.password).slice(-2)}` : '',
+    proxyOverride,
     effectiveProxy: gitProxyFor(s.baseUrl, s.id).masked,
     host: proxyModule.hostOf(s.baseUrl),
     createdAt: s.createdAt || null,
   };
+}
+
+/**
+ * v0.4.27：把 Git 源添加/编辑表单里的代理值同步为「git 作用域单项覆盖」。
+ * 复用 proxy.setOverride（apha：空值即删除覆盖），因此解析侧 gitProxyFor 无需改动，
+ * REST 列目录 / 分支 / 连通测试 / effectiveProxy 会自动按本源 id 命中该覆盖。
+ * 注意：列 REST 目录走 HTTP dispatcher，只支持 http(s)/direct；socks5 仅对 git clone 有效。
+ */
+function applySourceProxy(id, proxyRaw) {
+  if (proxyRaw === undefined) return;
+  const url = proxyModule.validateUrl(String(proxyRaw || '').trim());
+  if (url) proxyModule.setOverride('git', id, { url, note: 'Git 源表单' });
+  else proxyModule.removeOverride('git', id);
 }
 
 function listSources() {
@@ -131,6 +153,8 @@ function createSource(body = {}) {
   } else if (!token) {
     throw new Error('Token 方式必须填写访问令牌；也可切换为「账号密码」认证');
   }
+  // 先校验代理地址，避免源已落库后因代理格式非法抛错留下半成品（v0.4.27）。
+  if (body.proxy !== undefined) proxyModule.validateUrl(String(body.proxy || '').trim());
   const source = {
     id: uid('gitsrc'), label, type, baseUrl, authType,
     token: authType === 'token' ? token : '',
@@ -143,13 +167,15 @@ function createSource(body = {}) {
     if (s.gitSources.some((x) => x.label === label)) throw new Error(`同名 Git 源已存在：${label}`);
     s.gitSources.push(source);
   });
-  return publicSource(source);
+  applySourceProxy(source.id, body.proxy);
+  return publicSource(findSource(source.id));
 }
 
 function updateSource(id, body = {}) {
   if (id === BUILTIN_ID) throw new Error('内置 Gitea 源由 .env 配置，请在 dist/.env 中修改');
   const found = (state().gitSources || []).find((s) => s.id === id);
   if (!found) throw new Error(`Git 源不存在：${id}`);
+  if (body.proxy !== undefined) proxyModule.validateUrl(String(body.proxy || '').trim());
   const patch = {};
   if (body.label !== undefined) patch.label = String(body.label).trim().slice(0, 60);
   if (body.type !== undefined && TYPES.includes(String(body.type))) patch.type = String(body.type);
@@ -163,12 +189,14 @@ function updateSource(id, body = {}) {
   if (patch.authType === 'token') patch.password = '';
   if (patch.authType === 'password') patch.token = '';
   update((s) => Object.assign(s.gitSources.find((x) => x.id === id), patch));
+  applySourceProxy(id, body.proxy);
   return publicSource(findSource(id));
 }
 
 function removeSource(id) {
   if (id === BUILTIN_ID) throw new Error('内置 Gitea 源不可删除');
   update((s) => { s.gitSources = (s.gitSources || []).filter((x) => x.id !== id); });
+  proxyModule.removeOverride('git', id); // 顺带清理本源代理覆盖，避免残留孤儿配置
   return { removed: id };
 }
 

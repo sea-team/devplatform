@@ -98,6 +98,21 @@ note(['/openlist/connections', 'data-olc-op="activate"', 'function renderOpenlis
 note((html.match(/data-open-view=/g) || []).length >= 20
   && app.includes("document.addEventListener('click'") && app.includes('switchView(button.dataset.openView)'),
 '每个独立页都带子导航条，点击后打开对应标签');
+// v0.4.27：主菜单去重——gitsrc/ide-config/envcfg 已是子页，不再单列主菜单；
+// 环境两页合并为单一「环境」入口，靠 subnav 互切；删主菜单按钮后靠 NAV_GROUP 保持父菜单高亮。
+{
+  const navBlock = (html.match(/<nav class="nav" id="nav">[\s\S]*?<\/nav>/) || [''])[0];
+  const navViews = [...navBlock.matchAll(/data-view="([a-z-]+)"/g)].map((m) => m[1]);
+  note(!navViews.includes('gitsrc') && !navViews.includes('ide-config') && !navViews.includes('envcfg')
+    && navViews.includes('environment') && navViews.length === 14,
+  '主菜单无冗余项：gitsrc/ide-config/envcfg 不单列，环境两页合并为单一入口',
+  `nav=${navViews.join(',')}`);
+  note(/id="view-environment"[\s\S]*?data-open-view="environment"[\s\S]*?data-open-view="envcfg"/.test(html)
+    && /id="view-envcfg"[\s\S]*?data-open-view="environment"[\s\S]*?data-open-view="envcfg"/.test(html),
+  '环境两页顶部均有「环境适配 / 环境配置」互切 subnav');
+  note(app.includes("gitsrc: 'repos'") && app.includes("'ide-config': 'ide'") && app.includes("envcfg: 'environment'"),
+  'NAV_GROUP 映射完整：被去重的子页打开时父菜单保持高亮');
+}
 note(html.includes('id="docker-container-filter"') && html.includes('id="docker-stat-grid"')
   && app.includes('function renderDockerContainers') && app.includes('class="dk-ops"'),
 'Docker 列表筛选、统计卡与操作按钮分组已补齐');
@@ -114,7 +129,7 @@ note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
 // 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
-const CACHE_STAMP = '20261121b';
+const CACHE_STAMP = '20261122d';
 const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
 note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
 
@@ -415,6 +430,18 @@ note(html.includes('dk-pref') && css.includes('.grid-2 > label:not(.check)')
 note(html.includes('id="gitsrc-cancel"') && html.includes('id="gitsrc-form-title"')
   && app.includes('data-gitsrc-op="edit"') && app.includes("method: 'PUT'"),
 '外部 Git 源具备编辑态与 PUT 更新链路');
+
+// v0.4.27：Git 源添加/编辑表单的本源代理覆盖（解决外部 HTTPS 源经全局 socks5 无法列 REST 目录）。
+// HTML：表单内含 name="proxy" + id="gitsrc-proxy" + REST 仅支持 http(s)/direct 的提示；
+// 前端：回显 s.proxyOverride；后端：create/update 经 applySourceProxy 写入 git 作用域单项覆盖。
+note(html.includes('id="gitsrc-proxy"') && html.includes('name="proxy"')
+  && html.includes('id="gitsrc-proxy-note"') && html.includes('列仓库 / 分支走 REST API'),
+'Git 源表单含本源代理输入框与 REST 仅 http(s)/direct 的说明');
+note(app.includes('proxyInput.value = s.proxyOverride') && app.includes('s.effectiveProxy'),
+'Git 源编辑回显本源代理覆盖与当前生效代理');
+note(gitSourcesSrc.includes('applySourceProxy') && gitSourcesSrc.includes('proxyModule.setOverride(\'git\'')
+  && gitSourcesSrc.includes('proxyOverride') && gitSourcesSrc.includes("proxyModule.removeOverride('git', id)"),
+'后端 Git 源增删改写代理单项覆盖且列表回显脱敏 proxyOverride');
 note(html.includes('id="storage-breadcrumb"') && html.includes('id="server-poll-interval"')
   && html.includes('id="clone-conflict"'),
 '宝塔式路径条、服务器自动刷新控件与克隆冲突提示区齐全');
@@ -541,6 +568,32 @@ note(archiveSrc.includes('function detectFormat') && archiveSrc.includes('functi
 note((html.match(/socks5:\/\/127\.0\.0\.1:1080/g) || []).length >= 5
   && app.includes('socks5://127.0.0.1:1080'),
 '代理地址输入框 placeholder 统一带 socks5:// 示例（全局 / 分组 / Git 规则 / 单项覆盖 / 各对象）');
+
+// v0.4.27：代理地址说明清晰化 —— placeholder 明确「只填一个值 + direct 直连 + 留空继承」，
+// 且代理页顶部有权威「代理地址怎么填」四选一格式卡；禁止退回晦涩的斜杠堆叠写法。
+note(html.includes('代理地址怎么填')
+  && html.includes('每个代理框<b>只填一个值</b>')
+  && html.includes('不走代理的地址（NO_PROXY）'),
+'代理页顶部有「代理地址怎么填」四选一格式说明卡');
+note(!/placeholder="http:\/\/127\.0\.0\.1:7890 \/ socks5/.test(html)
+  && !/placeholder="http:\/\/127\.0\.0\.1:7890 \/ socks5/.test(app)
+  && (html.match(/填一个地址：如 http:\/\/127\.0\.0\.1:7890/g) || []).length >= 5,
+'代理输入框已改为「填一个地址」清晰文案，无斜杠堆叠占位符');
+
+// v0.4.28：「测试全局代理」结果框必须与按钮同卡（此前被放在页底「优先级规则」卡，
+// 点顶部按钮无可见反馈）；且成功 / 失败两条分支都要 toast，不能只写隐藏/异地元素。
+{
+  const btnIdx = html.indexOf('id="proxy-test-global"');
+  const resIdx = html.indexOf('id="proxy-test-result"');
+  const between = btnIdx >= 0 && resIdx > btnIdx ? html.slice(btnIdx, resIdx) : '';
+  const sameCard = between !== '' && !between.includes('<div class="card"');
+  note(sameCard && (html.match(/id="proxy-test-result"/g) || []).length === 1,
+    '测试全局代理：结果框与按钮同卡且唯一（不再藏在页底优先级规则卡）');
+  const m = app.match(/\$\('#proxy-test-global'\)\.addEventListener\([\s\S]*?\n\}\);/);
+  const handler = m ? m[0] : '';
+  note(/\btoast\(/.test(handler) && /测试失败/.test(handler) && /测试成功|全局代理可用|直连成功/.test(handler),
+    '测试全局代理：成功与失败均有 toast 明显提示');
+}
 
 // v0.4.13：「新建」不再立即落库，发送第一条消息时才创建会话（两页一致）。
 note(app.includes('新建只重置为草稿态，不立即落库')

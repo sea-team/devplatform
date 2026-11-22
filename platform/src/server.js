@@ -1500,8 +1500,11 @@ app.post('/api/ai/models/fetch', wrap(async (req, res) => {
   // SSRF 防护（v0.4.23）：探测接口会由服务端直接请求 baseURL，同样受属地分级约束。
   aiNetworkPolicy.assertAllowed(b.baseURL, req.user);
   const formProxy = String(b.proxy || '').includes('******') ? '' : String(b.proxy || '');
+  // 与保存接口 /api/ai/providers 保持一致：表单回显的 apiKey 可能是脱敏占位符
+  // （形如 sk-a****1234）或全星占位符，识别到时回退到已保存的真实 key，
+  // 避免拿假 key 请求上游导致 502。
   let apiKey = String(b.apiKey || '');
-  if (!apiKey && b.id) {
+  if ((!apiKey || apiKey.includes('****')) && b.id) {
     const saved = state().aiProviders.find((p) => p.id === b.id);
     if (saved && saved.apiKey) apiKey = saved.apiKey;
   }

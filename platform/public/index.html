@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261121b" />
+  <link rel="stylesheet" href="/style.css?v=20261122d" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -63,16 +63,13 @@
         <button class="nav-item active" data-view="overview"><span class="ico">◈</span>总览</button>
         <button class="nav-item" data-view="repos"><span class="ico">⑂</span>Git 仓库</button>
         <button class="nav-item" data-view="ide"><span class="ico">⌘</span>在线 IDE</button>
-        <button class="nav-item" data-view="ide-config"><span class="ico">⎈</span>IDE 配置</button>
         <button class="nav-item" data-view="storage"><span class="ico">▤</span>存储 / 文件</button>
         <button class="nav-item" data-view="builds"><span class="ico">⚙</span>构建 · 部署</button>
         <button class="nav-item" data-view="servers"><span class="ico">▣</span>服务器</button>
         <button class="nav-item" data-view="extensions"><span class="ico">▦</span>扩展 / 数据库</button>
-        <button class="nav-item" data-view="gitsrc"><span class="ico">⑃</span>Git 源</button>
         <button class="nav-item" data-view="docker"><span class="ico">⬡</span>Docker 管理</button>
         <button class="nav-item" data-view="proxy"><span class="ico">⇄</span>代理配置</button>
-        <button class="nav-item" data-view="environment"><span class="ico">⌬</span>环境适配</button>
-        <button class="nav-item" data-view="envcfg"><span class="ico">⚙</span>环境配置</button>
+        <button class="nav-item" data-view="environment"><span class="ico">⌬</span>环境</button>
         <button class="nav-item" data-view="ai"><span class="ico">✦</span>AI 模型配置</button>
         <button class="nav-item" data-view="ops"><span class="ico">◎</span>AI 运维</button>
         <button class="nav-item" data-view="aichat"><span class="ico">✧</span>AI 会话</button>
@@ -257,7 +254,7 @@
                   <label id="repo-password-field">密码 / 令牌<input name="password" type="password" placeholder="密码或 PAT" autocomplete="new-password" /></label>
                   <label id="repo-token-field" hidden>访问令牌 Token<input name="token" type="password" placeholder="ghp_... / Gitea Token" autocomplete="new-password" /></label>
                 </div>
-                <label>本次请求代理（可选）<input name="proxy" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空继承" /></label>
+                <label>本次请求代理（可选）<input name="proxy" placeholder="填一个地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连；留空继承上级" /></label>
                 <label>TLS 证书校验<select name="insecure">
                   <option value="auto">跟随 Git 源 / 全局设置（默认严格校验）</option>
                   <option value="on">忽略证书校验（仅限可信内网应急）</option>
@@ -333,7 +330,7 @@
                 <label id="clone-password-field">密码 / 个人访问令牌<input name="password" id="clone-password" type="password" placeholder="GitHub 请填 PAT，不要填登录密码" autocomplete="new-password" /></label>
                 <label id="clone-token-field" hidden>访问令牌 Token<input name="token" id="clone-token" type="password" placeholder="ghp_... / Gitea Token / GitLab PAT" autocomplete="new-password" /></label>
               </div>
-              <label>本次克隆代理（可选）<input name="proxy" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空继承" /></label>
+              <label>本次克隆代理（可选）<input name="proxy" placeholder="填一个地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连；留空继承上级" /></label>
               <label>TLS 证书校验（本次克隆）<select name="insecure">
                 <option value="auto">跟随 Git 源 / 全局设置（默认严格校验）</option>
                 <option value="on">忽略证书校验（仅限可信内网应急）</option>
@@ -892,7 +889,7 @@
                 <label>挂载路径<input name="mountPath" placeholder="/local" required /></label>
                 <label>驱动<select name="driver" id="ol-driver"></select></label>
               </div>
-              <label>驱动配置 addition（JSON）<textarea name="addition" rows="5" placeholder='{"root_folder_path":"/data"}'></textarea></label>
+              <label>驱动配置参数（JSON，OpenList 里叫 addition）<textarea name="addition" rows="5" placeholder='例如 {"root_folder_path":"/data"}——不同驱动字段不同，可到「WebDAV / 驱动」页点「模板」复制'></textarea></label>
               <div class="grid-2">
                 <label>备注<input name="remark" placeholder="可选" /></label>
                 <label>排序序号<input name="order" type="number" value="0" /></label>
@@ -1062,7 +1059,7 @@
               </div>
               <label>私钥 PEM 内容（可选）<textarea name="privateKey" rows="2" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
               <label>或私钥文件路径（可选）<input name="privateKeyPath" placeholder="C:/Users/you/.ssh/id_rsa （容器内请填挂载后的路径）" /></label>
-              <label>单个服务器代理（可选）<input name="proxy" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空继承" /></label>
+              <label>单个服务器代理（可选）<input name="proxy" placeholder="填一个地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连；留空继承上级" /></label>
               <div class="notice">
                 <b>代理填写说明</b>：支持 <code>http://user:pass@host:port</code>、<code>https://…</code>、<code>socks5://…</code>（SSH 走隧道）。<b>留空</b>表示继承下一级；填 <code>direct</code> 表示明确直连，会清除子进程代理变量。内网 IP 建议在「代理配置 → 全局 NO_PROXY」里排除。<br />
                 私钥带口令时务必填写「私钥密码」，否则 SSH 会报解密失败。接口不会回传凭据明文，表单里显示 <code>******</code> 时保留原值即可。
@@ -1145,7 +1142,7 @@
               <input type="hidden" name="kind" id="provider-kind" value="api" />
               <div class="grid-3">
                 <label>服务名称<input name="name" placeholder="DeepSeek / 本机 Codex" required /></label>
-                <label>代理地址（可选）<input name="proxy" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空继承" /></label>
+                <label>代理地址（可选）<input name="proxy" placeholder="填一个地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连；留空继承上级" /></label>
                 <label class="check"><input type="checkbox" name="enabled" checked /> 启用该服务</label>
               </div>
               <div class="hint">单个 AI 服务代理 &gt; AI 服务分组代理 &gt; 全局代理。API 服务走 HTTP 代理转发，本地 CLI 注入 <code>HTTP_PROXY / HTTPS_PROXY / ALL_PROXY</code>；留空继承下一级，<code>direct</code> 强制直连。格式与示例见「代理配置」页。</div>
@@ -1242,12 +1239,33 @@
 
         <!-- 代理配置 -->
         <section class="page" id="view-proxy">
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-head"><h2>代理地址怎么填</h2><span class="muted">本页及各对象表单里的代理输入框都按这个规则填</span></div>
+            <div class="hint" style="margin-bottom:10px">每个代理框<b>只填一个值</b>（不是多个），从下面四种里选一种：</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>你想怎么做</th><th>填什么</th><th>示例</th></tr></thead>
+                <tbody>
+                  <tr><td>走 HTTP 代理（最常用，如 Clash / Surge 的 HTTP 口）</td><td><code>http://地址:端口</code>，需认证则 <code>http://账号:密码@地址:端口</code></td><td><code>http://127.0.0.1:7890</code></td></tr>
+                  <tr><td>走 SOCKS5 代理（SSH 隧道 / 部分客户端）</td><td><code>socks5://地址:端口</code></td><td><code>socks5://127.0.0.1:1080</code></td></tr>
+                  <tr><td>明确不走代理（即使上级配了代理）</td><td><code>direct</code></td><td><code>direct</code></td></tr>
+                  <tr><td>沿用上一级的设置（不单独指定）</td><td><b>留空</b>（什么都不填）</td><td>—</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="notice" style="margin-top:10px">
+              <b>优先级</b>（命中即停止）：单项对象覆盖 &gt; Git Host 匹配规则 &gt; 分组代理 &gt; 全局代理。<br />
+              <b>内网地址别走代理</b>：像 <code>10.0.0.0/8</code>、<code>127.0.0.1</code> 这类内网地址，填到下方「不走代理的地址（NO_PROXY）」里，用英文逗号分隔，避免它们被错误地送去外网代理。<br />
+              <b>安全</b>：URL 里写的账号密码只保存在 <code>state.json</code>，界面一律显示 <code>******</code>。
+            </div>
+          </div>
+
           <div class="card">
             <div class="card-head"><h2>全局代理</h2><span class="muted" id="proxy-capability">检测中…</span></div>
             <form id="proxy-global-form" class="form">
               <div class="grid-2">
-                <label>全局代理地址<input name="url" id="proxy-global-url" placeholder="http://127.0.0.1:7890 / socks5://... / direct" /></label>
-                <label>NO_PROXY 绕过列表<input name="noProxy" id="proxy-global-no" placeholder="localhost,127.0.0.1,10.0.0.0/8" /></label>
+                <label>全局代理地址<input name="url" id="proxy-global-url" placeholder="填一个地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连；留空不设全局代理" /></label>
+                <label>不走代理的地址（NO_PROXY）<input name="noProxy" id="proxy-global-no" placeholder="用英文逗号分隔，如 localhost,127.0.0.1,10.0.0.0/8；这些地址绕过代理直连" /></label>
               </div>
               <label class="check"><input type="checkbox" name="enabled" id="proxy-global-enabled" /> 启用全局代理</label>
               <div class="form-actions">
@@ -1256,6 +1274,7 @@
               </div>
             </form>
             <div class="notice">留空 = 继续向下继承；<code>direct</code> = 明确直连并清除子进程继承的代理变量。URL 中的账号密码只存 <code>state.json</code>，界面一律显示 ******。</div>
+            <pre class="log short" id="proxy-test-result" hidden style="margin-top:10px">—</pre>
           </div>
 
           <div class="card">
@@ -1269,7 +1288,7 @@
             <div class="hint">按仓库地址的主机名匹配，支持精确值（<code>github.com</code>）与通配符（<code>*.gitea.internal</code>）；多条规则按添加顺序，先命中先生效。常用来「外网走代理、内网直连」。</div>
             <form id="proxy-rule-form" class="row">
               <input name="pattern" placeholder="github.com 或 *.gitea.internal" required />
-              <input name="url" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct" required />
+              <input name="url" placeholder="代理地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连" required />
               <input name="note" placeholder="备注（可选）" />
               <button class="btn btn-sm btn-primary" type="submit">添加规则</button>
             </form>
@@ -1304,7 +1323,6 @@
             <div class="card">
               <div class="card-head"><h2>优先级规则</h2><span class="muted">命中即停止</span></div>
               <div id="proxy-priority" class="arch"></div>
-              <pre class="log short" id="proxy-test-result" hidden>—</pre>
             </div>
           </div>
         </section>
@@ -1431,6 +1449,11 @@
 
         <!-- 环境适配中心（v0.3.4）：换机器 / 换部署方式时自动检查处理 -->
         <section class="page" id="view-environment">
+          <div class="subnav">
+            <span class="subnav-label">环境</span>
+            <button class="subnav-btn active" data-open-view="environment">环境适配</button>
+            <button class="subnav-btn" data-open-view="envcfg">环境配置（.env）</button>
+          </div>
           <div class="card" style="margin-bottom:14px">
             <div class="card-head"><h2>当前环境</h2><span class="muted">指纹变化即判定为环境切换，启动时自动重检</span></div>
             <div id="env-summary" class="hint">正在体检当前运行环境…</div>
@@ -1497,6 +1520,11 @@
 
         <!-- 环境配置（v0.3.8）：.env 可视化管理 + 诊断联动的配置指引 -->
         <section class="page" id="view-envcfg">
+          <div class="subnav">
+            <span class="subnav-label">环境</span>
+            <button class="subnav-btn" data-open-view="environment">环境适配</button>
+            <button class="subnav-btn active" data-open-view="envcfg">环境配置（.env）</button>
+          </div>
           <!-- ADMIN_TOKEN 鉴权说明（说明补全，不改版本号）：状态由 /api/env-config 的 security 字段填充 -->
           <div class="card" style="margin-bottom:14px" id="envcfg-auth-card">
             <div class="card-head">
@@ -1638,6 +1666,12 @@
               <option value="off">始终严格校验（覆盖全局开关）</option>
             </select>
           </label>
+          <label class="field" id="gitsrc-proxy-field">本源代理（覆盖全局，可选）
+            <input name="proxy" id="gitsrc-proxy" placeholder="填一个地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连；留空继承上级" autocomplete="off" />
+          </label>
+          <div class="notice" id="gitsrc-proxy-note">
+            <b>列仓库 / 分支走 REST API，只支持 <code>http://</code> / <code>https://</code> 代理或 <code>direct</code></b>；若全局代理是 <code>socks5://</code>，请在此单独填一个 HTTP 代理或 <code>direct</code> 才能列出仓库。<code>socks5</code> 仅对 <code>git clone</code> 生效。留空则继承「代理配置」页的分组 / 全局设置；格式详见「代理配置」页顶部说明。
+          </div>
           <div class="notice warn" id="gitsrc-tls-note" hidden>
             <b>安全提醒</b>：忽略证书校验会失去防中间人攻击能力，只建议用于可信任内网的自建服务临时应急；长期方案是为服务端续期 / 换用受信任证书。该设置同时作用于仓库列表 API 与 <code>git clone</code>（<code>http.sslVerify=false</code>），但不会写进仓库的 <code>.git/config</code>。<br />
             全局开关在「环境配置」页：<code>DP_TLS_INSECURE=1</code>，可用 <code>DP_TLS_INSECURE_HOSTS</code> 限定域名。
@@ -1807,7 +1841,7 @@
           <label>显示名称<input name="name" /></label>
           <label>描述<input name="description" /></label>
           <label>备注（仅平台可见）<input name="note" placeholder="可选" /></label>
-          <label>单项代理覆盖<input name="proxy" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空清除覆盖" /></label>
+          <label>单项代理覆盖<input name="proxy" placeholder="填一个地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连；留空清除覆盖" /></label>
           <div class="collab-inline" id="collab-inline-repoAcl" hidden></div>
           <div class="form-actions"><button class="btn btn-primary" type="submit">保存</button></div>
         </form>
@@ -1825,7 +1859,7 @@
       <div class="modal-body">
         <div class="notice">只对该对象生效，优先级高于 Git Host 规则 / 分组 / 全局代理。可填 <code>http://…</code>、<code>socks5://…</code>、<code>direct</code>；<b>留空保存 = 删除覆盖</b>。已有地址出于安全不回显，填新值即覆盖。</div>
         <form id="objproxy-form" class="form" style="margin-top:12px">
-          <label>代理地址<input name="url" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空删除" /></label>
+          <label>代理地址<input name="url" placeholder="填一个地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连；留空删除该覆盖" /></label>
           <label>备注（可选）<input name="note" placeholder="例如：仅该仓库走内网代理" /></label>
           <div class="form-actions">
             <button class="btn btn-primary" type="submit">保存覆盖</button>
@@ -1876,6 +1910,6 @@
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
   <script src="/vendor/qrcode.js"></script>
-  <script src="/app.js?v=20261121b"></script>
+  <script src="/app.js?v=20261122d"></script>
 </body>
 </html>

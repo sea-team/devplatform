@@ -29,8 +29,8 @@ const VIEW_META = {
   'docker-networks': ['Docker · 网络', '容器网络的创建、驱动与作用域'],
   'docker-compose': ['Docker · 编排', 'Compose YAML 模板登记（不在平台内执行）'],
   proxy: ['代理配置', '全局 / 分组 / Git Host 规则 / 单项覆盖，四级优先级解析与连通性测试'],
-  environment: ['环境适配', '自动识别环境、体检、切换档案与自动处置，换机器无需改代码'],
-  envcfg: ['环境配置', '查看与管理 .env：白名单写入、脱敏、待重启提示与诊断联动的配置指引'],
+  environment: ['环境 · 自适应诊断', '自动识别环境、体检、切换档案与自动处置，换机器无需改代码'],
+  envcfg: ['环境 · 变量配置', '查看与管理 .env：白名单写入、脱敏、待重启提示与诊断联动的配置指引'],
   ai: ['配置 AI 模型', 'API 服务、宿主机 / WSL 本地 AI 程序与代理'],
   'ai-list': ['已配置模型', '查看、编辑、删除已保存的 AI 服务'],
   'ai-test': ['连通性测试', '向已保存的服务发起真实请求验证可用性'],
@@ -50,12 +50,13 @@ const MODULE_ICONS = {
 };
 // 子页面归属：侧边栏主项保持高亮，标签栏仍显示各自的子页标题。
 const NAV_GROUP = {
-  'repo-new': 'repos', 'repo-clone': 'repos', 'git-runtime': 'repos',
+  'repo-new': 'repos', 'repo-clone': 'repos', 'git-runtime': 'repos', gitsrc: 'repos',
   'storage-conn': 'storage', 'storage-mounts': 'storage', 'storage-drivers': 'storage',
   'build-start': 'builds', deploys: 'builds', 'server-new': 'servers',
-  'ai-list': 'ai', 'ai-test': 'ai',
+  'ai-list': 'ai', 'ai-test': 'ai', 'ide-config': 'ide',
   'docker-containers': 'docker', 'docker-images': 'docker', 'docker-volumes': 'docker',
   'docker-networks': 'docker', 'docker-compose': 'docker',
+  envcfg: 'environment',
 };
 
 let currentView = 'overview';
@@ -2303,7 +2304,7 @@ function renderProxyGroups(cfg) {
   $('#proxy-groups').innerHTML = PROXY_SCOPES.map((scope) => `
     <div class="row gap wrap" style="margin-bottom:8px">
       <span class="muted" style="min-width:130px">${esc(PROXY_LABELS[scope])}</span>
-      <input data-proxy-group-input="${scope}" placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:1080 / direct / 留空继承"
+      <input data-proxy-group-input="${scope}" placeholder="填一个地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连；留空继承全局"
         value="${esc(cfg.groups[scope].direct ? 'direct' : (cfg.groups[scope].url || ''))}" style="flex:1;min-width:220px" />
       <button class="btn btn-sm btn-primary" data-proxy-group-save="${scope}">保存</button>
       <button class="btn btn-ghost btn-sm" data-proxy-group-clear="${scope}">清空</button>
@@ -3376,10 +3377,15 @@ async function detectPrograms(force = false) {
   detectedOnce = true;
   $('#detect-status').textContent = '检测中…（扫描 WSL 发行版可能需要十几秒）';
   try {
-    renderDetected(await api(`/ai/local/programs${force ? '?refresh=1' : ''}`));
+    const data = await api(`/ai/local/programs${force ? '?refresh=1' : ''}`);
+    renderDetected(data);
+    const n = (data.host || []).length + ((data.wsl && data.wsl.distros) || [])
+      .reduce((sum, d) => sum + (d.programs || []).length, 0);
+    toast(`检测完成：找到 ${n} 个可用 AI 程序`);
   } catch (e) {
     $('#detect-status').textContent = `检测失败：${e.message}`;
     $('#detected-list').innerHTML = errorBlock(e.message);
+    toast(`检测失败：${e.message}`, true);
   }
 }
 
@@ -5586,6 +5592,17 @@ function fillGitSourceForm(s) {
   form.elements.username.value = s.username || '';
   form.elements.token.value = '';
   form.elements.password.value = '';
+  // 代理：本源独立覆盖值（脱敏）直接回填；脱敏串提交时由服务端 unmask 复用原值。
+  // 若为空则 placeholder 提示当前继承的生效代理，方便区分「没单独设」与「设了但看不懂」。
+  const proxyInput = $('#gitsrc-proxy');
+  if (proxyInput) {
+    proxyInput.value = s.proxyOverride || '';
+    proxyInput.placeholder = s.proxyOverride
+      ? '填一个地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连；留空继承上级'
+      : (s.effectiveProxy
+        ? `当前继承：${s.effectiveProxy}；填地址覆盖，direct 直连，留空继续继承`
+        : '填一个地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连；留空继承上级');
+  }
   $('#gitsrc-token').placeholder = s.hasToken ? `留空沿用原值（当前 ${s.tokenMasked || '已保存'}）` : '留空表示不设置 Token';
   $('#gitsrc-password').placeholder = s.hasPassword ? `留空沿用原值（当前 ${s.passwordMasked || '已保存'}）` : '留空表示不设置密码';
   $('#gitsrc-form-title').textContent = `编辑 Git 源 · ${s.label}`;
@@ -6258,11 +6275,17 @@ $('#proxy-global-form').addEventListener('submit', async (e) => {
 });
 $('#proxy-test-global').addEventListener('click', async () => {
   const box = $('#proxy-test-result');
-  box.hidden = false; box.textContent = '测试中…';
+  box.hidden = false; box.textContent = '测试中…（正在通过代理访问 https://github.com）';
   try {
     const d = await api('/proxy/test', { method: 'POST', body: { global: true, target: 'https://github.com' } });
-    box.textContent = `✔ ${d.source} · ${d.proxy || '直连'} · ${d.ms} ms${d.status ? ` · HTTP ${d.status}` : ''} · 目标 ${d.target}`;
-  } catch (err) { box.textContent = `✖ ${err.message}`; }
+    const via = d.proxy ? `代理 ${d.proxy}` : '直连（未配置代理或已设 direct）';
+    const detail = `✔ 测试成功 · ${via} · ${d.ms} ms${d.status ? ` · HTTP ${d.status}` : ''} · 目标 ${d.target}`;
+    box.textContent = detail;
+    toast(d.proxy ? `全局代理可用：${d.proxy}（${d.ms} ms）` : `网络可达：直连成功（${d.ms} ms，当前未走代理）`);
+  } catch (err) {
+    box.textContent = `✖ 测试失败：${err.message}`;
+    toast(`全局代理测试失败：${err.message}`, true);
+  }
 });
 $('#proxy-rule-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -6433,7 +6456,9 @@ $('#model-fetch').addEventListener('click', async () => {
     }
     renderProviderModelRows(getDefaultModelValue());
     renderAvailableModels();
-    box.textContent = `已获取 ${d.count || providerAvailableModels.length} 个可用模型${d.effectiveProxy ? ' · 代理 ' + d.effectiveProxy : ''}：已全部勾选加入模型目录，点击胶囊可取消`;
+    const got = d.count || providerAvailableModels.length;
+    box.textContent = `已获取 ${got} 个可用模型${d.effectiveProxy ? ' · 代理 ' + d.effectiveProxy : ''}：已全部勾选加入模型目录，点击胶囊可取消`;
+    toast(got ? `成功获取 ${got} 个可用模型` : '上游未返回可用模型，请检查地址与 Key');
   } catch (err) {
     providerAvailableModels = []; renderAvailableModels();
     box.textContent = `获取失败：${err.message}`;
@@ -6449,7 +6474,8 @@ $('#provider-test').addEventListener('click', async (e) => {
     const body = providerFormBody($('#provider-form'));
     const d = await api('/ai/test', { method: 'POST', body: { ...body, prompt: '用一句话说明你是什么，不要执行任何操作。' } });
     box.textContent = `[${d.kind === 'cli' ? '本地 CLI' : 'API'}] ${d.answer}`;
-  } catch (err) { box.textContent = `失败：${err.message}`; toast(err.message, true); }
+    toast('测试成功：服务已正常响应');
+  } catch (err) { box.textContent = `失败：${err.message}`; toast(`测试失败：${err.message}`, true); }
 });
 
 $('#chat-form').addEventListener('submit', async (e) => {
@@ -6458,7 +6484,8 @@ $('#chat-form').addEventListener('submit', async (e) => {
   try {
     const d = await api('/ai/chat', { method: 'POST', body: { providerId: $('#chat-provider').value, prompt: $('#chat-prompt').value } });
     $('#chat-result').textContent = `[${d.provider} / ${d.model}]\n${d.answer}`;
-  } catch (err) { $('#chat-result').textContent = `失败：${err.message}`; toast(err.message, true); }
+    toast(`测试成功：${d.provider} / ${d.model} 已响应`);
+  } catch (err) { $('#chat-result').textContent = `失败：${err.message}`; toast(`测试失败：${err.message}`, true); }
 });
 
 /* ------------------- v0.3.6 · Docker 分区交互增强 ------------------- */

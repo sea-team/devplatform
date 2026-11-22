@@ -3409,3 +3409,38 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 - `typescript` / `@types/node` 仅加入 `devDependencies`。部署与 Dockerfile 均用 `npm install --omit=dev`，**生产镜像不含 TS**；只有 CI 的 `npm ci` 与本地开发会安装。
 - 已验证：新增 tsconfig 与依赖后，`npm run build`（生成 v0.4.25 的 dist/exe）、`npm run check`、`check-frontend.js` 全部通过，运行与构建零影响。
 - 定位新增错误：`cd platform && npx tsc -p tsconfig.typecheck.json --pretty false`。
+
+---
+
+## §64 v0.4.27 · 配置体验完善 + 脱敏 key 加固 + Git 源本源代理
+
+### 64.1 配置说明与交互反馈
+
+- 代理配置页新增格式说明卡：HTTP / SOCKS5 / `direct` / 留空四种取值的含义、优先级顺序、NO_PROXY 与安全提示；8 处代理输入框占位文案统一，避免把示例误当必填格式。
+- 「测试全局代理」成功/失败均弹 toast：直连时提示"网络可达·未走代理"，不再误报"代理可用"；同步补齐 `detectPrograms`、`model-fetch`、`provider-test`、`chat-form` 等同类按钮的成功反馈。
+- 静态资源缓存戳刷新为 `20261122d`。
+
+### 64.2 菜单精简去重
+
+主菜单由 17 项精简为 14 项：删除冗余的「Git源」（Git 仓库内已有同源页面）与「IDE配置」；环境适配两页合并为单一「环境」入口，进入后通过标签切换。补 `NAV_GROUP` 映射与视图标题前缀，前端自检新增菜单无冗余项、环境两页互切护栏。
+
+### 64.3 脱敏 apiKey 回退加固
+
+探测接口 `/api/ai/models/fetch` 原先仅对 `proxy` 过滤 `******`，未处理 `apiKey` 脱敏占位符；而保存接口 `/api/ai/providers` 早已识别 `****` 并回退已保存真实 key。本版对齐——当 `apiKey` 为空或含 `****` 且携带 `id` 时，从已保存服务取回真实 key 再探测，避免表单回显的脱敏 key 请求上游导致 502。不改变正常调用路径。
+
+### 64.4 Git 源本源代理（新功能）
+
+**问题**：外部 HTTPS Git 源（`https://47.100.44.43:6443`）在全局 SOCKS5 代理下列 REST 目录报 `Invalid URL protocol`——平台设计约定：REST API 的 dispatcher 只支持 http/https 代理，SOCKS 仅用于 SSH/本地 CLI clone。
+
+**方案**：不新造 `source.proxy` 字段（避免双真相），复用既有 `proxy.overrides.git[源id]` 单项覆盖——`gitProxyFor` 本就按源 id 查 override 且优先于分组/全局，解析侧零改动，REST 列目录/分支/连通测试自动生效。
+
+- `gitSources.js`：`publicSource` 新增只读 `proxyOverride`（脱敏，`direct` 原样保留以便回填）；新增 `applySourceProxy()`（写入/清除覆盖）；创建/编辑先校验代理格式再写库；删除源时顺带清理覆盖。
+- 前端：Git 源添加/编辑表单 TLS 字段后新增代理输入框 + 说明卡（REST 仅支持 http(s)/direct，socks5 仅对 clone 生效）；编辑时回显本源代理，未单独设置时 placeholder 提示当前继承的生效代理。
+- 实测：该源设 `proxy=direct` 后回显 `proxyOverride=direct`/`effectiveProxy=直接连接`，列仓库由 500 变为 200（34 个仓库）、`root/agent_data` 分支 200；清除覆盖恢复继承；非法 `ftp://` 返回 400 拒绝。
+
+### 64.5 验证
+
+- 84 项只读/探测接口零失败（三类缺参探测按预期 400）；AI 单轮对话、AI 运维、Harness 会话、运维会话、脱敏 key 拉模型五种实测均返回真实内容；Git 仓库/源仓库分支、服务器 SSH 实测通过。
+- `node --check` 全过、前端自检全过（新增多条护栏）、类型检查 78 错=基线未突破。
+- 详见《接口完整性测试报告.md》。本版改了前后端代码，`dist/` 与 `platform.exe` 由 CI 在推送 tag 时重建。
+
