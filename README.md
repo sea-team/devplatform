@@ -5,6 +5,8 @@
 > 本地代码：`devplatform/`，Git 分支 `main`
 > 本文中的 `10.0.0.246` 为示例/测试机地址，换环境时请全局替换。
 >
+> **接手开发 / AI 接入必读**：[`docs/AI-HANDOFF.md`](docs/AI-HANDOFF.md)（单文件版，整篇贴给新 AI 会话即可：启动简报 + 架构细节 + 红线 + 验证发版链路合一）。`docs/AI-DEVELOPMENT-GUIDE.md` 与 `docs/AI-ONBOARDING-BRIEF.md` 为历史归档，请勿再作为投喂入口。本文只讲功能与版本演进。
+>
 > 版本演进详见 `release-notes.md`；本文 §19 起按版本顺序记录各阶段功能与修复，最新为 §69。
 
 ---
