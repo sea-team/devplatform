@@ -58,6 +58,8 @@ if (-not (Test-Path -LiteralPath $Template)) { throw "缺少发行模板目录 $
 
 $SvcDir   = if ($ServicesDir) { $ServicesDir } else { Join-Path $WinDir 'bin' }
 $SvcFiles = @('gitea.exe', 'openlist.exe', 'code-tunnel.exe')
+# v0.4.29：WinFsp MSI 随全量包分发（SMB 网关 / rclone mount 依赖），单独校验存在性但不做 MZ 头检查。
+$SvcMsi   = @('winfsp.msi')
 $SvcExtra = @('services-manifest.json', 'THIRD-PARTY.txt')
 if ($IncludeServices) {
   if (-not (Test-Path -LiteralPath $SvcDir)) { throw "缺少随包二进制目录 $SvcDir；请先运行 windows\fetch-services.ps1" }
@@ -147,7 +149,7 @@ try {
     [System.IO.Compression.ZipFile]::CreateFromDirectory($base, $liteZip, $level, $true)
     $targetBin = Join-Path $targetWin 'bin'
     New-Item -ItemType Directory -Path $targetBin -Force | Out-Null
-    foreach ($n in @($SvcFiles + $SvcExtra)) {
+    foreach ($n in @($SvcFiles + $SvcMsi + $SvcExtra)) {
       $src = Join-Path $SvcDir $n
       if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $targetBin $n) -Force }
     }
@@ -155,10 +157,10 @@ try {
   [System.IO.Compression.ZipFile]::CreateFromDirectory($base, $fullZip, $level, $true)
 
   if ($IncludeServices) {
-    # 服务补充包：顶层直接是三个 exe + 清单，供轻量包 / clone 用户放进 windows\bootstrap\
+    # 服务补充包：顶层直接是三个 exe + WinFsp MSI + 清单，供轻量包 / clone 用户放进 windows\bootstrap\
     $svcStage = Join-Path $stage 'services'
     New-Item -ItemType Directory -Path $svcStage -Force | Out-Null
-    foreach ($n in @($SvcFiles + $SvcExtra)) {
+    foreach ($n in @($SvcFiles + $SvcMsi + $SvcExtra)) {
       $src = Join-Path $SvcDir $n
       if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $svcStage $n) -Force }
     }

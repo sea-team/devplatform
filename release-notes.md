@@ -344,13 +344,24 @@ v0.4.27 · 2026-11-22 · 配置体验完善 + 脱敏 key 加固 + Git 源本源�
   - 结构护栏：修复「上传压缩包导入」card 跨页常驻的残留问题（已归入 Git 仓库克隆页）；新增多条前端静态护栏（card 不得游离、代理说明卡存在、proxy 测试按钮与结果同卡且唯一、菜单无冗余项、环境两页互切、Git 源代理字段等）；缓存戳刷新为 20261122d。
   - 验证：84 项只读/探测接口零失败，AI 单轮/运维/Harness 会话/运维会话/脱敏拉模型五种实测均返回真实内容，Git 仓库/源仓库分支、服务器 SSH 实测通过。node --check、前端自检、类型检查（78=基线）全通过。详见 README §64 与《接口完整性测试报告.md》。
 
+v0.4.28 · 2026-11-24 · rclone 存储层 + SMB 网关 + Windows 提权与 WinFsp 自动安装
+  本版新增与修复：
+  - 工具栏下拉框统一美化：新增 select.ui-select / .ui-select-sm 样式（自定义 SVG 箭头 + 圆角描边 + hover/focus 反馈），覆盖 12 个静态与多类动态生成的工具栏下拉框，修复「远端」等控件退化为浏览器默认样式的问题。
+  - OpenList 连接根目录映射：新增按连接 id 的只读浏览接口 /api/openlist/connections/:id/root，不切 active、按归属 read 判定；文件浏览页可切换连接查看各自根目录（只读）。Windows 桌面新增 driveMount.js，把连接 WebDAV 根目录映射为本地网络盘（盘符白名单 / shell:false / 密码不回显 / 会话可见性探测），非 Windows 优雅降级。
+  - rclone 存储层：新增 platform/src/rclone.js——二进制探测安装、子命令白名单 + spawn(shell:false)、全局代理注入；支持 WebDAV / S3 / SFTP / FTP / 本地目录的远端 CRUD 与文件读写接口，响应形状对齐 OpenList；凭据用 rclone obscure 加密写入 600 权限的 rclone.conf，API 一律脱敏。Docker 下可借 docker.sock 把静态二进制安装到 data/bin。
+  - SMB 共享网关：新增 platform/src/storageGateway.js——Linux 通过 Docker API 构建带 rclone + Samba + fuse3 的网关容器，容器内 rclone mount + smbd -F，445 映射宿主机，停止即删容器、宿主机零安装；Windows 用 rclone mount + net share。/api/rclone 写操作收为管理员。
+  - Windows exe 管理员提权 + WinFsp 自动安装：SEA 构建注入 requireAdministrator 清单（双击弹 UAC、全程管理员）；官方 winfsp-2.1.25156.msi 随全量包分发并做 SHA256 校验；运行时以 WinFsp.Launcher 服务为主判据检测、msiexec /qn 静默安装，修复「非标准路径安装漏检导致重复安装 1603」的缺陷；SMB 网关卡片新增状态条与一键安装。
+  - 验证：246 实测 rclone 安装、WebDAV/local 全链路文件操作、网关容器 + Windows net use 映射成功；下拉框美化 3 条 + WinFsp 提权 6 条新增护栏，前端自检全过；npm run check 全过、类型检查 78 错=基线未突破。2026-11-24 已部署 246（health 0.4.28/normal、体检 8/0/0、登录 200、缓存戳 20261124b）。详见 README §65/§66/§67。
+  - 注意：Windows UAC 弹窗与 WinFsp 首次静默安装需在干净 Windows 机上双击 exe 复验；OpenList 暂不降级为扩展服务（用户家目录/归属表/WebDAV 仍依赖它），待 rclone 层稳定后再迁。
+
 下载哪个：
-  1) devplatform-windows.zip       推荐 · 全量包：控制台 + 三项集成服务程序。
+  1) devplatform-windows.zip       推荐 · 全量包：控制台 + 三项集成服务 + WinFsp MSI。
                                     START.bat 只启控制台；INSTALL.bat 离线装好服务。
   2) devplatform-windows-lite.zip  轻量包：只有控制台，INSTALL.bat 首次需联网下载服务。
-  3) devplatform-services.zip      仅三项官方程序 + 清单；放进轻量包 / git clone 的
+  3) devplatform-services.zip      仅三项官方程序 + WinFsp MSI + 清单；放进轻量包 / git clone 的
                                     windows\bootstrap\ 目录，即可同样离线安装。
-  4) devplatform.exe               自包含单文件，放任意空目录双击即用（只有控制台）。
+  4) devplatform.exe               自包含单文件（已请求管理员权限），放任意空目录双击即用；
+                                    首次挂载 SMB 需全量包的 WinFsp MSI 或手动安装 WinFsp。
   5) devplatform-dist.zip          组件包，供 git clone 后 windows\install.bat 自动下载。
   6) SHA256SUMS.txt                以上文件的 SHA256 校验值。
 
@@ -358,6 +369,7 @@ v0.4.27 · 2026-11-22 · 配置体验完善 + 脱敏 key 加固 + Git 源本源�
   gitea.exe        Gitea Windows x64
   openlist.exe     OpenList Windows x64
   code-tunnel.exe  VS Code 独立 CLI（code.exe 重命名），用于 serve-web 在线 IDE
+  winfsp.msi       WinFsp v2.1（内核驱动，供 rclone mount / SMB 共享使用）
 版本、来源与 SHA256 见 services-manifest.json；第三方许可见 THIRD-PARTY.txt。
 
 只跑 START.bat 时三项集成服务显示「未配置 / 离线」是预期行为，不是故障。

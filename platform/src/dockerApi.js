@@ -181,6 +181,12 @@ async function restartContainer(id) {
   return request('POST', `/containers/${encodeURIComponent(id)}/restart?${qs({ t: 10 })}`, undefined, { timeout: 40000 });
 }
 
+/** 把一次性容器固化为镜像（用于构造带 rclone+samba+fuse 的网关镜像）。 */
+async function commitContainer(id, repo, tag = 'latest') {
+  return request('POST', `/commit?${qs({ container: id, repo, tag })}`,
+    { Author: 'devplatform', Comment: 'rclone+samba+fuse storage gateway' }, { timeout: 300000 });
+}
+
 async function removeContainer(id, force = true) {
   return request('DELETE', `/containers/${encodeURIComponent(id)}?${qs({ force: force ? 1 : 0, v: 0 })}`,
     undefined, { timeout: 30000 });
@@ -312,7 +318,7 @@ async function execContainerTimed(id, cmd, timeout = 120000) {
 module.exports = {
   runContainer, SOCKET_PATH, endpoint, request,
   ping, version, listContainers, inspectContainer, imageExists, pullImage,
-  createContainer, startContainer, stopContainer, restartContainer,
+  createContainer, startContainer, stopContainer, restartContainer, commitContainer,
   removeContainer, removeVolume, containerLogs, execContainer,
   listImages, inspectImage, removeImage, loadImage, saveImage,
   listVolumes, createVolume, inspectVolume,

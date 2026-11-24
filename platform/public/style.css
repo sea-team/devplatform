@@ -924,7 +924,7 @@ tr.file-row.is-file .file-name b { font-weight: 550; }
 #view-ops .ops-head-title { min-width: 0; flex: 1 1 180px; }
 #view-ops .ops-head-title h2 { margin: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #view-ops .ops-head-tools { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
-#view-ops .ops-head-tools select { max-width: 190px; padding: 4px 7px; font-size: 12px; }
+#view-ops .ops-head-tools select:not(.ui-select) { max-width: 190px; padding: 4px 7px; font-size: 12px; }
 #view-ops .ops-head-tools .check { font-size: 12px; white-space: nowrap; }
 
 #view-ops .ops-messages {
@@ -1132,3 +1132,38 @@ tr.file-row.is-file .file-name b { font-weight: 550; }
 .model-available .model-chip:hover { border-color: var(--primary); }
 .model-available .model-chip .model-chip-add { color: var(--primary); font-weight: 700; }
 .model-available .model-chip.is-added { opacity: .5; cursor: default; }
+
+/* ===== v0.4.29 · 行内 / 工具栏下拉框统一美化 =====
+   「文件浏览 → 远端」这类控件位于 .row / .card-head / 工具条中，不在 .form /
+   .grid-2 / label.field 内，过去退化为浏览器默认控件（窄、方角、焦点无反馈）。
+   这里给所有同类控件统一紧凑卡片外观与自定义箭头，并保留键盘可达性。 */
+select.ui-select {
+  -webkit-appearance: none; appearance: none;
+  display: inline-block; vertical-align: middle;
+  min-height: 32px; padding: 6px 30px 6px 11px;
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%2364748b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    no-repeat right 9px center;
+  background-size: 12px 12px;
+  color: var(--text); font-size: 12px; font-weight: 500; line-height: 1.4;
+  cursor: pointer; outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+}
+select.ui-select:hover { border-color: var(--primary); background-color: var(--surface-2); }
+select.ui-select:focus-visible { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+select.ui-select:disabled { cursor: not-allowed; opacity: .6; }
+select.ui-select-sm { min-height: 28px; padding: 4px 26px 4px 9px; font-size: 11px; }
+.inline-field { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.ed-opts select.ui-select { max-width: 170px; }
+.ext-mode-row select.ui-select { max-width: 320px; }
+#view-ops .ops-head-tools select.ui-select { max-width: 190px; }
+
+/* ===== v0.4.29 · SMB 网关的 WinFsp 状态条 ===== */
+.winfsp-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 10px; padding: 9px 12px;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2);
+}
+.winfsp-bar .pill-mini.live { background: var(--green-soft); color: var(--green); border-color: #bbf7d0; }
+.winfsp-bar .btn { margin-left: auto; }

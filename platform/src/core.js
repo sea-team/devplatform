@@ -164,6 +164,15 @@ function defaultState() {
     directories: [],
     // Git 运行时：手工指定 git 路径 + 是否允许「容器内无 Git 时借 SSH 宿主机执行」。
     git: { bin: '', sshFallback: 'auto' },
+    // v0.4.29 rclone 存储层：二进制路径、远端清单（凭据只落 600 权限的 state.json/rclone.conf）。
+    rclone: { bin: '', configDir: '', active: '' },
+    rcloneRemotes: [],
+    // 共享网关：Linux/Docker 走专用容器（带 FUSE + Samba），Windows 走本机 rclone mount + net share。
+    storageGateway: {
+      mode: 'auto', smbPort: 445, containerName: 'devplatform-storage-gateway',
+      image: 'devplatform-storage-gateway:latest', remoteId: '', winDrive: 'Z:',
+      shareName: 'dpstorage', smbUser: 'dpstorage', smbPass: '', autoStart: false,
+    },
     backups: [],
     composeTemplates: [],
     // 分层代理：全局 / 分组 / Git Host 规则 / 单项覆盖（见 src/proxy.js）
@@ -192,7 +201,7 @@ function defaultState() {
 const OWNED_COLLECTIONS = [
   'servers', 'gitSources', 'aiProviders', 'builds', 'deploys',
   'extensions', 'composeTemplates', 'backups', 'openlistConnections',
-  'repoAcl', 'directories',
+  'rcloneRemotes', 'repoAcl', 'directories',
 ];
 const requestContext = new AsyncLocalStorage();
 const withUser = (user, fn) => requestContext.run({ user: user || null }, fn);
@@ -219,6 +228,8 @@ function loadState() {
       hiddenRepos: Array.isArray(parsed.hiddenRepos) ? parsed.hiddenRepos : [],
       // 嵌套对象要逐层补齐，避免旧 state.json 缺字段导致策略读取为 undefined。
       environment: { ...base.environment, ...(parsed.environment || {}) },
+      rclone: { ...base.rclone, ...(parsed.rclone || {}) },
+      storageGateway: { ...base.storageGateway, ...(parsed.storageGateway || {}) },
     };
   } catch {
     return defaultState();

@@ -30,6 +30,8 @@ const openlistSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 's
 const integrationsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'integrations.js'), 'utf8');
 const workspaceGitSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'workspaceGit.js'), 'utf8');
 const gitSourcesSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'gitSources.js'), 'utf8');
+const rcloneSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'rclone.js'), 'utf8');
+const gatewaySrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'storageGateway.js'), 'utf8');
 const credsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'serviceCredentials.js'), 'utf8');
 const userDirsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'userDirs.js'), 'utf8');
 const archiveSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'archive.js'), 'utf8');
@@ -37,6 +39,10 @@ const repoImporterSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform'
 const aiPolicySrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'aiNetworkPolicy.js'), 'utf8');
 const resetPwSrc = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', 'reset-admin-password.js'), 'utf8');
 const nativeSrc = fs.readFileSync(path.resolve(__dirname, '..', 'windows', 'native-services.ps1'), 'utf8');
+const buildSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'build.mjs'), 'utf8');
+const fetchSvcSrc = fs.readFileSync(path.resolve(__dirname, '..', 'windows', 'fetch-services.ps1'), 'utf8');
+const packReleaseSrc = fs.readFileSync(path.resolve(__dirname, '..', 'windows', 'pack-release.ps1'), 'utf8');
+const releaseYml = fs.readFileSync(path.resolve(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
 const errors = [];
 const note = (ok, label, extra = '') => {
   console.log(`${ok ? '✔' : '✖'} ${label}${extra ? ` · ${extra}` : ''}`);
@@ -56,12 +62,13 @@ const SUBPAGES = ['repo-new', 'repo-clone', 'git-runtime', 'storage-conn', 'stor
   'build-start', 'deploys', 'server-new', 'docker-containers', 'docker-images',
   'docker-volumes', 'docker-networks', 'docker-compose', 'ai-list', 'ai-test'];
 // v0.4.10：新增「AI 会话」独立页，总页面数 32 -> 33（AI 运维保留、二者并存）。
-note(sections.length === 33 && sections.includes('gitsrc') && sections.includes('docker')
+// v0.4.29：新增 rclone 挂载页，总页面数 33 -> 34。
+note(sections.length === 34 && sections.includes('gitsrc') && sections.includes('docker')
   && sections.includes('proxy') && sections.includes('environment') && sections.includes('envcfg')
   && sections.includes('ide-config') && sections.includes('users') && sections.includes('git-runtime')
   && sections.includes('aichat') && sections.includes('ops')
   && !sections.includes('collab') && SUBPAGES.every((v) => sections.includes(v)),
-'33 个独立页面（AI 运维 + AI 会话两页并存；资源协作页已下线）均已转为可标签化的 .page', sections.join(', '));
+'34 个独立页面（AI 运维 + AI 会话两页并存 + rclone 挂载；资源协作页已下线）均已转为可标签化的 .page', sections.join(', '));
 note(['/git-sources', '/docker/overview', '/extensions/backups', '/extensions/dbgate', '/builds/backends']
   .every((p) => app.includes(p)) && app.includes('function loadGitSources') && app.includes('function loadDocker'),
 'Git 源 / Docker 管理 / 备份 / DbGate / 构建后端接口已全部接线');
@@ -95,6 +102,15 @@ note(['/openlist/connections', 'data-olc-op="activate"', 'function renderOpenlis
   'function fillOpenlistConnectionForm']
   .every((s) => app.includes(s)) && html.includes('id="ol-conn-list"'),
 'OpenList 多连接的登记 / 切换 / 编辑 / 删除已接线');
+// v0.4.28：连接根目录映射（按 id 只读浏览，不切 active）+ Windows 网络盘映射。
+note(['/openlist/connections/${encodeURIComponent(storageState.rootMapConnId)}/root',
+  'function renderRootConnPicker', 'function applyRootMapMode', 'storageState.readonlyMapped']
+  .every((s) => app.includes(s)) && html.includes('id="ol-root-conn-picker"'),
+'连接根目录映射：选择器 + 按连接 id 只读浏览接口已接线');
+note(html.includes('id="drive-mount-card"') && html.includes('id="dm-map"')
+  && app.includes('function loadDriveMountStatus') && app.includes('/drive-mount/map')
+  && app.includes('/drive-mount/unmap') && app.includes('/drive-mount/status'),
+'Windows 网络盘映射：状态探测 + 映射 / 断开 / 查询已接线');
 note((html.match(/data-open-view=/g) || []).length >= 20
   && app.includes("document.addEventListener('click'") && app.includes('switchView(button.dataset.openView)'),
 '每个独立页都带子导航条，点击后打开对应标签');
@@ -129,9 +145,57 @@ note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
 // 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
-const CACHE_STAMP = '20261122d';
+const CACHE_STAMP = '20261124b';
 const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
 note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
+
+// v0.4.29：行内 / 工具栏下拉框统一美化——这批 select 不在 .form / .grid-2 / label.field 内，
+// 过去退化为浏览器默认控件。护栏确保所有同类控件都挂上 ui-select，样式与动态模板不漏。
+{
+  const styledIds = ['docker-target', 'docker-container-state', 'docker-tpl-height',
+    'rclone-remote-picker', 'ol-root-conn-picker', 'server-poll-interval', 'ext-mode',
+    'ops-provider', 'ach-provider', 'ol-ed-lang', 'ol-ed-encoding', 'ol-ed-newline'];
+  const missing = styledIds.filter((id) => {
+    const re = new RegExp('<select[^>]*id="' + id + '"[^>]*class="[^"]*ui-select');
+    return !re.test(html);
+  });
+  note(css.includes('select.ui-select {') && css.includes('appearance: none')
+    && css.includes('select.ui-select-sm'),
+  '工具栏下拉框统一样式（圆角 / 自定义箭头 / 焦点反馈 / 紧凑变体）已加入');
+  note(missing.length === 0, '所有行内 / 工具栏下拉框均已挂 ui-select 样式类',
+    missing.length ? `未覆盖：${missing.join(', ')}` : `覆盖 ${styledIds.length} 个`);
+  note(app.includes('class="ui-select ui-select-sm" data-svc-cred-mode')
+    && app.includes('class="ui-select ui-select-sm" data-role="ed-lang"')
+    && app.includes('class="ui-select ui-select-sm" data-collab-perm')
+    && app.includes('class="ui-select" name="${esc(f.key)}"'),
+  '动态生成的凭据 / 编辑器 / 协作者 / 扩展安装下拉框同步套用美化样式');
+}
+
+// v0.4.29：Windows 提权 + WinFsp 自动安装链路护栏。
+// 两个决策：exe 清单强制 requireAdministrator；WinFsp MSI 仅随全量包分发。
+{
+  note(buildSrc.includes('requireAdministrator') && buildSrc.includes('outputresource')
+    && buildSrc.includes('injectAdminManifest(EXE)') && buildSrc.includes('findMt()'),
+  'build.mjs 在 postject 之前注入 requireAdministrator 清单（含 Windows SDK 自动查找与降级）');
+  note(buildSrc.indexOf('injectAdminManifest(EXE)') < buildSrc.indexOf('await inject(EXE'),
+  '清单注入顺序在 SEA blob 注入之前（实测两者兼容，反序会破坏 blob）');
+  note(gatewaySrc.includes('function isAdmin()') && gatewaySrc.includes("['session']")
+    && gatewaySrc.includes('function winFspServiceRunning()') && gatewaySrc.includes('WinFsp\\.Launcher')
+    && gatewaySrc.includes('detectedBy'),
+  'WinFsp 检测以服务为主判据（net start），修复非标准路径漏检导致的重复安装 1603');
+  note(gatewaySrc.includes('async function ensureWinFsp') && gatewaySrc.includes('/qn')
+    && gatewaySrc.includes('/norestart') && gatewaySrc.includes('msiexec.exe')
+    && gatewaySrc.includes('function findMsi()') && gatewaySrc.includes('await ensureWinFsp({ auto: true })'),
+  'WinFsp 静默安装（msiexec /qn）已接通启动流程，含随包 MSI 定位与二次校验');
+  note(fetchSvcSrc.includes('Resolve-Msi') && fetchSvcSrc.includes('winfsp.msi')
+    && fetchSvcSrc.includes('WinFspSha256') && packReleaseSrc.includes('$SvcMsi')
+    && packReleaseSrc.includes('winfsp.msi') && releaseYml.includes('winfsp-2.1'),
+  'WinFsp MSI 随全量包/服务包下载分发（SHA256 校验）并纳入 CI 缓存键');
+  note(serverSrc.includes('/api/rclone/gateway/winfsp/install') && serverSrc.includes('requireAdmin(req)')
+    && html.includes('id="gw-winfsp-install"') && html.includes('id="gw-winfsp-bar"')
+    && app.includes('renderWinFspBar') && app.includes('/rclone/gateway/winfsp/install'),
+  'WinFsp 安装接口（管理员）+ 网关页状态条与一键安装按钮已接线');
+}
 
 // v0.4.24 补丁：所有 .card 必须落在某个 <section class="page"> 内，否则会脱离视图切换
 // 而常驻显示在每个页面（曾导致「上传压缩包导入」出现在环境配置等无关页）。同时确认
@@ -442,6 +506,20 @@ note(app.includes('proxyInput.value = s.proxyOverride') && app.includes('s.effec
 note(gitSourcesSrc.includes('applySourceProxy') && gitSourcesSrc.includes('proxyModule.setOverride(\'git\'')
   && gitSourcesSrc.includes('proxyOverride') && gitSourcesSrc.includes("proxyModule.removeOverride('git', id)"),
 '后端 Git 源增删改写代理单项覆盖且列表回显脱敏 proxyOverride');
+// v0.4.29：rclone 存储层（控制面无需 FUSE）+ SMB 共享网关（Linux 专用容器 / Windows WinFsp）。
+note(html.includes('id="view-rclone"') && html.includes('id="rclone-file-list"')
+  && html.includes('id="rclone-remote-form"') && html.includes('id="gw-info"'),
+'rclone 挂载页含远端配置、文件浏览与 SMB 网关状态卡片');
+note(app.includes('rclone: loadRclone') && app.includes("NAV_GROUP") && app.includes("rclone: 'storage'")
+  && app.includes('/rclone/files?') && app.includes('/rclone/gateway/start'),
+'rclone 页已接入导航、加载器与文件/网关接口');
+note(rcloneSrc.includes("ALLOWED = new Set") && rcloneSrc.includes("spawn(bin, fullArgs")
+  && rcloneSrc.includes("mode: 0o600") && serverSrc.includes("app.get('/api/rclone/status'"),
+'rclone 后端含子命令白名单、shell:false 进程与脱敏配置落盘');
+note(gatewaySrc.includes("CapAdd: ['SYS_ADMIN']") && gatewaySrc.includes("rclone mount")
+  && gatewaySrc.includes("smbd -F -s /etc/samba/smb.conf") && gatewaySrc.includes("winFsp()")
+  && permSrc.includes("/^\\/api\\/rclone/"),
+'SMB 网关具备 FUSE 容器/Windows 降级双路径且写操作限管理员');
 note(html.includes('id="storage-breadcrumb"') && html.includes('id="server-poll-interval"')
   && html.includes('id="clone-conflict"'),
 '宝塔式路径条、服务器自动刷新控件与克隆冲突提示区齐全');

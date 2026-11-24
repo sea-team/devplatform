@@ -142,6 +142,84 @@ function writeRelease() {
   return release;
 }
 
+// ---- v0.4.29：给 exe 注入「请求管理员权限」清单 ----
+// WinFsp 是内核驱动，静默安装必须管理员权限；清单方式让双击 exe 即弹 UAC 提权。
+// 用 Windows SDK 的 mt.exe 写入 RT_MANIFEST(#1)。已实测：先注入 manifest、再由
+// postject 注入 SEA blob，两者互不破坏（blob 追加独立 section，资源段完好）。
+// 注入必须放在 postject 之前，否则 mt.exe 重写资源可能扰动已注入的 blob。
+// 省略 processorArchitecture 以避免跨 CPU 架构（x64/arm64）清单校验失败。
+const ADMIN_MANIFEST = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity version="1.0.0.0" name="DevPlatform.Console" type="win32" />
+  <description>DevPlatform Console</description>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>
+`;
+
+function findMt() {
+  if (process.platform !== 'win32') return null;
+  const roots = [
+    'C:\\Program Files (x86)\\Windows Kits\\10\\bin',
+    'C:\\Program Files\\Windows Kits\\10\\bin',
+  ];
+  const found = [];
+  for (const root of roots) {
+    let vers = [];
+    try { vers = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch { continue; }
+    vers.sort().reverse(); // 版本号高的优先
+    for (const v of vers) {
+      for (const arch of ['x64', 'x86', 'arm64']) {
+        const p = path.join(root, v, arch, 'mt.exe');
+        if (fs.existsSync(p)) found.push(p);
+      }
+    }
+  }
+  if (found.length) return found[0];
+  try {
+    const r = spawnSync('where', ['mt.exe'], { encoding: 'utf8', shell: false });
+    if (r.status === 0) {
+      const line = String(r.stdout || '').split(/\r?\n/).map((s) => s.trim()).find(Boolean);
+      if (line && fs.existsSync(line)) return line;
+    }
+  } catch { /* noop */ }
+  return null;
+}
+
+function injectAdminManifest(exe) {
+  if (process.platform !== 'win32') { log('manifest      跳过（非 Windows 构建）'); return false; }
+  const mt = findMt();
+  if (!mt) {
+    console.warn('[build] 未找到 Windows SDK 的 mt.exe，跳过管理员清单注入；');
+    console.warn('[build] exe 仍可运行，但需右键「以管理员身份运行」才能自动安装 WinFsp / 启动 SMB 共享。');
+    return false;
+  }
+  const manifestPath = path.join(DIST, 'requireAdmin.manifest');
+  fs.writeFileSync(manifestPath, ADMIN_MANIFEST, 'utf8');
+  try {
+    const r = spawnSync(mt, ['-manifest', manifestPath, `-outputresource:${exe};#1`], { encoding: 'utf8', shell: false });
+    if (r.status !== 0) throw new Error(String(r.stderr || r.stdout || `exit ${r.status}`).trim().slice(0, 400));
+    const verify = `${manifestPath}.verify`;
+    const v = spawnSync(mt, [`-inputresource:${exe};#1`, `-out:${verify}`], { encoding: 'utf8', shell: false });
+    const ok = v.status === 0 && fs.existsSync(verify)
+      && fs.readFileSync(verify, 'utf8').includes('requireAdministrator');
+    if (!ok) throw new Error('注入后反读未发现 requireAdministrator');
+    log('manifest      已注入管理员权限清单（requireAdministrator）');
+    return true;
+  } catch (e) {
+    console.warn(`[build] 管理员清单注入失败：${e.message}`);
+    console.warn('[build] 降级：exe 可运行，但需右键「以管理员身份运行」方可自动装 WinFsp / 启 SMB 共享。');
+    return false;
+  } finally {
+    for (const f of [manifestPath, `${manifestPath}.verify`]) { try { fs.unlinkSync(f); } catch { /* noop */ } }
+  }
+}
+
 async function buildSea(tarFile) {
   if (!fs.existsSync(LAUNCHER)) throw new Error(`缺少引导器：${LAUNCHER}`);
   const configPath = path.join(DIST, 'sea-config.json');
@@ -171,6 +249,8 @@ async function buildSea(tarFile) {
 
   fs.mkdirSync(path.dirname(EXE), { recursive: true });
   fs.copyFileSync(process.execPath, EXE);
+  // 顺序关键：manifest 先、SEA blob 后（见 injectAdminManifest 注释）。
+  injectAdminManifest(EXE);
   const { inject } = require('postject');
   const fuse = detectSeaFuse();
   log(`SEA sentinel  ${fuse}`);

@@ -3444,3 +3444,93 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 - `node --check` 全过、前端自检全过（新增多条护栏）、类型检查 78 错=基线未突破。
 - 详见《接口完整性测试报告.md》。本版改了前后端代码，`dist/` 与 `platform.exe` 由 CI 在推送 tag 时重建。
 
+
+## §65 OpenList 连接根目录映射 + Windows 网络盘映射（v0.4.28）
+
+### 65.1 连接根目录映射（跨平台，读写分离）
+
+**问题**：平台可登记多个 OpenList 连接，但既有文件接口只作用于「当前激活」连接；想看第二条连接需切换 active（全局副作用，影响其他人/接口）。
+
+**方案**：新增按连接 id 的只读浏览接口 `GET /api/openlist/connections/:id/root?path=`，不切 active：
+
+- `integrations.js`：抽出 `throwIfOpenlistProblem()` 复用 OpenList 的 `body.code` 错误翻译；新增 `openlistClientFor(conn)` 连接级客户端工厂——地址/凭据显式传入、按连接分缓存 token、绝不回退全局 config（避免把 A 的 token 发到 B 地址）。
+- `openlist.js`：新增 `listConnectionFiles(id, path, ...)`，复用 `normalizeFile`/`filterRootContent` 做归属裁剪，返回 `write:false`（根目录映射只读）。
+- `server.js`：新增路由；归属由 `guard(collectIds)` 对 `:id` 做 read 判定（owner/read 协作者/管理员）。
+- 前端：「文件浏览」页顶部新增「连接根目录映射」选择器，选非当前连接时走只读接口、隐藏写操作工具条与行内编辑/删除按钮；选「当前激活连接」时行为不变。
+- 实测：`env-default` 与 `olconn_a6298491df79` 分别返回各自根目录内容（`workspace` vs `work/workD`），证明按 id 隔离、未误用全局 active。
+
+### 65.2 Windows 网络盘映射（仅 Windows 桌面）
+
+把 OpenList 连接的 WebDAV 根目录映射为本地网络驱动器（资源管理器可见）。新增 `driveMount.js`：
+
+- 仅 `process.platform === 'win32'` 生效，其它平台优雅降级（返回结构化 `supported:false` 与原因）；Linux/Docker 无 WebClient/FUSE，不做系统级映射。
+- 安全：WebDAV 地址与管理员凭据由服务端从连接对象推导，前端只传 `connectionId`，杜绝注入任意 UNC；盘符白名单 `^[A-Z]:$`；`spawn('net.exe', args, {shell:false, windowsHide:true})` 逐参数传递；密码不回显、不写日志；`iconv-lite` 按 GBK 解码 net.exe 中文输出。
+- 会话可见性探测：`net use` 映射作用于平台进程所在会话；`SESSIONNAME` 非 Console 时如实提示「盘符可能只在平台进程可见」，建议桌面双击运行 exe。
+- 接口：`GET /api/drive-mount/status?drive=`（只读探测）、`POST /api/drive-mount/map`、`POST /api/drive-mount/unmap`（均 requireAdmin + GLOBAL_WRITE_PATTERNS 双护栏）。
+- 前端：「WebDAV / 驱动」页新增映射卡片，非 Windows 自动隐藏控制项并显示降级说明；映射/断开/查询均带 toast 反馈。
+- 限制：Windows 内置 WebDAV 对 HTTPS 自签证书与大文件支持一般；更稳的替代是 rclone + WinFsp。
+
+### 65.3 验证与状态
+
+- `node --check` 全过、前端自检全过（新增 2 条护栏）、类型检查 78 错未突破。
+- 2026-11-23 部署 246：两个连接根目录映射实测通过、drive-mount 在 Linux 上三项接口均正确降级。
+- 本版随 v0.4.28 发版；`dist/`、`platform.exe` 与 Release 由 CI 在推送 tag 时重建。
+
+## §66 rclone 存储层 + SMB 共享网关（v0.4.28）
+
+### 66.1 控制面：rclone 文件管理（无需 FUSE）
+
+- 新增 `platform/src/rclone.js`：rclone 二进制探测 / 子命令白名单（`spawn(shell:false)` 参数数组）/ 全局代理 env 注入；凭据写入 `data/rclone/rclone.conf`（600 权限，密码用 `rclone obscure` 加密），API 一律脱敏。
+- 支持后端：WebDAV（OpenList / NAS）、S3、SFTP、FTP、本地目录；远端配置 CRUD、设当前、连通探测。
+- 文件接口响应形状与 `/api/openlist/files` 对齐：`GET /api/rclone/files`、`/content`、`/download`、`/link` 与 `POST mkdir|rename|remove|move|copy`、`PUT /upload|/content`。前端「存储 / 文件 → rclone 挂载」页复用同一套列表 / 面包屑，OpenList 原有页完全不动。
+- Docker 下可点「安装 rclone 到 data/bin」：借 docker.sock 跑一次性 alpine 容器把静态二进制落到持久化目录（`HOST_DATA_DIR` 负责容器内外路径换算），宿主机与平台容器都不装包。
+
+### 66.2 数据面：SMB 共享网关（Linux 专用容器 / Windows 本机）
+
+- 新增 `platform/src/storageGateway.js`。Linux：平台通过 Docker API 创建镜像 `devplatform-storage-gateway:latest`（一次性容器 `apk add rclone samba fuse3` 后 commit），再起一个带 `SYS_ADMIN` + `/dev/fuse` 的网关容器，容器内后台跑 `rclone mount`、前台跑 `smbd -F`，445 映射到宿主机；停止即删容器，宿主机零安装、零 systemd 改动，删容器即回滚。
+- Windows：检测 WinFsp（`%ProgramFiles%\WinFsp\bin\launchctl.exe`），用 `rclone mount <remote>: <drive>` + `net share` 共享；`SESSIONNAME` 非 Console 时如实提示盘符可能只对平台进程可见。未装 WinFsp 时给出明确引导而非 500。
+- 接口：`GET /api/rclone/gateway`（状态）、`PUT`（设置）、`POST /start|/stop`、`GET /logs`；`permissions.js` 把 `/api/rclone` 全部写操作收为管理员。
+- 已知限制：rclone 官方没有 SMB 服务端，Samba 不可省；Windows 内置 WebDAV 的替代品是 WinFsp（需用户安装）；共享账号密码由平台生成/保存，SMB 密码不回显；容器内 `local` 后端挂载的是容器根，真正使用请配 WebDAV/S3 远端。
+
+### 66.3 实测（246，2026-11-23）
+
+- rclone 安装到 `/app/data/bin/rclone` 成功（v1.72.1）；WebDAV 远端列目录 200（凭据错误时 401、OpenList 未开 WebDAV 管理权限时 403，均为上游权限，非平台缺陷）。
+- local 后端全链路：列目录 / 新建 / 写入 / 读回 / 重命名 / 删除文件与目录全部 200。
+- 网关容器：镜像构建（含 fuse3）→ 启动 → smbd 等待连接 → Windows 本机 `net use \\10.0.0.246\dpstorage /user:dpstorage` **成功映射 Y:**，`Get-ChildItem Y:/` 列出共享内容，断开成功；停止后容器与 445 监听一并清除。
+- 首轮踩坑已修：Alpine `fuse` 只有 v2（需 `fuse3` 提供 `fusermount3`）；Samba 4.22 的 `smbd` 不支持 `-S`（改 `-F -s <conf>`）；SMB 标准端口 445 不能被 1024 下限误拒；`encodeContent()` 返回对象需取 `.buffer`；密码必须 `rclone obscure` 后写配置。
+
+### 66.4 当前状态
+
+- 代码已部署 246 并实测，随 v0.4.28 发版；缓存戳 `20261124b`（含 UI 美化与 WinFsp 集成，见 §67）。
+- 第三步「OpenList 降级为扩展服务」未做：现有用户家目录、归属表、WebDAV 网络盘仍依赖 OpenList，待 rclone 层稳定后再迁。
+
+## §67 Windows exe 管理员提权 + WinFsp 自动安装（v0.4.28）
+
+承接 §66：Windows 上 `rclone mount` 依赖 WinFsp（内核驱动，安装必须管理员权限）。本节把「提权 + 自动装 WinFsp」做成开箱即用链路。
+
+### 67.1 两个产品决策（已与需求方确认）
+
+1. **清单强制提权**：exe 内嵌 `requireAdministrator` 清单，双击即弹 UAC 确认，进程全程管理员。代价是每次启动都弹一次 UAC（Windows 请求管理员权限的标准行为）。
+2. **WinFsp 仅随全量包**：官方 MSI 随 `devplatform-windows.zip` / `devplatform-services.zip` 分发；单文件 `devplatform.exe` 不内嵌（体积不增大），单独下载时需补齐 MSI 或手动安装。
+
+### 67.2 实现要点
+
+- **build.mjs**：SEA 构建里，copy `node.exe` 之后、`postject` 注入 blob **之前**，用 Windows SDK 的 `mt.exe` 把 manifest 写入 PE 资源 `#1` 并反读校验 `requireAdministrator`；找不到 `mt.exe` 时告警降级（不中断构建，此时需右键「以管理员身份运行」）。实测已验证「先 manifest 后 blob」两者互不破坏（blob 走独立 section，资源段完好），反序则会被 `mt.exe` 重写资源扰动。
+- **fetch-services.ps1**：新增 `Resolve-Msi`，从官方源 + 多镜像下载 `winfsp-2.1.25156.msi`，按已知 SHA256（`073a70e0...`）校验，产出 `windows/bin/winfsp.msi`，写入 `services-manifest.json` 与 `THIRD-PARTY.txt`（GPLv3 + FLOSS 例外 / 商业双许可）。`pack-release.ps1` 全量包与服务补充包均带上该 MSI；CI 缓存键加 `winfsp-2.1`。
+- **storageGateway.js**：
+  - 检测以 **`WinFsp.Launcher` 服务**（`net start`，GBK 解码）为主判据，标准安装目录文件为辅——修复「非标准路径安装时漏检、导致重复安装报 1603 Configuration failed」的真实缺陷（本机实测复现并修复）。不使用 `sc.exe`/`reg.exe`（企业策略/沙箱常拦截）。
+  - `ensureWinFsp()`：校验管理员权限（net session）→ 定位随包 MSI（向上逐级查 3 层，覆盖 ROOT=dist / ROOT=platform / SEA 三种部署）→ `msiexec /i <msi> /qn /norestart /L*v <log>` 静默安装（5 分钟超时）→ 二次检测以结果为准；区分「已装幂等」「需重启（3010/1641/1618）」「失败附日志尾部」。
+  - `startWindowsMode()` 启动共享时自动调用 `ensureWinFsp({auto:true})`，缺 WinFsp 不再是抛错了事。
+- **接口 / 前端**：新增 `POST /api/rclone/gateway/winfsp/install`（管理员）；`GET /api/rclone/gateway` 的 `winFsp` 字段扩展 `admin`/`msi`/`detectedBy`。SMB 网关卡片新增状态条（权限 / WinFsp 徽标 + 随包 MSI 提示 + 一键安装按钮）。
+
+### 67.3 实测记录（本机 Windows，2026-11-24）
+
+- `mt.exe` 注入 + `postject` 注入顺序：真实构建产物反读确认 `requireAdministrator` 与 `NODE_SEA_BLOB` 同时完好。
+- 端到端 API：网关状态返回 `mode=windows, winFsp.admin=true, detectedBy=service`；无 MSI 时安装接口返回可操作错误（404 + 指引），不崩溃。
+- 静默安装链路真实触发 `msiexec`（本机因历史残留安装记录返回 1603），据此发现并修复了「服务已在运行但文件检测漏检」的缺陷；修复后 `ensureWinFsp` 正确返回 `already=true`，不再重复安装。
+- fetch-services.ps1 用真实 MSI 验证「已存在 + SHA256 匹配 → 跳过下载」分支，manifest 条目写入正确。
+
+### 67.4 当前状态
+
+- 与 §65/§66 一起随 v0.4.28 发版；2026-11-24 已部署 246（Linux 端 WinFsp 正确降级为 `mode:container`）；缓存戳 `20261124b`。
+- Windows 提权与 WinFsp 自动安装的最终效果需在 CI 出包后、在干净 Windows 机上双击 exe 复验 UAC 弹窗与静默安装（本机为开发态、且有历史 WinFsp 安装记录，无法完整复验首装）。

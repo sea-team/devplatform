@@ -15,6 +15,7 @@ const VIEW_META = {
   'storage-conn': ['OpenList 连接', '登记 / 切换本机与多个外部 OpenList，查看状态与后台'],
   'storage-mounts': ['挂载存储', '当前连接下的挂载点增删改、启停与重载'],
   'storage-drivers': ['WebDAV / 驱动', 'WebDAV 地址与当前连接支持的驱动清单'],
+  rclone: ['rclone 挂载', '用 rclone 管理远端存储（无需 FUSE），并经由共享网关以 SMB 共享出去'],
   builds: ['构建记录', '历史构建、实时日志与构建后端状态'],
   'build-start': ['启动构建', '选择项目、构建类型、编译环境与自动部署'],
   deploys: ['部署记录', 'SSH + SFTP 产物发布记录'],
@@ -40,7 +41,7 @@ const VIEW_META = {
 };
 const MODULE_ICONS = {
   overview: '◈', repos: '⑂', 'repo-new': '＋', 'repo-clone': '⇩', 'git-runtime': '⚙',
-  ide: '⌘', 'ide-config': '⎈', storage: '▤', 'storage-conn': '⇄', 'storage-mounts': '⛁', 'storage-drivers': '⎗',
+  ide: '⌘', 'ide-config': '⎈', storage: '▤', 'storage-conn': '⇄', 'storage-mounts': '⛁', 'storage-drivers': '⎗', rclone: '⇄',
   builds: '⚙', 'build-start': '▶', deploys: '⇧',
   servers: '▣', 'server-new': '＋', extensions: '▦', gitsrc: '⑃',
   docker: '⬡', 'docker-containers': '▣', 'docker-images': '◫', 'docker-volumes': '⛁',
@@ -51,7 +52,7 @@ const MODULE_ICONS = {
 // 子页面归属：侧边栏主项保持高亮，标签栏仍显示各自的子页标题。
 const NAV_GROUP = {
   'repo-new': 'repos', 'repo-clone': 'repos', 'git-runtime': 'repos', gitsrc: 'repos',
-  'storage-conn': 'storage', 'storage-mounts': 'storage', 'storage-drivers': 'storage',
+  'storage-conn': 'storage', 'storage-mounts': 'storage', 'storage-drivers': 'storage', rclone: 'storage',
   'build-start': 'builds', deploys: 'builds', 'server-new': 'servers',
   'ai-list': 'ai', 'ai-test': 'ai', 'ide-config': 'ide',
   'docker-containers': 'docker', 'docker-images': 'docker', 'docker-volumes': 'docker',
@@ -63,9 +64,13 @@ let currentView = 'overview';
 let currentStoragePath = '/';
 const storageState = {
   files: [], selected: new Set(), storages: [], drivers: [], connection: null, editId: '',
+  // v0.4.28 · 连接根目录映射：非空表示正在只读浏览指定连接的根目录，写操作隐藏。
+  rootMapConnId: '',
   // v0.3.11：文件浏览排序（目录恒优先，组内按所选字段升降序）。
   sort: { key: 'name', dir: 'asc' },
 };
+// v0.4.29 rclone 存储层状态。与 storageState 分离，避免影响 OpenList 文件页。
+const rcloneState = { path: '/', remote: '', editId: '', remotes: [], status: null, gateway: null };
 const proxyState = { config: null, entities: null };
 let logTimer = null;
 // 存储列表请求序号：快速切目录时，晚到的旧响应必须丢弃，避免「列表=A、路径=B」导致删除/重命名误伤别处。
@@ -791,7 +796,7 @@ function svcCredRow(item) {
     </div>
     ${isIde ? `<div class="svc-cred-actions svc-cred-mode">
       <label class="muted small">访问模式
-        <select data-svc-cred-mode="${key}">
+        <select class="ui-select ui-select-sm" data-svc-cred-mode="${key}">
           <option value="open"${item.mode === 'token' ? '' : ' selected'}>免密访问（默认）</option>
           <option value="token"${item.mode === 'token' ? ' selected' : ''}>口令保护</option>
         </select>
@@ -1770,6 +1775,168 @@ function bindPathBar(root, { onGo, onUp }) {
   if (up) up.addEventListener('click', (e) => { e.preventDefault(); onUp(); });
 }
 
+/* ------------------------- v0.4.29 · rclone 存储层 ------------------------- */
+
+function rcLog(message, isError = false) {
+  const box = $('#rclone-result');
+  if (box) { box.hidden = false; box.textContent = String(message); }
+  if (isError) toast(String(message), true);
+}
+function gwLog(message, isError = false) {
+  const box = $('#gw-result');
+  if (box) { box.hidden = false; box.textContent = String(message); }
+  if (isError) toast(String(message), true);
+}
+
+async function loadRclone() {
+  await Promise.all([
+    loadRcloneStatus().catch(() => {}),
+    loadRcloneRemotes().catch(() => {}),
+    loadRcloneFiles().catch(() => {}),
+    loadGatewayStatus().catch(() => {}),
+  ]);
+}
+
+async function loadRcloneStatus() {
+  const d = await api('/rclone/status');
+  rcloneState.status = d;
+  const text = $('#rclone-status-text');
+  const detail = $('#rclone-status-detail');
+  if (text) text.textContent = d.installed ? d.version : '未检测到 rclone';
+  if (detail) detail.textContent = d.installed
+    ? `可执行文件：${d.bin} · 已配置远端 ${d.remotes} 个 · 配置：${d.config}`
+    : `未找到 rclone 可执行文件。请把二进制放到 data/bin/，或在服务端配置 rclone.bin 后重启平台。${d.error ? `（${d.error}）` : ''}`;
+}
+
+function renderRcloneRemotes() {
+  const list = $('#rclone-remote-list');
+  if (!list) return;
+  const items = rcloneState.remotes || [];
+  list.innerHTML = items.length ? items.map((r) => `<div class="list-item" style="padding:8px 0;border-bottom:1px solid var(--color-border-tertiary)">
+    <div class="row gap wrap" style="align-items:center">
+      <b>${esc(r.label || r.name)}</b>
+      <span class="muted small">${esc(r.name)} · ${esc(r.type)}${r.id === (rcloneState.status || {}).active?.id ? ' · 当前' : ''}</span>
+      <span class="flex-spacer"></span>
+      <button class="btn btn-ghost btn-sm" data-rc-remote-activate="${esc(r.id)}">设为当前</button>
+      <button class="btn btn-sm" data-rc-remote-probe="${esc(r.id)}">测试</button>
+      <button class="btn btn-sm" data-rc-remote-edit="${esc(r.id)}">编辑</button>
+      <button class="btn btn-ghost btn-sm btn-danger" data-rc-remote-del="${esc(r.id)}">删除</button>
+    </div>
+    <div class="muted small" style="margin-top:4px">${Object.entries(r.fields || {}).filter(([k]) => !/pass|secret|token/i.test(k)).map(([k, v]) => `${esc(k)}=${esc(v)}`).join(' · ') || '（无参数）'}</div>
+  </div>`).join('') : '<div class="muted">还没有 rclone 远端。添加一个 WebDAV 远端即可开始浏览。</div>';
+  for (const sel of [$('#rclone-remote-picker'), $('#gw-remote')]) {
+    if (!sel) continue;
+    const keep = sel === $('#gw-remote') ? (rcloneState.gateway?.settings?.remoteId || '') : rcloneState.remote;
+    sel.innerHTML = '<option value="">默认远端</option>' + items.map((r) =>
+      `<option value="${esc(r.id)}" ${r.id === keep ? 'selected' : ''}>${esc(r.label || r.name)} (${esc(r.type)})</option>`).join('');
+  }
+}
+
+async function loadRcloneRemotes() {
+  const d = await api('/rclone/remotes');
+  rcloneState.remotes = d.items || [];
+  renderRcloneRemotes();
+}
+
+function renderRcloneFiles(d) {
+  const box = $('#rclone-file-list');
+  if (!box) return;
+  const files = d.content || [];
+  const dirs = files.filter((f) => f.isDir).length;
+  const provider = $('#rclone-provider');
+  if (provider) provider.textContent = `${d.provider || 'rclone'} · ${d.total || 0} 项 · 文件夹 ${dirs} / 文件 ${files.length - dirs}${d.write ? '' : ' · 只读'}`;
+  const rows = files.map((f) => `<tr class="file-row ${f.isDir ? 'is-dir' : 'is-file'}"
+      data-rc-dir="${f.isDir ? esc(f.name) : ''}" ${f.isDir ? 'title="双击进入"' : ''}>
+      <td style="width:38px"><input type="checkbox" data-rc-file="${esc(f.name)}" /></td>
+      <td><span class="file-name">${f.isDir ? '📁' : '📄'} <b>${esc(f.name)}</b></span></td>
+      <td style="width:110px">${f.isDir ? '-' : fmtSize(f.size)}</td>
+      <td class="muted" style="width:170px">${esc(fmtTime(f.modified))}</td>
+      <td class="actions" style="width:70px">${f.isDir ? '' : `<button class="btn btn-ghost btn-sm" data-rc-edit="${esc(f.name)}" title="重命名">✎</button>`}</td>
+    </tr>`).join('');
+  box.innerHTML = `<table><thead><tr><th></th><th>名称</th><th>大小</th><th>修改时间</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="muted">此目录为空</td></tr>'}</tbody></table>`;
+  box.querySelectorAll('tr[data-rc-dir]').forEach((tr) => {
+    tr.addEventListener('dblclick', () => {
+      rcloneState.path = `${d.path === '/' ? '' : d.path}/${tr.dataset.rcDir}`;
+      loadRcloneFiles();
+    });
+  });
+  const crumb = $('#rclone-breadcrumb');
+  if (crumb) {
+    crumb.innerHTML = pathBarHtml(d.path || '/');
+    bindPathBar(crumb, {
+      onGo: (v) => { rcloneState.path = v; loadRcloneFiles(); },
+      onUp: () => {
+        const segs = String(rcloneState.path || '/').split('/').filter(Boolean);
+        segs.pop();
+        rcloneState.path = `/${segs.join('/')}` || '/';
+        loadRcloneFiles();
+      },
+    });
+  }
+}
+
+async function loadRcloneFiles() {
+  const params = new URLSearchParams({ remote: rcloneState.remote || '', path: rcloneState.path || '/' });
+  const d = await api(`/rclone/files?${params}`);
+  renderRcloneFiles(d);
+}
+
+function renderGateway(d) {
+  rcloneState.gateway = d;
+  const info = $('#gw-info');
+  const mode = $('#gw-mode-label');
+  if (mode) mode.textContent = `${d.mode === 'windows' ? 'Windows 本机' : 'Linux 容器'} · ${d.platform}`;
+  if (info) {
+    const container = d.container ? `容器 ${d.container.id.slice(0, 12)}（${d.container.status || 'unknown'}）` : '容器未创建';
+    info.textContent = d.mode === 'windows'
+      ? `WinFsp：${d.winFsp && d.winFsp.installed ? '已安装' : '未安装'} · rclone：${d.rclone && d.rclone.installed ? d.rclone.version : '未安装'} · ${d.session ? d.session.visibleHint : ''}`
+      : `网关镜像：${d.image ? '已构建' : '未构建'} · ${container} · SMB 端口 ${d.port || 445}。${d.note || ''}`;
+  }
+  renderWinFspBar(d);
+  const g = d.settings || {};
+  const put = (sel, value) => { const el = $(sel); if (el && value !== undefined && value !== null && !/password/.test(el.type || '')) el.value = value; };
+  put('#gw-remote', g.remoteId || '');
+  put('#gw-port', g.smbPort || 445);
+  put('#gw-share', g.shareName || 'dpstorage');
+  put('#gw-user', g.smbUser || 'dpstorage');
+  put('#gw-drive', g.winDrive || 'Z:');
+  const addr = $('#gw-address');
+  if (addr) addr.textContent = `\\\\127.0.0.1\\${g.shareName || 'dpstorage'}`;
+}
+
+function renderWinFspBar(d) {
+  const bar = $('#gw-winfsp-bar');
+  if (!bar) return;
+  // 仅在 Windows 模式显示；Linux 容器不涉及 WinFsp。
+  if (d.mode !== 'windows') { bar.hidden = true; return; }
+  bar.hidden = false;
+  const f = d.winFsp || {};
+  const adminPill = $('#gw-admin-pill');
+  const fspPill = $('#gw-fsp-pill');
+  const msiNote = $('#gw-msi-note');
+  const installBtn = $('#gw-winfsp-install');
+  if (adminPill) {
+    adminPill.textContent = `权限：${f.admin ? '管理员 ✓' : '非管理员'}`;
+    adminPill.className = 'pill-mini ' + (f.admin ? 'live' : '');
+  }
+  if (fspPill) {
+    fspPill.textContent = `WinFsp：${f.installed ? '已安装 ' + (f.version || '') : '未安装'}`;
+    fspPill.className = 'pill-mini ' + (f.installed ? 'live' : '');
+  }
+  if (msiNote) {
+    msiNote.textContent = f.installed
+      ? '内核依赖就绪，可启动共享'
+      : f.msi ? '已找到随包 MSI，可静默安装' : '未找到随包 MSI（轻量包 / 单文件 exe 需补齐 windows/bin/winfsp.msi）';
+  }
+  // 未安装才显示安装按钮：已装则隐藏；未提权时按钮仍可点（点了会提示提权做法）。
+  if (installBtn) installBtn.hidden = Boolean(f.installed);
+}
+
+async function loadGatewayStatus() {
+  const d = await api('/rclone/gateway');
+  renderGateway(d);
+}
+
 function renderBreadcrumb(p) {
   const box = $('#storage-breadcrumb');
   if (!box) return;
@@ -1810,13 +1977,15 @@ function renderFileList(d) {
       <td style="width:120px">${esc(fileTypeLabel(f))}</td>
       <td class="muted" style="width:170px">${esc(fmtTime(f.modified))}</td>
       <td class="actions"><div class="ext-actions icon-actions">
-        ${f.isDir
-          ? ''
-          : `<button class="icon-btn" data-ol-edit="${esc(full)}" data-ol-edit-name="${esc(f.name)}" title="编辑">${ACT_ICONS.edit}</button>
-             <button class="icon-btn" data-ol-get="${esc(full)}" title="下载">${ACT_ICONS.download}</button>
-             <button class="icon-btn" data-ol-link="${esc(full)}" title="直链">${ACT_ICONS.link}</button>`}
-        <button class="icon-btn" data-ol-one-rename="${esc(full)}" title="重命名">${ACT_ICONS.rename}</button>
-        <button class="icon-btn icon-btn-danger" data-ol-one-del="${esc(f.name)}" title="删除">${ACT_ICONS.del}</button>
+        ${storageState.readonlyMapped
+          ? '<span class="muted small">只读映射</span>'
+          : `${f.isDir
+            ? ''
+            : `<button class="icon-btn" data-ol-edit="${esc(full)}" data-ol-edit-name="${esc(f.name)}" title="编辑">${ACT_ICONS.edit}</button>
+               <button class="icon-btn" data-ol-get="${esc(full)}" title="下载">${ACT_ICONS.download}</button>
+               <button class="icon-btn" data-ol-link="${esc(full)}" title="直链">${ACT_ICONS.link}</button>`}
+          <button class="icon-btn" data-ol-one-rename="${esc(full)}" title="重命名">${ACT_ICONS.rename}</button>
+          <button class="icon-btn icon-btn-danger" data-ol-one-del="${esc(f.name)}" title="删除">${ACT_ICONS.del}</button>`}
       </div></td>
     </tr>`);
   });
@@ -2192,9 +2361,14 @@ async function loadStorage() {
   const seq = ++storageLoadSeq;
   const pathSnapshot = currentStoragePath;
   const settled = (p) => Promise.resolve(p).catch((e) => ({ error: e.message }));
+  // v0.4.28：映射模式按连接 id 只读浏览根目录（不切 active）；普通模式沿用 /openlist/files。
+  const mapped = Boolean(storageState.rootMapConnId);
+  const filesUrl = mapped
+    ? `/openlist/connections/${encodeURIComponent(storageState.rootMapConnId)}/root?path=${encodeURIComponent(pathSnapshot)}`
+    : `/openlist/files?path=${encodeURIComponent(pathSnapshot)}`;
   const [status, files, mounts, drivers, connections] = await Promise.all([
     settled(api('/openlist/status')),
-    settled(api(`/openlist/files?path=${encodeURIComponent(pathSnapshot)}`)),
+    settled(api(filesUrl)),
     settled(api('/openlist/storages')),
     settled(api('/openlist/drivers')),
     settled(api('/openlist/connections')),
@@ -2202,12 +2376,59 @@ async function loadStorage() {
   if (seq !== storageLoadSeq) return; // 已有更新的请求，丢弃本次晚到响应
   renderOpenlistStatus(status);
   renderOpenlistConnections(connections);
+  renderRootConnPicker(connections);
+  renderDriveMountConnPicker(connections);
+  applyRootMapMode(mapped);
   renderStorageDegraded([files, mounts, drivers]);
   if (files && !files.error) renderFileList(files);
   else $('#file-list').innerHTML = errorBlock(files.error || '无法读取目录',
     '请到「连接管理」切换到一个可用的 OpenList，或修复当前连接的管理员凭据');
   renderMountList(mounts && mounts.items || []);
   renderDriverList(drivers || {});
+  loadDriveMountStatus(); // v0.4.28：探测 Windows 网络盘映射能力（轻量、非阻塞）
+}
+
+/** v0.4.28：填充「连接根目录映射」选择器（文件浏览页 + 网络盘页共用连接清单）。 */
+function connOptionsHtml(connections, withActive) {
+  const items = (connections && connections.items) || [];
+  const activeId = (connections && connections.activeId) || '';
+  const head = withActive ? `<option value="">当前激活连接</option>` : '';
+  return head + items.map((c) => {
+    const label = `${c.label || c.url}${c.active ? '（当前）' : ''}`;
+    return `<option value="${esc(c.id)}">${esc(label)}</option>`;
+  }).join('');
+}
+
+function renderRootConnPicker(connections) {
+  const sel = $('#ol-root-conn-picker');
+  if (!sel) return;
+  const prev = storageState.rootMapConnId;
+  sel.innerHTML = connOptionsHtml(connections, true);
+  sel.value = prev;
+  // 若上次选的连接已被删除，回退到当前激活连接。
+  if (prev && !Array.from(sel.options).some((o) => o.value === prev)) {
+    storageState.rootMapConnId = '';
+    sel.value = '';
+  }
+}
+
+function renderDriveMountConnPicker(connections) {
+  const sel = $('#dm-conn');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = connOptionsHtml(connections, true);
+  if (prev && Array.from(sel.options).some((o) => o.value === prev)) sel.value = prev;
+}
+
+/** 映射模式：隐藏写操作工具条，文件行禁用编辑/删除，标注只读。 */
+function applyRootMapMode(mapped) {
+  const bar = document.querySelector('.file-toolbar');
+  if (bar) bar.hidden = mapped;
+  const note = $('#ol-root-map-note');
+  if (note) note.textContent = mapped
+    ? '正在只读浏览所选连接的根目录；重命名 / 移动 / 删除 / 上传请在「连接管理」设为当前后使用。'
+    : '可任选一条已登记连接直接浏览其根目录；非当前连接为只读映射，写操作请在「连接管理」设为当前后进行。';
+  storageState.readonlyMapped = mapped;
 }
 
 /** 集成服务不可用时列表接口会返回 degraded 空数据：给一条可操作的黄色提示，而不是满屏 500。 */
@@ -2919,9 +3140,9 @@ function openEditorTab(ctx, filePath, fileName) {
       </div>
       <div class="ed-toolbar">
         <div class="ed-opts">
-          <label>语法高亮<select data-role="ed-lang"></select></label>
-          <label>文件编码<select data-role="ed-encoding"></select></label>
-          <label>换行符<select data-role="ed-newline"></select></label>
+          <label>语法高亮<select class="ui-select ui-select-sm" data-role="ed-lang"></select></label>
+          <label>文件编码<select class="ui-select ui-select-sm" data-role="ed-encoding"></select></label>
+          <label>换行符<select class="ui-select ui-select-sm" data-role="ed-newline"></select></label>
           <label class="ed-bom"><input type="checkbox" data-role="ed-bom" /> 保留 BOM</label>
         </div>
         <div class="ed-ops">
@@ -4517,7 +4738,7 @@ function renderExtInstallForm() {
         const label = typeof o === 'string' ? o : o.label;
         return `<option value="${esc(v)}"${String(v) === String(value) ? ' selected' : ''}>${esc(label)}</option>`;
       }).join('');
-      input = `<select name="${esc(f.key)}">${opts}</select>`;
+      input = `<select class="ui-select" name="${esc(f.key)}">${opts}</select>`;
     } else {
       const type = f.type === 'number' ? 'number' : f.type === 'password' ? 'password' : 'text';
       input = `<input name="${esc(f.key)}" type="${type}" value="${esc(value)}"${f.required ? ' required' : ''} placeholder="${esc(f.placeholder || '')}" />`;
@@ -4968,6 +5189,7 @@ const loaders = {
   repos: loadRepos, 'repo-new': loadRepos, 'repo-clone': loadRepos, 'git-runtime': loadRepos,
   ide: loadIde, 'ide-config': loadIde,
   storage: loadStorage, 'storage-conn': loadStorage, 'storage-mounts': loadStorage, 'storage-drivers': loadStorage,
+  rclone: loadRclone,
   builds: loadBuilds, 'build-start': loadBuilds, deploys: loadBuilds,
   servers: loadServers, 'server-new': loadServers,
   extensions: loadExtensions, gitsrc: loadGitSources,
@@ -5467,7 +5689,7 @@ async function loadEnvConfig() {
           : '';
         // 固定候选值的配置项用下拉选择，杜绝手滑写错；自由格式仍用输入框。
         const field = (Array.isArray(it.options) && it.options.length)
-          ? `<select class="envcfg-input" data-env-key="${esc(it.key)}" autocomplete="off">
+          ? `<select class="envcfg-input ui-select ui-select-sm" data-env-key="${esc(it.key)}" autocomplete="off">
               <option value="">留空表示不修改</option>
               ${it.options.map((o) => {
                 const v = typeof o === 'string' ? o : o.value;
@@ -6227,9 +6449,289 @@ $('#openlist-config-reset').addEventListener('click', async () => {
     await loadStorage();
   } catch (err) { toast(err.message, true); }
 });
+// v0.4.28 · 连接根目录映射：切换目标连接后从该连接根目录重新加载（只读映射）。
+const rootConnPicker = $('#ol-root-conn-picker');
+if (rootConnPicker) rootConnPicker.addEventListener('change', (e) => {
+  storageState.rootMapConnId = e.target.value || '';
+  currentStoragePath = '/';
+  loadStorage();
+  toast(storageState.rootMapConnId ? '已切换到所选连接的根目录（只读）' : '已回到当前激活连接');
+});
+
+/* ---------- v0.4.28 · Windows 网络盘映射 ---------- */
+async function loadDriveMountStatus(drive) {
+  const platformEl = $('#dm-platform');
+  const noteEl = $('#dm-support-note');
+  const controls = $('#dm-controls');
+  if (!platformEl || !noteEl || !controls) return;
+  try {
+    const q = drive ? `?drive=${encodeURIComponent(drive)}` : '';
+    const d = await api('/drive-mount/status' + q);
+    platformEl.textContent = d.supported ? '● 当前支持（Windows）' : '● 当前不支持（' + (d.platform || '未知') + '）';
+    noteEl.textContent = d.supported
+      ? (d.session && d.session.visibleHint) || '可把 OpenList WebDAV 根目录映射为本地磁盘。'
+      : (d.reason || '当前平台不支持网络盘映射');
+    controls.hidden = !d.supported;
+    if (d.supported && d.drive) {
+      const box = $('#dm-result');
+      if (box) { box.hidden = false; box.textContent = d.mapped ? `盘符 ${d.drive} 已映射。${d.detail || ''}` : `盘符 ${d.drive} 未映射。${d.detail || ''}`; }
+    }
+  } catch (e) {
+    platformEl.textContent = '● 检测失败';
+    noteEl.textContent = e.message || String(e);
+    controls.hidden = true;
+  }
+}
+
+function dmResult(text) {
+  const box = $('#dm-result');
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = text;
+  toast(text.slice(0, 120), /失败|错误|不支持/.test(text));
+}
+
+const dmMapBtn = $('#dm-map');
+if (dmMapBtn) dmMapBtn.addEventListener('click', async () => {
+  const body = {
+    connectionId: $('#dm-conn').value || undefined,
+    drive: $('#dm-drive').value.trim(),
+    persistent: $('#dm-persistent').checked,
+  };
+  if (!/^[A-Za-z]:$/.test(body.drive)) { toast('盘符格式应为单个字母加冒号，如 Z:', true); return; }
+  try {
+    const r = await api('/drive-mount/map', { method: 'POST', body });
+    dmResult(`已把「${r.connectionLabel}」映射到 ${r.drive}（WebDAV ${r.webdav}）${r.session && !r.session.interactive ? '。注意：平台运行于非交互会话，盘符可能不在资源管理器显示。' : '。'}`);
+  } catch (e) { dmResult('映射失败：' + (e.message || String(e))); }
+});
+
+const dmProbeBtn = $('#dm-probe');
+if (dmProbeBtn) dmProbeBtn.addEventListener('click', () => loadDriveMountStatus($('#dm-drive').value.trim()));
+
+const dmUnmapBtn = $('#dm-unmap');
+if (dmUnmapBtn) dmUnmapBtn.addEventListener('click', async () => {
+  const drive = $('#dm-drive').value.trim();
+  if (!/^[A-Za-z]:$/.test(drive)) { toast('盘符格式应为单个字母加冒号，如 Z:', true); return; }
+  try {
+    const r = await api('/drive-mount/unmap', { method: 'POST', body: { drive } });
+    dmResult(`已断开映射 ${r.drive}。`);
+  } catch (e) { dmResult('断开失败：' + (e.message || String(e))); }
+});
+
 $('#webdav-copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('#webdav-url').textContent.trim()); toast('WebDAV 地址已复制'); }
   catch { toast('复制失败，请手动选择', true); }
+});
+
+/* ---- v0.4.29 · rclone 存储层 / SMB 网关事件 ---- */
+const rcloneRefresh = $('#rclone-refresh');
+if (rcloneRefresh) rcloneRefresh.addEventListener('click', async () => {
+  await loadRclone(); toast('rclone 状态已刷新');
+});
+
+const rcloneInstall = $('#rclone-install');
+if (rcloneInstall) rcloneInstall.addEventListener('click', async () => {
+  try {
+    const r = await api('/rclone/install', { method: 'POST', body: {} });
+    toast(r.ok ? 'rclone 已安装到 data/bin' : (r.hint || '当前环境不支持自动安装'), !r.ok);
+    await loadRcloneStatus();
+  } catch (err) { toast(`安装失败：${err.message}`, true); }
+});
+
+const rcloneRemoteForm = $('#rclone-remote-form');
+if (rcloneRemoteForm) rcloneRemoteForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = formData(e.target);
+  const fields = {};
+  for (const key of ['url', 'user', 'pass', 'endpoint', 'host']) if (f[key]) fields[key] = f[key];
+  if (f.extra) {
+    try { Object.assign(fields, JSON.parse(f.extra)); }
+    catch { toast('其它参数必须是合法 JSON', true); return; }
+  }
+  const body = { name: f.name, label: f.label || f.name, type: f.type, fields };
+  try {
+    if (rcloneState.editId) {
+      await api(`/rclone/remotes/${encodeURIComponent(rcloneState.editId)}`, { method: 'PUT', body });
+      toast('rclone 远端已更新');
+    } else {
+      await api('/rclone/remotes', { method: 'POST', body });
+      toast('rclone 远端已添加');
+    }
+    rcloneState.editId = '';
+    e.target.reset();
+    await loadRclone();
+  } catch (err) { toast(`保存失败：${err.message}`, true); }
+});
+
+const rcloneRemoteReset = $('#rclone-remote-reset');
+if (rcloneRemoteReset) rcloneRemoteReset.addEventListener('click', () => {
+  rcloneState.editId = '';
+  rcloneRemoteForm.reset();
+});
+
+const rcloneRemoteList = $('#rclone-remote-list');
+if (rcloneRemoteList) rcloneRemoteList.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const { rcRemoteActivate, rcRemoteProbe, rcRemoteEdit, rcRemoteDel } = btn.dataset;
+  const id = rcRemoteActivate || rcRemoteProbe || rcRemoteEdit || rcRemoteDel;
+  if (!id) return;
+  try {
+    if (rcRemoteActivate) { await api(`/rclone/remotes/${encodeURIComponent(id)}/activate`, { method: 'POST', body: {} }); toast('已设为当前远端'); }
+    else if (rcRemoteProbe) {
+      const r = await api(`/rclone/remotes/${encodeURIComponent(id)}/probe`, { method: 'POST', body: {} });
+      toast(`连接正常，根目录 ${r.count} 项`);
+    } else if (rcRemoteEdit) {
+      const r = (rcloneState.remotes || []).find((x) => x.id === id);
+      if (!r) return;
+      rcloneState.editId = id;
+      const form = rcloneRemoteForm.elements;
+      form.name.value = r.name; form.label.value = r.label || ''; form.type.value = r.type;
+      form.url.value = r.fields.url || ''; form.user.value = r.fields.user || '';
+      form.pass.value = ''; form.pass.placeholder = '留空沿用原值';
+      form.endpoint.value = r.fields.endpoint || ''; form.host.value = r.fields.host || '';
+      form.extra.value = '';
+      form.name.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      return;
+    } else if (rcRemoteDel) {
+      if (!await confirmDialog({ title: '删除确认', message: '确定删除这个 rclone 远端？' })) return;
+      await api(`/rclone/remotes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      toast('远端已删除');
+    }
+    await loadRclone();
+  } catch (err) { toast(`操作失败：${err.message}`, true); }
+});
+
+const rclonePicker = $('#rclone-remote-picker');
+if (rclonePicker) rclonePicker.addEventListener('change', () => {
+  rcloneState.remote = rclonePicker.value;
+  rcloneState.path = '/';
+  loadRcloneFiles().catch((e) => rcLog(e.message, true));
+});
+const rcloneUp = $('#rclone-up');
+if (rcloneUp) rcloneUp.addEventListener('click', () => {
+  const segs = String(rcloneState.path || '/').split('/').filter(Boolean);
+  segs.pop();
+  rcloneState.path = `/${segs.join('/')}` || '/';
+  loadRcloneFiles().catch((e) => rcLog(e.message, true));
+});
+const rcloneRefreshFiles = $('#rclone-refresh-files');
+if (rcloneRefreshFiles) rcloneRefreshFiles.addEventListener('click', () => loadRcloneFiles().catch((e) => rcLog(e.message, true)));
+
+const rcloneMkdir = $('#rclone-mkdir-form');
+if (rcloneMkdir) rcloneMkdir.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = formData(e.target);
+  try {
+    await api('/rclone/files/mkdir', { method: 'POST', body: { remote: rcloneState.remote, path: rcloneState.path, name: f.name } });
+    rcLog(`已新建目录 ${f.name}`);
+    e.target.reset();
+    loadRcloneFiles();
+  } catch (err) { rcLog(`新建失败：${err.message}`, true); }
+});
+
+const rcloneUpload = $('#rclone-upload-input');
+if (rcloneUpload) rcloneUpload.addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files || []);
+  for (const file of files) {
+    try {
+      const token = localStorage.getItem('dp_token');
+      const qs = new URLSearchParams({ remote: rcloneState.remote, path: rcloneState.path, name: file.name });
+      if (token) qs.set('token', token);
+      const response = await fetch(`/api/rclone/files/upload?${qs}`, {
+        method: 'PUT', headers: { 'content-type': 'application/octet-stream', ...authHeaders() },
+        body: await file.arrayBuffer(),
+      });
+      const json = await response.json();
+      if (!json.ok) throw new Error(json.error || '上传失败');
+      toast(`已上传 ${file.name}`);
+    } catch (err) { toast(`${file.name} 上传失败：${err.message}`, true); }
+  }
+  e.target.value = '';
+  loadRcloneFiles();
+});
+
+const rcloneFileList = $('#rclone-file-list');
+if (rcloneFileList) rcloneFileList.addEventListener('click', async (e) => {
+  const edit = e.target.closest('button[data-rc-edit]');
+  if (edit) {
+    const name = edit.dataset.rcEdit;
+    const next = await promptDialog({ title: `重命名 ${name}`, message: '输入新名称：' }, name);
+    if (!next || next === name) return;
+    api('/rclone/files/rename', { method: 'POST', body: { remote: rcloneState.remote, path: rcloneState.path, name, newName: next } })
+      .then(() => { toast('已重命名'); loadRcloneFiles(); })
+      .catch((err) => toast(`重命名失败：${err.message}`, true));
+  }
+});
+
+$$('[data-rc-action]').forEach((btn) => btn.addEventListener('click', async () => {
+  const action = btn.dataset.rcAction;
+  const names = Array.from(document.querySelectorAll('#rclone-file-list input[data-rc-file]:checked')).map((x) => x.dataset.rcFile);
+  if (action !== 'link' && !names.length) { toast('请先勾选文件', true); return; }
+  try {
+    if (action === 'remove') {
+      if (!await confirmDialog({ title: '删除确认', message: `确定删除选中的 ${names.length} 项？` })) return;
+      await api('/rclone/files/remove', { method: 'POST', body: { remote: rcloneState.remote, path: rcloneState.path, names } });
+      rcLog(`已删除 ${names.length} 项`);
+    } else if (action === 'link') {
+      if (names.length !== 1) { toast('获取直链请只勾选一个文件', true); return; }
+      const p = `${rcloneState.path === '/' ? '' : `${rcloneState.path}/`}${names[0]}`;
+      const r = await api(`/rclone/files/link?remote=${encodeURIComponent(rcloneState.remote || '')}&path=${encodeURIComponent(p)}`);
+      rcLog(r.url || '（该后端不支持公开直链）');
+      if (r.url && navigator.clipboard) navigator.clipboard.writeText(r.url).catch(() => {});
+    } else if (action === 'download') {
+      if (names.length !== 1) { toast('下载请只勾选一个文件', true); return; }
+      const token = localStorage.getItem('dp_token');
+      const p = `${rcloneState.path === '/' ? '' : `${rcloneState.path}/`}${names[0]}`;
+      const qs = new URLSearchParams({ remote: rcloneState.remote || '', path: p });
+      if (token) qs.set('token', token);
+      window.open(`/api/rclone/files/download?${qs}`, '_blank');
+      return;
+    }
+    loadRcloneFiles();
+  } catch (err) { rcLog(`操作失败：${err.message}`, true); }
+}));
+
+const gwSave = $('#gw-save');
+if (gwSave) gwSave.addEventListener('click', async () => {
+  const body = {
+    remoteId: $('#gw-remote').value, smbPort: Number($('#gw-port').value),
+    shareName: $('#gw-share').value.trim(), smbUser: $('#gw-user').value.trim(),
+    smbPass: $('#gw-pass').value, winDrive: $('#gw-drive').value.trim(),
+  };
+  try { await api('/rclone/gateway', { method: 'PUT', body }); gwLog('共享网关设置已保存'); loadGatewayStatus(); }
+  catch (err) { gwLog(`保存失败：${err.message}`, true); }
+});
+const gwStart = $('#gw-start');
+if (gwStart) gwStart.addEventListener('click', async () => {
+  try { const r = await api('/rclone/gateway/start', { method: 'POST', body: {} }); gwLog(`已启动：${JSON.stringify(r).slice(0, 300)}`); toast('共享网关已启动'); loadGatewayStatus(); }
+  catch (err) { gwLog(`启动失败：${err.message}`, true); }
+});
+const gwStop = $('#gw-stop');
+if (gwStop) gwStop.addEventListener('click', async () => {
+  try { await api('/rclone/gateway/stop', { method: 'POST', body: {} }); gwLog('共享网关已停止'); toast('共享网关已停止'); loadGatewayStatus(); }
+  catch (err) { gwLog(`停止失败：${err.message}`, true); }
+});
+const gwLogs = $('#gw-logs');
+if (gwLogs) gwLogs.addEventListener('click', async () => {
+  try {
+    const r = await api('/rclone/gateway/logs?tail=120');
+    const box = $('#gw-log-view');
+    box.hidden = false; box.textContent = (r.lines || []).join('\n') || '（无日志）';
+  } catch (err) { gwLog(`读取日志失败：${err.message}`, true); }
+});
+const gwFspInstall = $('#gw-winfsp-install');
+if (gwFspInstall) gwFspInstall.addEventListener('click', async () => {
+  gwFspInstall.disabled = true;
+  gwLog('正在静默安装 WinFsp（约 10-30 秒）…');
+  try {
+    const r = await api('/rclone/gateway/winfsp/install', { method: 'POST', body: {} });
+    gwLog(`WinFsp 安装完成：${JSON.stringify(r).slice(0, 300)}`);
+    if (r.rebootRequired) toast('WinFsp 已安装，需重启一次后生效', true);
+    else toast('WinFsp 已安装');
+    loadGatewayStatus();
+  } catch (err) { gwLog(`WinFsp 安装失败：${err.message}`, true); toast('WinFsp 安装失败，详见结果框', true); }
+  finally { gwFspInstall.disabled = false; }
 });
 $('#storage-storages-reload').addEventListener('click', () => loadStorage());
 $('#storage-drivers-reload').addEventListener('click', () => loadStorage());
@@ -7257,7 +7759,7 @@ async function renderCollabInline(type, id) {
       return `<label class="check collab-inline-row">
         <input type="checkbox" data-collab-user="${esc(u.id)}" ${cur ? 'checked' : ''} ${dis} />
         <span>${esc(u.displayName || u.username)}</span>
-        <select data-collab-perm="${esc(u.id)}" ${dis}>
+        <select class="ui-select ui-select-sm" data-collab-perm="${esc(u.id)}" ${dis}>
           <option value="read"${cur && cur.permission === 'write' ? '' : ' selected'}>只读</option>
           <option value="write"${cur && cur.permission === 'write' ? ' selected' : ''}>可写</option>
         </select>
@@ -7311,7 +7813,7 @@ async function openCollabModal(type, id) {
       const cur = selected.get(u.id) || '';
       return `<div class="collab-user">
         <span><b>${esc(u.username)}</b> <span class="muted small">${esc(u.displayName || '')}</span></span>
-        <select data-collab-user="${esc(u.id)}">
+        <select class="ui-select ui-select-sm" data-collab-user="${esc(u.id)}">
           <option value=""${cur ? '' : ' selected'}>不协作</option>
           <option value="read"${cur === 'read' ? ' selected' : ''}>只读 read</option>
           <option value="write"${cur === 'write' ? ' selected' : ''}>可写 write</option>

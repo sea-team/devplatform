@@ -13,7 +13,7 @@
  */
 const path = require('path');
 const { config, state, update, uid, currentUser, HttpError } = require('./core');
-const { openlistApi } = require('./integrations');
+const { openlistApi, openlistClientFor } = require('./integrations');
 const proxyModule = require('./proxy');
 
 // 保留启动时的 .env 值，界面「恢复环境配置」时可还原。
@@ -591,6 +591,40 @@ async function listFiles(p = '/', options = {}) {
   };
 }
 
+/**
+ * v0.4.28 · 连接根目录映射：按连接 id 浏览任意一条登记的 OpenList 的根目录，
+ * 不切换全局 active（避免改变其它用户/接口正在使用的连接）。
+ * 凭据/地址来自该连接自身的登记项，经 openlistClientFor 隔离，不回退 config。
+ * 归属校验在 server 层由 guard(collectIds) 对 :id 做 read 判定，这里只做存在性检查。
+ */
+function findConnection(id) {
+  const list = normalizeConnections();
+  const target = list.find((c) => String(c.id) === String(id));
+  if (!target) throw new Error(`OpenList 连接不存在：${id}`);
+  return target;
+}
+
+async function listConnectionFiles(id, p = '/', options = {}, user = currentUser()) {
+  const conn = findConnection(id);
+  const dir = safeDir(p);
+  const client = openlistClientFor(conn);
+  const raw = await client.list(dir, options);
+  const d = unwrap(raw) || {};
+  const rawContent = Array.isArray(d.content) ? d.content : (Array.isArray(d) ? d : []);
+  const content = filterRootContent(rawContent.map(normalizeFile), dir, user);
+  return {
+    connectionId: conn.id,
+    connectionLabel: conn.label || conn.url,
+    path: dir,
+    parent: dir === '/' ? '/' : `/${dir.split('/').filter(Boolean).slice(0, -1).join('/')}`,
+    content,
+    total: Number(d.total || content.length),
+    provider: d.provider || 'OpenList',
+    write: false, // 根目录映射为只读浏览，写操作仍走「设为当前」后的既有接口
+    readme: String(d.readme || '').slice(0, 2000),
+  };
+}
+
 async function mkdir(p, name) { return openlistApi.mkdir(joinPath(safeDir(p), safeName(name))); }
 async function rename(p, name) { return openlistApi.rename(safeDir(p), safeName(name)); }
 async function remove(p, names) {
@@ -680,7 +714,8 @@ module.exports = {
   listStorages, listDrivers, driverInfo, createStorage, updateStorage,
   deleteStorage, setStorageEnabled, reloadStorages,
   visibleStorages, filterRootContent, assertMountOwner, mountSegmentsFor,
-  listFiles, mkdir, rename, remove, move, copy, upload, link, download,
+  listFiles, listConnectionFiles, findConnection,
+  mkdir, rename, remove, move, copy, upload, link, download,
   joinPath, safeDir, safeName, hintFor,
   // v0.4.7：内嵌后台同源代理需要把当前连接的 token 注入到 OpenList SPA 的 localStorage。
   getToken: () => openlistApi.token(),

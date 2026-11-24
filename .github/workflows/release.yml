@@ -47,7 +47,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: windows/bin
-          key: dp-services-${{ hashFiles('windows/fetch-services.ps1') }}-gitea-1.23.8-openlist-v4.2.6-vscode-cli-1
+          key: dp-services-${{ hashFiles('windows/fetch-services.ps1') }}-gitea-1.23.8-openlist-v4.2.6-vscode-cli-1-winfsp-2.1
 
       - name: 下载随发行包自带的官方集成服务程序
         shell: pwsh

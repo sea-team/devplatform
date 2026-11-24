@@ -163,16 +163,12 @@ async function openlistToken() {
   return _openlistToken;
 }
 
-async function openlist(pathname, options = {}) {
-  const token = await openlistToken();
-  const url = `${config.openlistUrl}${pathname}`;
-  const raw = await httpJSON(url, {
-    ...options,
-    proxy: proxyModule.forGlobal(url).proxy,
-    headers: { Authorization: token, ...(options.headers || {}) },
-  });
-  // OpenList 用「HTTP 200 + body.code != 200」表达业务错误（token 失效时返回
-  // code:500 record not found）。不检查会被 asList() 当成空列表，前端误报成功。
+/**
+ * OpenList 用「HTTP 200 + body.code != 200」表达业务错误（token 失效时返回
+ * code:500 record not found）。不检查会被 asList() 当成空列表，前端误报成功。
+ * 抽成共用函数：全局 active 客户端与「按连接 id 浏览根目录」的连接级客户端都复用。
+ */
+function throwIfOpenlistProblem(raw, pathname) {
   if (raw && typeof raw === 'object' && 'code' in raw && Number(raw.code) !== 200) {
     const detail = String(raw.message || '未知错误');
     const code = Number(raw.code);
@@ -198,8 +194,88 @@ async function openlist(pathname, options = {}) {
   return raw;
 }
 
+async function openlist(pathname, options = {}) {
+  const token = await openlistToken();
+  const url = `${config.openlistUrl}${pathname}`;
+  const raw = await httpJSON(url, {
+    ...options,
+    proxy: proxyModule.forGlobal(url).proxy,
+    headers: { Authorization: token, ...(options.headers || {}) },
+  });
+  return throwIfOpenlistProblem(raw, pathname);
+}
+
 /** 界面更新 OpenList 连接配置后必须清掉缓存 token，否则仍拿旧服务的令牌去请求。 */
 function resetOpenlistToken() { _openlistToken = ''; }
+
+/* ---- 连接级客户端（v0.4.28）：按显式 url/token/password 请求，不切全局 active ----
+ * 背景：平台登记了多个 OpenList，但既有 openlistApi 只作用于「当前激活」连接。
+ * 「连接根目录映射」需要同时浏览任意一条连接的根目录，若走 activate 会改变全局
+ * 状态（其它用户/接口受影响）。这里给每条连接构造一个独立客户端：
+ *  - 地址 / 凭据显式传入，绝不回退到 config（避免把 A 的 token 发到 B 地址）；
+ *  - token 按「url|user|token|password」分缓存，避免把旧服务的令牌发给新服务；
+ *  - 复用同一套 body.code 错误翻译，行为与 active 客户端一致。
+ */
+const _connTokenCache = new Map();
+
+function connCredentialKey(c) {
+  return `${String(c.url || '').replace(/\/+$/, '')}|${String(c.user || 'admin')}|${String(c.token || '')}|${String(c.password || '')}`;
+}
+
+function openlistClientFor(conn) {
+  const base = String((conn && conn.url) || '').trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(base)) throw httpProblem(502, 'OpenList 连接地址不是 http(s)://', '请到「连接管理」修复该连接的服务地址');
+  const cred = {
+    url: base,
+    user: String((conn && conn.user) || 'admin'),
+    token: String((conn && conn.token) || ''),
+    password: String((conn && conn.password) || ''),
+  };
+  const key = connCredentialKey(cred);
+
+  async function token() {
+    if (cred.token) return cred.token;
+    const hit = _connTokenCache.get(key);
+    if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.token;
+    if (!cred.password) throw httpProblem(502, '该 OpenList 连接未配置 Token 或管理员密码', '请到「连接管理」为该连接填写 Token 或管理员密码');
+    const result = await httpJSON(`${base}/api/auth/login`, {
+      method: 'POST',
+      body: { username: cred.user, password: cred.password },
+    });
+    if (!result || !result.data || !result.data.token) {
+      throw httpProblem(502, 'OpenList 连接登录失败：管理员账号或密码不正确', '请到「连接管理」更新该连接的管理员凭据');
+    }
+    _connTokenCache.set(key, { token: result.data.token, at: Date.now() });
+    return result.data.token;
+  }
+
+  async function request(pathname, options = {}) {
+    const t = await token();
+    const url = `${base}${pathname}`;
+    const raw = await httpJSON(url, {
+      ...options,
+      proxy: proxyModule.forGlobal(url).proxy,
+      headers: { Authorization: t, ...(options.headers || {}) },
+    });
+    return throwIfOpenlistProblem(raw, pathname);
+  }
+
+  return {
+    base,
+    token,
+    request,
+    list: (p = '/', options = {}) => request('/api/fs/list', {
+      method: 'POST',
+      body: {
+        path: p, password: options.password || '', page: Number(options.page || 1),
+        per_page: Number(options.perPage || 200), refresh: Boolean(options.refresh),
+      },
+      timeout: 20000,
+    }),
+    get: (p, password = '') => request('/api/fs/get', { method: 'POST', body: { path: p, password }, timeout: 20000 }),
+    resetToken: () => _connTokenCache.delete(key),
+  };
+}
 
 async function openlistUpload(remotePath, buffer) {
   const token = await openlistToken();
@@ -753,7 +829,7 @@ const publicProvider = (p) => ({
 });
 
 module.exports = {
-  httpJSON, giteaApi, openlistApi,
+  httpJSON, giteaApi, openlistApi, openlistClientFor,
   sshExec, sshConnect, sftpPut, collectStatus, sshOptions, publicServer,
   aiChat, aiModels, aiProxy, publicProvider, detectLocalPrograms, runCli, proxyEnvironment, CLI_CANDIDATES,
 };

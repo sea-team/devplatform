@@ -4,9 +4,10 @@
   Gitea      : dl.gitea.com 官方 Windows amd64 exe（GitHub 镜像兜底）
   OpenList   : GitHub Release 的 windows-amd64 zip（多镜像 + lite 包兜底）
   在线 IDE   : VS Code 官方独立 CLI（code.exe），复制为 code-tunnel.exe
+  WinFsp     : 官方 MSI（rclone mount 的 Windows 依赖，SMB 网关用；v0.4.29 随包自带）
 
   产出目录默认 windows\bin\：
-    gitea.exe / openlist.exe / code-tunnel.exe
+    gitea.exe / openlist.exe / code-tunnel.exe / winfsp.msi
     services-manifest.json   版本、来源、SHA256、大小（供安装器与校验使用）
     THIRD-PARTY.txt          上游项目、许可证与来源说明
 
@@ -25,6 +26,9 @@ param(
   [string]$OutDir = '',
   [string]$GiteaVersion = '1.23.8',
   [string]$OpenListVersion = 'v4.2.6',
+  [string]$WinFspVersion = '2.1',
+  [string]$WinFspBuild = '2.1.25156',
+  [string]$WinFspSha256 = '073a70e00f77423e34bed98b86e600def93393ba5822204fac57a29324db9f7a',
   [string]$DownloadProxy = 'https://ghfast.top/',
   [string]$ProxyUrl = '',
   [switch]$Force,
@@ -142,6 +146,41 @@ function Resolve-Component([string]$Key, [string]$File, [int]$MinMb, [string[]]$
   return @{ ok = $false; file = $File; bytes = 0; sha256 = ''; source = ''; version = $Source }
 }
 
+# MSI 专用下载：校验文件头 "MSI\0"（0xD0CF11E0A1B11AE1 的 OLE 容器）与 SHA256，
+# 与 exe 的 MZ 头不同，不能复用 Resolve-Component 的 Test-Pe。
+function Resolve-Msi([string]$File, [string]$ExpectSha, [string[]]$Urls, [string]$Version) {
+  $target = Join-Path $OutDir $File
+  if (-not $Force -and (Test-Path -LiteralPath $target)) {
+    $sha = Get-FileSha $target
+    $bytes = (Get-Item -LiteralPath $target).Length
+    if ($bytes -gt 1MB -and (-not $ExpectSha -or $sha -eq $ExpectSha)) {
+      Good "$File 已存在 ($([math]::Round($bytes / 1MB, 1)) MB, SHA256 匹配)，跳过下载"
+      return @{ ok = $true; file = $File; bytes = $bytes; sha256 = $sha; source = 'local (already present)'; version = $Version }
+    }
+    Warn "$File 已存在但校验不通过，重新下载"
+    Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+  }
+  if (-not $ExpectSha) { Die "未提供 $File 的 SHA256，拒绝下载未校验的安装包" }
+  $deadline = (Get-Date).AddMinutes(12)
+  foreach ($url in $Urls) {
+    if ((Get-Date) -gt $deadline) { Warn "$File 下载总时长超过 12 分钟，停止重试"; break }
+    Write-Host "    尝试: $url" -ForegroundColor DarkGray
+    if (-not (Save-Download $url $target $Timeout)) { Warn "$File 下载失败，尝试下一个源"; continue }
+    $bytes = (Get-Item -LiteralPath $target).Length
+    if ($bytes -le 1MB) { Warn "$File 内容过小，尝试下一个源"; continue }
+    $sha = Get-FileSha $target
+    if ($sha -ne $ExpectSha) {
+      Warn "$File SHA256 不匹配（期望 $ExpectSha，实际 $sha），丢弃并尝试下一个源"
+      Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+      continue
+    }
+    Good "$File 下载完成并通过 SHA256 校验 ($([math]::Round($bytes / 1MB, 1)) MB)"
+    return @{ ok = $true; file = $File; bytes = $bytes; sha256 = $sha; source = $url; version = $Version }
+  }
+  Warn "$File 全部来源均失败或校验不通过"
+  return @{ ok = $false; file = $File; bytes = 0; sha256 = ''; source = ''; version = $Version }
+}
+
 Write-Host 'DevPlatform · 准备随发行包自带的集成服务程序' -ForegroundColor Cyan
 Write-Host "输出目录: $OutDir" -ForegroundColor DarkGray
 
@@ -183,9 +222,21 @@ if ($SkipIde) {
   ) @('code', 'code-tunnel') 'latest/stable'
 }
 
-# 4) 清单与第三方说明（随包分发，便于离线核对与合规追溯）
+# 4) WinFsp MSI（rclone mount 的 Windows 依赖，SMB 网关启动时需要）
+Step 'WinFsp 官方 MSI（SMB 共享网关 / rclone mount 依赖）'
+$wspAsset = "winfsp-$WinFspBuild.msi"
+$wspGithub = "https://github.com/winfsp/winfsp/releases/download/v$WinFspVersion/$wspAsset"
+$wspUrls = @($wspGithub)                       # GitHub 直链优先（美国 Actions 最快最稳）
+if ($DownloadProxy) { $wspUrls += ($DownloadProxy.TrimEnd('/') + '/' + $wspGithub) }
+foreach ($m in @('https://ghfast.top/', 'https://ghproxy.net/', 'https://gh-proxy.com/',
+                 'https://gh.llkk.cc/', 'https://hub.gitmirror.com/')) {
+  if ($DownloadProxy -ne $m) { $wspUrls += ($m.TrimEnd('/') + '/' + $wspGithub) }
+}
+$winfsp = Resolve-Msi 'winfsp.msi' $WinFspSha256 $wspUrls "v$WinFspVersion ($WinFspBuild)"
+
+# 5) 清单与第三方说明（随包分发，便于离线核对与合规追溯）
 Step '生成二进制清单与第三方说明'
-$components = @($gitea, $openlist, $ide)
+$components = @($gitea, $openlist, $ide, $winfsp)
 $manifest = [ordered]@{
   generatedAt = (Get-Date).ToString('s')
   platform    = 'windows-x64'
@@ -220,6 +271,13 @@ $third = @(
   '   许可证 : MIT（Microsoft）；VS Code 名称与商标受 Microsoft 商标政策约束，',
   '            本包仅内嵌官方 CLI 用于 code serve-web，不修改、不冒用其品牌。',
   '',
+  '4) winfsp.msi',
+  '   项目   : WinFsp (https://winfsp.dev/)，rclone mount 的 Windows 内核依赖',
+  '   下载   : https://github.com/winfsp/winfsp/releases (官方 MSI，SHA256 校验)',
+  '   许可证 : GPLv3（含 FLOSS 例外）/ 商业双许可；详见上游 LICENSE。',
+  '            本包仅随全量包分发官方原版 MSI，由平台在满足管理员权限时静默安装；',
+  '            不修改安装包内容，请保留上游许可与源码获取方式。',
+  '',
   '这些文件只被 windows\install.ps1 / native-services.ps1 在用户主动运行',
   'INSTALL.bat 时复制到 windows\runtime\bin 并启动；START.bat 不会启动它们。',
   '若不需要集成服务，可直接删除 windows\bin 目录，不影响控制台功能。'
@@ -236,4 +294,5 @@ if ($RequireCore -and (-not $gitea.ok -or -not $openlist.ok)) {
   Die 'Gitea / OpenList 未能全部就绪（指定了 -RequireCore），本次不会发布缺少核心服务的全量包'
 }
 if (-not $ide.ok) { Warn 'VS Code CLI 未就绪；全量包仍可发布，在线 IDE 会回退到本机已装的 VS Code' }
+if (-not $winfsp.ok) { Warn 'WinFsp MSI 未就绪；全量包仍可发布，但 SMB 网关需用户手动安装 WinFsp（平台会给出指引）' }
 Write-Host "    离线安装：windows\install.ps1 -Mode native -NoDownload（自动识别 $OutDir）" -ForegroundColor DarkGray

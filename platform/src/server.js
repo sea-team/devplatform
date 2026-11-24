@@ -39,6 +39,9 @@ const aiChatStore = require('./aiChat');
 const dshTerminal = require('./dshTerminal');
 const userDirs = require('./userDirs');
 const aiNetworkPolicy = require('./aiNetworkPolicy');
+const driveMount = require('./driveMount');
+const rclone = require('./rclone');
+const storageGateway = require('./storageGateway');
 
 // 面板里保存过的 OpenList 连接优先于 .env（不改文件、重启后仍然生效）。
 openlist.applyConfig();
@@ -853,6 +856,88 @@ app.get('/api/storage/mounts', tolerant(async (req, res) => {
   });
 }, { items: [], webdav: openlistApi.webdavUrl() }));
 
+/* -------------------- rclone 存储层 + SMB 共享网关（v0.4.29） -------------------- */
+// rclone 文件操作走 CLI，不需要 FUSE；与 OpenList 接口并存，响应形状对齐 /api/openlist/files。
+// 所有写路径由 permissions 的 /api/rclone 全局写护栏限制为管理员。
+
+app.get('/api/rclone/status', (req, res) => ok(res, rclone.status()));
+app.get('/api/rclone/remotes', (req, res) => ok(res, { items: rclone.remotes() }));
+app.post('/api/rclone/install', wrap(async (req, res) => {
+  requireAdmin(req);
+  ok(res, await rclone.installBinary());
+}));
+app.post('/api/rclone/remotes', wrap(async (req, res) => ok(res, await rclone.addRemote(req.body || {}))));
+app.put('/api/rclone/remotes/:id', wrap(async (req, res) => ok(res, await rclone.updateRemote(req.params.id, req.body || {}))));
+app.delete('/api/rclone/remotes/:id', wrap(async (req, res) => ok(res, await rclone.removeRemote(req.params.id))));
+app.post('/api/rclone/remotes/:id/activate', wrap(async (req, res) => ok(res, rclone.activateRemote(req.params.id))));
+app.post('/api/rclone/remotes/:id/probe', wrap(async (req, res) => ok(res, await rclone.probeRemote(req.params.id))));
+
+app.get('/api/rclone/files', tolerant(
+  async (req, res) => ok(res, await rclone.list(req.query.remote, req.query.path || '/')),
+  (req) => ({
+    path: String(req.query.path || '/'), parent: '/', content: [], total: 0,
+    provider: 'rclone', write: false, degraded: true,
+  }),
+));
+app.post('/api/rclone/files/mkdir', wrap(async (req, res) => {
+  requireBody(req.body, ['path', 'name']);
+  ok(res, await rclone.mkdir(req.body.remote, req.body.path, req.body.name));
+}));
+app.post('/api/rclone/files/rename', wrap(async (req, res) => {
+  requireBody(req.body, ['path', 'name', 'newName']);
+  ok(res, await rclone.rename(req.body.remote, req.body.path, req.body.name, req.body.newName));
+}));
+app.post('/api/rclone/files/remove', wrap(async (req, res) => {
+  requireBody(req.body, ['path', 'names']);
+  ok(res, await rclone.remove(req.body.remote, req.body.path, req.body.names));
+}));
+app.post('/api/rclone/files/move', wrap(async (req, res) => {
+  requireBody(req.body, ['srcDir', 'dstDir', 'names']);
+  ok(res, await rclone.move(req.body.remote, req.body.srcDir, req.body.dstDir, req.body.names));
+}));
+app.post('/api/rclone/files/copy', wrap(async (req, res) => {
+  requireBody(req.body, ['srcDir', 'dstDir', 'names']);
+  ok(res, await rclone.copy(req.body.remote, req.body.srcDir, req.body.dstDir, req.body.names));
+}));
+app.get('/api/rclone/files/content', wrap(async (req, res) => {
+  ok(res, await rclone.content(req.query.remote, String(req.query.path || ''), req.query.encoding));
+}));
+app.put('/api/rclone/files/content', wrap(async (req, res) => {
+  requireBody(req.body, ['path', 'content']);
+  ok(res, await rclone.writeText(req.body.remote, req.body.path, req.body.content, req.body.options || {}));
+}));
+app.get('/api/rclone/files/download', wrap(async (req, res) => {
+  const p = String(req.query.path || '');
+  const buffer = await rclone.cat(req.query.remote, p);
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(rclone.safePath(p)))}`);
+  res.end(buffer);
+}));
+app.put('/api/rclone/files/upload', wrap(async (req, res) => {
+  const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  ok(res, await rclone.upload(req.query.remote, String(req.query.path || '/'), String(req.query.name || 'upload.bin'), buffer));
+}), { raw: true });
+app.get('/api/rclone/files/link', wrap(async (req, res) => ok(res, await rclone.link(req.query.remote, String(req.query.path || '')))));
+
+app.get('/api/rclone/gateway', wrap(async (req, res) => ok(res, await storageGateway.status())));
+app.put('/api/rclone/gateway', wrap(async (req, res) => ok(res, storageGateway.updateSettings(req.body || {}))));
+app.post('/api/rclone/gateway/start', wrap(async (req, res) => {
+  requireAdmin(req);
+  ok(res, await storageGateway.start());
+}));
+app.post('/api/rclone/gateway/stop', wrap(async (req, res) => {
+  requireAdmin(req);
+  ok(res, await storageGateway.stop());
+}));
+app.get('/api/rclone/gateway/logs', wrap(async (req, res) => {
+  ok(res, await storageGateway.logs(Number(req.query.tail || 100)));
+}));
+// WinFsp 静默安装（v0.4.29）：需管理员 + 随包 MSI；状态见 /api/rclone/gateway 的 winFsp 字段。
+app.post('/api/rclone/gateway/winfsp/install', wrap(async (req, res) => {
+  requireAdmin(req);
+  ok(res, await storageGateway.ensureWinFsp({ auto: false }));
+}));
+
 /* -------------------- OpenList 管理（存储 / 文件页） -------------------- */
 // 平台把 OpenList 后台能力做成原生 API：连接配置、挂载存储、驱动、文件全操作，
 // 另有「打开 / 内嵌后台」入口。旧的 /api/storage/* 保持不变，供其它客户端继续调用。
@@ -867,6 +952,26 @@ app.post('/api/openlist/connections', wrap(async (req, res) => ok(res, openlist.
 app.put('/api/openlist/connections/:id', wrap(async (req, res) => ok(res, openlist.editConnection(req.params.id, req.body || {}))));
 app.delete('/api/openlist/connections/:id', wrap(async (req, res) => ok(res, openlist.removeConnection(req.params.id))));
 app.post('/api/openlist/connections/:id/activate', wrap(async (req, res) => ok(res, openlist.activateConnection(req.params.id))));
+
+// v0.4.28 · 连接根目录映射：按连接 id 只读浏览任意一条登记的 OpenList 根目录，
+// 不切换全局 active。归属由 guard(collectIds) 对 :id 做 read 判定（owner/read 协作者/管理员）。
+app.get('/api/openlist/connections/:id/root', tolerant(
+  async (req, res) => {
+    const data = await openlist.listConnectionFiles(req.params.id, req.query.path, {
+      page: req.query.page, perPage: req.query.perPage, refresh: req.query.refresh === '1',
+    }, req.user);
+    ok(res, data);
+  },
+  (req) => {
+    const p = String(req.query.path || '/');
+    return {
+      connectionId: req.params.id, path: p,
+      parent: p === '/' ? '/' : `/${p.split('/').filter(Boolean).slice(0, -1).join('/')}`,
+      content: [], total: 0, provider: 'OpenList', write: false, readme: '',
+      degraded: true,
+    };
+  },
+));
 
 app.get('/api/openlist/status', wrap(async (req, res) => ok(res, await openlist.status())));
 app.get('/api/openlist/settings', tolerant(
@@ -1049,6 +1154,21 @@ app.get('/api/openlist/admin/api/*', wrap(proxyOpenlistApi));
 app.post('/api/openlist/admin/api/*', wrap(proxyOpenlistApi));
 app.put('/api/openlist/admin/api/*', wrap(proxyOpenlistApi));
 app.delete('/api/openlist/admin/api/*', wrap(proxyOpenlistApi));
+
+/* -------------------- Windows 网络盘映射（v0.4.28） -------------------- */
+// 把 OpenList 连接的 WebDAV 根目录映射为 Windows 网络驱动器。仅管理员可操作；
+// 非 Windows 平台由 driveMount 优雅降级，不会抛错。
+app.get('/api/drive-mount/status', wrap(async (req, res) => {
+  ok(res, await driveMount.status(String(req.query.drive || '')));
+}));
+app.post('/api/drive-mount/map', wrap(async (req, res) => {
+  requireAdmin(req);
+  ok(res, await driveMount.map(req.body || {}));
+}));
+app.post('/api/drive-mount/unmap', wrap(async (req, res) => {
+  requireAdmin(req);
+  ok(res, await driveMount.unmap(req.body || {}));
+}));
 
 /* ------------------------- 分层代理配置（§27） ------------------------- */
 // 优先级：单项代理 > (Git Host 匹配规则) > 分组代理 > 全局代理。

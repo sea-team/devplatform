@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261122d" />
+  <link rel="stylesheet" href="/style.css?v=20261124b" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -399,7 +399,7 @@
           </div>
           <div class="card">
             <div class="card-head"><h2>Docker 运行环境</h2>
-              <select id="docker-target" style="max-width:280px"><option value="local">本机 Docker</option></select>
+              <select id="docker-target" class="ui-select" style="max-width:280px"><option value="local">本机 Docker</option></select>
             </div>
             <div class="hint" id="docker-hint">容器 / 镜像 / 存储卷 / 网络 / 编排模板 / 设置，参照宝塔 Docker 模块组织，各功能已拆成独立标签页。</div>
             <div class="notice" id="docker-status">检测中…</div>
@@ -461,7 +461,7 @@
             <div class="hint">带 devplatform.ext 标签的是平台自建容器，可直接管理；其它容器默认只读，启停 / 删除需二次确认。端口映射超长时只显示前两条，鼠标悬停可看完整列表。</div>
             <div class="row gap wrap" style="margin-top:12px">
               <input id="docker-container-filter" placeholder="按名称 / 镜像 / 状态筛选" style="max-width:260px" />
-              <select id="docker-container-state" style="max-width:150px">
+              <select id="docker-container-state" class="ui-select" style="max-width:150px">
                 <option value="all">全部状态</option>
                 <option value="running">仅运行中</option>
                 <option value="stopped">仅已停止</option>
@@ -663,7 +663,7 @@
                 <div class="cm-compose-bar">
                   <b>YAML 内容</b><span class="muted small">与文件编辑器同款 CodeMirror：语法高亮 / 行号 / 折叠 / 查找（Ctrl+F）/ 自动缩进</span>
                   <span class="flex-spacer"></span>
-                  <label class="cm-height">编辑器高度<select id="docker-tpl-height" style="width:auto;min-width:118px">
+                  <label class="cm-height">编辑器高度<select id="docker-tpl-height" class="ui-select ui-select-sm" style="width:auto;min-width:118px">
                     <option value="360">标准 360px</option>
                     <option value="480" selected>宽裕 480px</option>
                     <option value="640">超高 640px</option>
@@ -762,10 +762,18 @@
             <button class="subnav-btn" data-open-view="storage-conn">连接管理</button>
             <button class="subnav-btn" data-open-view="storage-mounts">挂载存储</button>
             <button class="subnav-btn" data-open-view="storage-drivers">WebDAV / 驱动</button>
+            <button class="subnav-btn" data-open-view="rclone">rclone 挂载</button>
           </div>
           <div class="card">
             <div class="card-head"><h2>文件浏览</h2><span class="muted" id="storage-provider"></span></div>
             <div class="hint" id="storage-current-conn">当前连接加载中…</div>
+            <!-- v0.4.28 · 连接根目录映射：任选一条已登记连接只读浏览其根目录，无需切换全局 active -->
+            <div class="row gap wrap" id="ol-root-map-bar" style="margin-top:8px">
+              <label class="check" style="display:inline-flex;align-items:center;gap:6px">连接根目录映射
+                <select id="ol-root-conn-picker" class="ui-select" style="min-width:220px"><option value="">当前激活连接</option></select>
+              </label>
+              <span class="muted small" id="ol-root-map-note">可任选一条已登记连接直接浏览其根目录；非当前连接为只读映射，写操作请在「连接管理」设为当前后进行。</span>
+            </div>
             <div class="notice" id="storage-degraded" hidden>—</div>
             <form id="storage-path-form" class="row" style="margin-top:12px">
               <input id="storage-path" type="hidden" value="/" />
@@ -810,6 +818,7 @@
             <button class="subnav-btn active" data-open-view="storage-conn">连接管理</button>
             <button class="subnav-btn" data-open-view="storage-mounts">挂载存储</button>
             <button class="subnav-btn" data-open-view="storage-drivers">WebDAV / 驱动</button>
+            <button class="subnav-btn" data-open-view="rclone">rclone 挂载</button>
           </div>
           <div class="card">
             <div class="card-head"><h2>OpenList 连接状态</h2><span class="muted" id="openlist-status-text">检测中…</span></div>
@@ -871,6 +880,7 @@
             <button class="subnav-btn" data-open-view="storage-conn">连接管理</button>
             <button class="subnav-btn active" data-open-view="storage-mounts">挂载存储</button>
             <button class="subnav-btn" data-open-view="storage-drivers">WebDAV / 驱动</button>
+            <button class="subnav-btn" data-open-view="rclone">rclone 挂载</button>
           </div>
           <div class="card">
             <div class="card-head"><h2>挂载存储</h2>
@@ -912,6 +922,7 @@
             <button class="subnav-btn" data-open-view="storage-conn">连接管理</button>
             <button class="subnav-btn" data-open-view="storage-mounts">挂载存储</button>
             <button class="subnav-btn active" data-open-view="storage-drivers">WebDAV / 驱动</button>
+            <button class="subnav-btn" data-open-view="rclone">rclone 挂载</button>
           </div>
           <div class="card">
             <div class="card-head"><h2>WebDAV 地址</h2><span class="muted">可挂载到本机 / rclone</span></div>
@@ -922,10 +933,138 @@
             </div>
             <p class="muted small">rclone：<code>rclone config → webdav → url: http://localhost:5244/dav/</code>；外部连接请使用上方显示的实际地址。</p>
           </div>
+          <!-- v0.4.28 · Windows 网络盘映射：把 OpenList WebDAV 根目录映射为本地磁盘 -->
+          <div class="card" id="drive-mount-card">
+            <div class="card-head"><h2>映射为网络盘（Windows）</h2><span class="muted" id="dm-platform">检测中…</span></div>
+            <div class="notice" id="dm-support-note">检测平台能力中…</div>
+            <div id="dm-controls" hidden>
+              <div class="grid-3">
+                <label>连接
+                  <select id="dm-conn"><option value="">当前激活连接</option></select>
+                </label>
+                <label>盘符<input id="dm-drive" placeholder="Z:" value="Z:" maxlength="2" /></label>
+                <label style="display:flex;align-items:flex-end;gap:8px">
+                  <label class="check"><input type="checkbox" id="dm-persistent" /> 重启后保留映射</label>
+                </label>
+              </div>
+              <div class="row gap wrap" style="margin-top:10px">
+                <button class="btn btn-primary btn-sm" id="dm-map" type="button">映射为网络盘</button>
+                <button class="btn btn-sm" id="dm-probe" type="button">查询盘符状态</button>
+                <button class="btn btn-ghost btn-sm" id="dm-unmap" type="button">断开映射</button>
+              </div>
+              <div class="hint" style="margin-top:8px">WebDAV 地址与管理员凭据由服务端从所选连接推导，浏览器不会拿到密码。映射作用于平台进程所在会话：若平台以服务 / 计划任务运行，盘符可能不在你的资源管理器显示（下方会提示）；建议在桌面双击运行平台 exe。HTTPS 自签证书可能映射失败，可改用 rclone。</div>
+            </div>
+            <pre class="log short" id="dm-result" hidden>—</pre>
+          </div>
           <div class="card">
             <div class="card-head"><h2>可用驱动清单</h2><span class="muted">当前激活连接支持的全部存储驱动</span></div>
             <div class="hint">这里是当前激活的 OpenList 返回的驱动清单，用于<b>新增挂载</b>时选择驱动并填写配置。点「选用」会自动跳到「挂载存储」页并带入该驱动的配置模板；点「模板」可查看 / 复制该驱动的 addition 配置 JSON。</div>
             <div id="storage-driver-list" class="list" style="margin-top:12px;max-height:420px;overflow:auto"></div>
+          </div>
+        </section>
+
+        <!-- 存储 / 文件 · rclone 挂载（独立页：远端配置 + 文件浏览 + SMB 共享网关） -->
+        <section class="page" id="view-rclone">
+          <div class="subnav">
+            <span class="subnav-label">存储 / 文件</span>
+            <button class="subnav-btn" data-open-view="storage">文件浏览</button>
+            <button class="subnav-btn" data-open-view="storage-conn">连接管理</button>
+            <button class="subnav-btn" data-open-view="storage-mounts">挂载存储</button>
+            <button class="subnav-btn" data-open-view="storage-drivers">WebDAV / 驱动</button>
+            <button class="subnav-btn active" data-open-view="rclone">rclone 挂载</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>rclone 运行状态</h2><span class="muted" id="rclone-status-text">检测中…</span></div>
+            <div class="notice" id="rclone-status-detail">-</div>
+            <div class="hint" style="margin-top:8px">文件浏览 / 上传 / 编辑直接调用 rclone CLI，<b>不需要 FUSE、不需要特权容器</b>；把远端变成 Windows 网络盘才需要下方的共享网关（Linux 用专用容器 + Samba，Windows 用 WinFsp）。</div>
+            <div class="row gap wrap" style="margin-top:8px">
+              <button class="btn btn-ghost btn-sm" id="rclone-refresh">刷新状态</button>
+              <button class="btn btn-sm" id="rclone-install" type="button">安装 rclone 到 data/bin（Docker）</button>
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2>远端配置</h2><span class="muted">凭据只存服务端，列表脱敏</span></div>
+              <div id="rclone-remote-list" class="list"></div>
+              <form id="rclone-remote-form" class="form" style="margin-top:12px">
+                <div class="grid-2">
+                  <label>名称<input name="name" placeholder="webdav1（限字母数字_-）" required /></label>
+                  <label>显示名<input name="label" placeholder="可选" /></label>
+                </div>
+                <div class="grid-2">
+                  <label>类型<select name="type">
+                    <option value="webdav">WebDAV（OpenList / NAS）</option>
+                    <option value="s3">S3 / 对象存储</option>
+                    <option value="sftp">SFTP / SSH</option>
+                    <option value="ftp">FTP</option>
+                    <option value="local">本地目录</option>
+                  </select></label>
+                  <label>地址 url<input name="url" placeholder="http://10.0.0.246:5244/dav/" /></label>
+                </div>
+                <div class="grid-2">
+                  <label>用户名<input name="user" placeholder="如 admin" /></label>
+                  <label>密码 / Token<input name="pass" type="password" placeholder="留空表示沿用原值" /></label>
+                </div>
+                <div class="grid-2">
+                  <label>endpoint（S3）<input name="endpoint" placeholder="https://s3.example.com" /></label>
+                  <label>host:port（SFTP）<input name="host" placeholder="10.0.0.246:22" /></label>
+                </div>
+                <label>其它 rclone 参数（JSON，可选）<input name="extra" placeholder='{"region":"auto","vendor":"other"}' /></label>
+                <div class="form-actions">
+                  <button class="btn btn-primary btn-sm" type="submit">保存远端</button>
+                  <button class="btn btn-ghost btn-sm" type="button" id="rclone-remote-reset">清空表单</button>
+                </div>
+              </form>
+              <div class="notice">WebDAV 类型填 <code>url</code>（OpenList 用 <code>http://地址:5244/dav/</code>）；S3 填 <code>endpoint</code>；SFTP 填 <code>host</code>（可带端口）。HTTPS 自签证书请在「其它参数」里加 <code>{"no_check_certificate":true}</code>。</div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>文件浏览</h2><span class="muted" id="rclone-provider">rclone</span></div>
+              <div class="row gap wrap">
+                <label class="inline-field">远端<select id="rclone-remote-picker" class="ui-select" style="min-width:180px"><option value="">默认远端</option></select></label>
+                <button class="btn btn-ghost btn-sm" id="rclone-up" type="button">上一级</button>
+                <button class="btn btn-ghost btn-sm" id="rclone-refresh-files" type="button">刷新</button>
+              </div>
+              <div id="rclone-breadcrumb" class="pathbar-slot" style="margin-top:8px"></div>
+              <div class="row gap wrap file-toolbar" style="margin-top:8px">
+                <button class="btn btn-sm" data-rc-action="rename">重命名</button>
+                <button class="btn btn-sm" data-rc-action="link">直链</button>
+                <button class="btn btn-sm" data-rc-action="download">下载</button>
+                <button class="btn btn-sm btn-danger" data-rc-action="remove">删除所选</button>
+              </div>
+              <div id="rclone-file-list" class="table-wrap" style="margin-top:8px"></div>
+              <div class="row gap wrap" style="margin-top:10px">
+                <form id="rclone-mkdir-form" class="row"><input name="name" placeholder="新目录名" required /><button class="btn btn-sm" type="submit">新建目录</button></form>
+                <label class="file-btn">上传文件<input type="file" id="rclone-upload-input" multiple /></label>
+              </div>
+              <pre class="log short" id="rclone-result" hidden>—</pre>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>SMB 共享网关</h2><span class="muted" id="gw-mode-label">检测中…</span></div>
+            <div class="notice" id="gw-info">检测中…</div>
+            <div class="winfsp-bar" id="gw-winfsp-bar" hidden>
+              <span class="pill-mini" id="gw-admin-pill">权限：检测中</span>
+              <span class="pill-mini" id="gw-fsp-pill">WinFsp：检测中</span>
+              <span class="muted small" id="gw-msi-note"></span>
+              <button class="btn btn-sm" id="gw-winfsp-install" type="button" hidden>自动安装 WinFsp</button>
+            </div>
+            <div class="grid-3" style="margin-top:10px">
+              <label>共享的远端<select id="gw-remote"><option value="">默认远端</option></select></label>
+              <label>SMB 端口<input id="gw-port" type="number" min="1" max="65535" value="445" /></label>
+              <label>共享名<input id="gw-share" value="dpstorage" maxlength="32" /></label>
+              <label>SMB 用户<input id="gw-user" value="dpstorage" maxlength="32" /></label>
+              <label>SMB 密码<input id="gw-pass" type="password" placeholder="留空沿用已保存" /></label>
+              <label>Windows 盘符<input id="gw-drive" value="Z:" maxlength="2" /></label>
+            </div>
+            <div class="row gap wrap" style="margin-top:10px">
+              <button class="btn btn-sm" id="gw-save" type="button">保存设置</button>
+              <button class="btn btn-primary btn-sm" id="gw-start" type="button">启动共享</button>
+              <button class="btn btn-ghost btn-sm" id="gw-stop" type="button">停止共享</button>
+              <button class="btn btn-ghost btn-sm" id="gw-logs" type="button">查看日志</button>
+            </div>
+            <div class="hint" style="margin-top:8px">Linux：平台通过 docker.sock 创建带 FUSE 的专用容器，容器内 <code>rclone mount + smbd</code>，宿主机不装任何软件包；停止即删除容器。Windows：平台用 <code>rclone mount + net share</code>，依赖 WinFsp——正式版 exe 双击即弹 UAC 提权，全量包 <code>windows/bin/winfsp.msi</code> 已随包自带，未安装时点上方「自动安装 WinFsp」静默安装（也可在启动共享时自动装）；轻量包 / 单文件 exe 需先补齐 MSI 或手动安装 <a href="https://winfsp.dev/rel/" target="_blank" rel="noopener">WinFsp</a>。非交互会话下盘符可能不可见，界面会提示。Windows 客户端访问地址：<code id="gw-address">\\127.0.0.1\dpstorage</code></div>
+            <pre class="log short" id="gw-result" hidden>—</pre>
+            <pre class="log short" id="gw-log-view" hidden>—</pre>
           </div>
         </section>
 
@@ -1020,7 +1159,7 @@
             <div class="card-head"><h2>已登记服务器</h2>
               <div class="row gap" style="align-items:center">
                 <label class="muted" style="font-size:12px;white-space:nowrap">状态自动刷新
-                  <select id="server-poll-interval" style="width:auto;min-width:82px;padding:4px 8px;font-size:12px">
+                  <select id="server-poll-interval" class="ui-select ui-select-sm" style="width:auto;min-width:82px">
                     <option value="10000">10 秒</option>
                     <option value="15000">15 秒</option>
                     <option value="30000">30 秒</option>
@@ -1084,7 +1223,7 @@
             <div class="card-head"><h2 id="ext-install-title">安装实例</h2><button class="btn btn-ghost btn-sm" id="ext-install-close">取消</button></div>
             <div class="row ext-mode-row">
               <span class="muted">运行模式</span>
-              <select id="ext-mode">
+              <select id="ext-mode" class="ui-select">
                 <option value="docker">本机 Docker 容器（自动安装）</option>
                 <option value="external">外部数据库（只登记连接信息）</option>
               </select>
@@ -1348,7 +1487,7 @@
                   <span class="muted small" id="ops-chat-sub">选择一个会话，或新建会话开始对话</span>
                 </div>
                 <div class="ops-head-tools">
-                  <select id="ops-provider" title="AI 服务"></select>
+                  <select id="ops-provider" class="ui-select" title="AI 服务"></select>
                   <div class="ops-scope-wrap">
                     <button class="btn btn-sm" type="button" id="ops-server-btn" title="选择本次会话要诊断 / 巡检的服务器">🖥 服务器：全部</button>
                     <div class="ops-scope-panel" id="ops-server-panel" hidden>
@@ -1411,7 +1550,7 @@
                   <span class="muted small" id="ach-sub">选择一个会话，或新建后开始对话</span>
                 </div>
                 <div class="aichat-head-tools">
-                  <select id="ach-provider" title="AI 模型（按服务分组）"></select>
+                  <select id="ach-provider" class="ui-select" title="AI 模型（按服务分组）"></select>
                   <button class="btn btn-sm" type="button" id="ach-rename" title="重命名会话">重命名</button>
                   <button class="btn btn-sm" type="button" id="ach-clear" title="清空当前会话消息">清空</button>
                   <button class="btn btn-sm btn-danger" type="button" id="ach-delete" title="删除当前会话">删除</button>
@@ -1725,9 +1864,9 @@
       <div class="modal-body">
         <div class="ed-toolbar">
           <div class="ed-opts">
-            <label>语法高亮<select id="ol-ed-lang"></select></label>
-            <label>文件编码<select id="ol-ed-encoding"></select></label>
-            <label>换行符<select id="ol-ed-newline"></select></label>
+            <label>语法高亮<select id="ol-ed-lang" class="ui-select ui-select-sm"></select></label>
+            <label>文件编码<select id="ol-ed-encoding" class="ui-select ui-select-sm"></select></label>
+            <label>换行符<select id="ol-ed-newline" class="ui-select ui-select-sm"></select></label>
             <label class="ed-bom"><input type="checkbox" id="ol-ed-bom" /> 保留 BOM</label>
           </div>
           <div class="ed-ops">
@@ -1910,6 +2049,6 @@
   <script src="/vendor/cm-modes.js"></script>
   <script src="/vendor/cm-addons.js"></script>
   <script src="/vendor/qrcode.js"></script>
-  <script src="/app.js?v=20261122d"></script>
+  <script src="/app.js?v=20261124b"></script>
 </body>
 </html>

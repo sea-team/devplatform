@@ -44,6 +44,8 @@ const GLOBAL_WRITE_PATTERNS = [
   /^\/api\/environment$/,
   /^\/api\/proxy\//,
   /^\/api\/proxy$/,
+  /^\/api\/drive-mount/,                             // Windows 网络盘映射（net use 本机操作，仅管理员）
+  /^\/api\/rclone/,                                  // rclone 远端 / 网关（本机进程与特权容器，写操作仅管理员）
   /^\/api\/git\/runtime/,
   /^\/api\/ide\/config/,
   /^\/api\/extensions\/settings/,
