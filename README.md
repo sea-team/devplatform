@@ -73,6 +73,7 @@
 - 仓库版本号仍标记 `0.4.28`（`platform/package.json`）；v0.4.29 / v0.4.30 的功能改动**尚未发版**，详见 `release-notes.md`。
 - 前端静态资源缓存戳 `20261124q`；`npm run check`、`npm run typecheck`（基线 78）、`node scripts/check-frontend.js` 全过。
 - 官方应用模板位于 `platform/appstore/`（319 个模板 `.env` 属样例配置，必须随仓库入库；`.gitignore` 已加白名单）。
+- **同步官方模板注意**：Dify 系列模板原本自带 `SECRET_KEY=sk-...` 官方示例串，会被 GitHub Push Protection 判为 OpenAI API Key 而拦截推送。已统一替换为 `REPLACE_WITH_YOUR_OWN_SECRET_KEY`（`.env` 与 `docker-compose.yml` 默认值共 8 处）。后续用 `scripts/sync-appstore.js` 重新同步官方数据后，须再次替换，否则 push 会被拦截。
 
 ### 1.2 架构示意
 
