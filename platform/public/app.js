@@ -29,6 +29,7 @@ const VIEW_META = {
   'docker-volumes': ['Docker · 存储卷', '持久化卷的创建、挂载点与删除'],
   'docker-networks': ['Docker · 网络', '容器网络的创建、驱动与作用域'],
   'docker-compose': ['Docker · 编排', 'Compose YAML 模板登记（不在平台内执行）'],
+  'docker-apps': ['Docker · 应用商店', '复用宝塔 appstore 模板：筛选 / 搜索 / 填参生成 compose 与 .env'],
   proxy: ['代理配置', '全局 / 分组 / Git Host 规则 / 单项覆盖，四级优先级解析与连通性测试'],
   environment: ['环境 · 自适应诊断', '自动识别环境、体检、切换档案与自动处置，换机器无需改代码'],
   envcfg: ['环境 · 变量配置', '查看与管理 .env：白名单写入、脱敏、待重启提示与诊断联动的配置指引'],
@@ -45,7 +46,7 @@ const MODULE_ICONS = {
   builds: '⚙', 'build-start': '▶', deploys: '⇧',
   servers: '▣', 'server-new': '＋', extensions: '▦', gitsrc: '⑃',
   docker: '⬡', 'docker-containers': '▣', 'docker-images': '◫', 'docker-volumes': '⛁',
-  'docker-networks': '⌘', 'docker-compose': '▦',
+  'docker-networks': '⌘', 'docker-compose': '▦', 'docker-apps': '◉',
   proxy: '⇄', environment: '⌬', envcfg: '⚙', ai: '✦', 'ai-list': '☷', 'ai-test': '⇆', ops: '◎', aichat: '✧',
   users: '♙',
 };
@@ -56,7 +57,7 @@ const NAV_GROUP = {
   'build-start': 'builds', deploys: 'builds', 'server-new': 'servers',
   'ai-list': 'ai', 'ai-test': 'ai', 'ide-config': 'ide',
   'docker-containers': 'docker', 'docker-images': 'docker', 'docker-volumes': 'docker',
-  'docker-networks': 'docker', 'docker-compose': 'docker',
+  'docker-networks': 'docker', 'docker-compose': 'docker', 'docker-apps': 'docker',
   envcfg: 'environment',
 };
 
@@ -1057,12 +1058,8 @@ async function loadRepos() {
     $$('[data-clone-repo]').forEach((b) => b.addEventListener('click', () => {
       const url = b.dataset.cloneRepo;
       if (!url) { toast('该仓库没有可用的 HTTP 克隆地址', true); return; }
-      $('#clone-form').elements.cloneUrl.value = url;
-      $('#clone-form').elements.name.value = b.dataset.cloneName || '';
-      $('#clone-source').value = b.dataset.cloneSource || '';
-      $('#clone-repo-id').value = b.dataset.cloneId || '';
-      switchView('repo-clone');
-      toast('已填入克隆表单，点击「克隆到工作区」执行');
+      fillCloneForm(url, b.dataset.cloneName || '', b.dataset.cloneSource || '', b.dataset.cloneId || '');
+      openRepoCloneModal(b.dataset.cloneName || '');
     }));
     // 只绑定仓库列表内的复制按钮；全局 [data-copy] 会误抓驱动模板弹窗的「复制 JSON」（无值），把剪贴板写成空串。
     ($('#repo-list') ? $$('#repo-list [data-copy]') : []).forEach((b) => b.addEventListener('click', async () => {
@@ -1169,20 +1166,146 @@ function repoHostPath(ctx, name) {
   return `${ctx.base}/${String(name).replace(/[^A-Za-z0-9_.-]/g, '-')}`;
 }
 
-async function openRepoFiles(name) {
+/* ---------- v0.4.30：Git 仓库「文件管理」「克隆到工作区」弹窗化 ---------- */
+/* 两个弹窗都直接复用静态 DOM（表单/文件列表在弹窗里），不新建标签页；关闭时回到仓库列表。 */
+const repoModalState = { cloneOpenedFrom: '', files: { ctx: null, path: '', name: '', seq: 0 } };
+
+function fillCloneForm(url, name, sourceId, repoId) {
+  const form = $('#clone-form');
+  if (!form) return;
+  form.elements.cloneUrl.value = url || '';
+  form.elements.name.value = name || '';
+  if ($('#clone-source')) $('#clone-source').value = sourceId || '';
+  if ($('#clone-repo-id')) $('#clone-repo-id').value = repoId || '';
+  const conflict = $('#clone-conflict');
+  if (conflict) conflict.hidden = true;
+  syncCloneAuthFields();
+}
+
+function openRepoCloneModal(name) {
+  const modal = $('#repo-clone-modal');
+  if (!modal) return;
+  $('#repo-clone-modal-title').textContent = name ? `克隆到工作区 · ${name}` : '克隆到工作区';
+  modal.hidden = false;
+  document.body.style.overflow = 'hidden';
+  const input = $('#clone-form') && $('#clone-form').elements.cloneUrl;
+  if (input) setTimeout(() => input.focus(), 30);
+}
+
+function closeRepoCloneModal() {
+  const modal = $('#repo-clone-modal');
+  if (modal) modal.hidden = true;
+  if (!$('#repo-files-modal') || $('#repo-files-modal').hidden) document.body.style.overflow = '';
+  // 从仓库列表点开克隆弹窗，关闭后仍停在仓库列表，不再跳页。
+  switchView('repos');
+}
+
+$('#repo-clone-open-btn') && $('#repo-clone-open-btn').addEventListener('click', () => {
+  fillCloneForm('', '', '', '');
+  openRepoCloneModal('');
+});
+// 关闭按钮 / 遮罩（文档级委托，避免重复绑定）
+document.addEventListener('click', (e) => {
+  const btn = e.target && e.target.closest ? e.target.closest('[data-repo-modal-close]') : null;
+  if (!btn) return;
+  if (btn.dataset.repoModalClose === 'clone') closeRepoCloneModal();
+  else if (btn.dataset.repoModalClose === 'files') closeRepoFilesModal();
+});
+
+/** 轻量弹窗文件浏览器：复用后端 /servers/:id/files，不新建标签页、不依赖 tab 系统。 */
+async function openRepoFilesModal(name) {
+  const modal = $('#repo-files-modal');
+  const slot = $('#repo-files-modal-slot');
+  if (!modal || !slot) return;
+  $('#repo-files-modal-title').textContent = `文件管理 · ${name}`;
+  modal.hidden = false;
+  document.body.style.overflow = 'hidden';
+  slot.innerHTML = '<div class="muted" style="padding:16px">正在解析仓库目录…</div>';
   try {
     const ctx = await repoHostContext();
-    if (!ctx) return;
-    openFilesTab(ctx.server, repoHostPath(ctx, name));
-    toast(`已打开 ${name} 的远程文件管理`);
-  } catch (e) { toast(e.message, true); }
+    if (!ctx) { slot.innerHTML = '<div class="notice error" style="margin:16px">无法定位仓库目录：请先在「服务器」页登记宿主机</div>'; return; }
+    repoModalState.files.ctx = ctx;
+    repoModalState.files.path = repoHostPath(ctx, name);
+    repoModalState.files.name = name;
+    slot.innerHTML = `
+      <div class="ws-panel" style="border:0;border-radius:0;box-shadow:none">
+        <div class="file-toolbar" style="padding:10px 14px 0">
+          <button class="btn btn-sm" data-repo-fs="up">↑ 上一级</button>
+          <button class="btn btn-sm" data-repo-fs="refresh">刷新</button>
+          <span class="flex-spacer"></span>
+          <span class="muted small" data-role="repo-fs-path"></span>
+        </div>
+        <div class="fs-table" data-role="repo-fs-list" style="margin:10px 14px 14px"></div>
+      </div>`;
+    slot.querySelector('.ws-panel').addEventListener('click', (ev) => {
+      const tool = ev.target.closest('[data-repo-fs]');
+      if (tool) { repoFsToolbar(tool.dataset.repoFs); return; }
+      const link = ev.target.closest('.repo-fs-name');
+      if (link) {
+        ev.preventDefault();
+        const row = link.closest('tr');
+        if (row && row.dataset.repoFsDir === '1') {
+          repoModalState.files.path = row.dataset.repoFsPath;
+          loadRepoFs();
+        }
+      }
+    });
+    loadRepoFs();
+  } catch (e) { slot.innerHTML = `<div class="notice error" style="margin:16px">${esc(e.message)}</div>`; }
+}
+
+async function loadRepoFs() {
+  const st = repoModalState.files;
+  const slot = $('#repo-files-modal-slot');
+  if (!slot || !st.ctx) return;
+  const list = slot.querySelector('[data-role="repo-fs-list"]');
+  const bar = slot.querySelector('[data-role="repo-fs-path"]');
+  if (!list) return;
+  const seq = (st.seq = (st.seq || 0) + 1);
+  const snapshot = st.path;
+  if (bar) bar.textContent = snapshot;
+  list.innerHTML = '<div class="muted" style="padding:14px">读取中…</div>';
+  try {
+    const d = await api(`/servers/${st.ctx.server.id}/files?path=${encodeURIComponent(snapshot)}`);
+    if (seq !== st.seq) return;
+    st.path = d.path || snapshot;
+    if (bar) bar.textContent = st.path;
+    const items = d.items || [];
+    list.innerHTML = `<table><thead><tr><th>名称</th><th style="width:110px">大小</th><th style="width:120px">类型</th><th style="width:170px">修改时间</th></tr></thead><tbody>${
+      items.map((it) => `<tr data-repo-fs-path="${esc(it.path)}" data-repo-fs-dir="${it.isDir ? 1 : 0}">
+        <td>${it.isDir ? '📁' : '📄'} <a href="#" class="repo-fs-name">${esc(it.name)}</a></td>
+        <td>${it.isDir ? '—' : fmtSize(it.size)}</td>
+        <td>${esc(it.isDir ? '目录' : (it.language || '文件'))}</td>
+        <td class="muted">${esc(fmtTime(it.mtime))}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">目录为空</td></tr>'
+    }</tbody></table>`;
+  } catch (e) { list.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
+}
+
+function repoFsToolbar(action) {
+  const st = repoModalState.files;
+  if (action === 'up') { st.path = pathParent(st.path) || '/'; loadRepoFs(); return; }
+  if (action === 'refresh') { loadRepoFs(); return; }
+}
+
+function closeRepoFilesModal() {
+  const modal = $('#repo-files-modal');
+  if (modal) modal.hidden = true;
+  if (!$('#repo-clone-modal') || $('#repo-clone-modal').hidden) document.body.style.overflow = '';
+  switchView('repos');
+}
+
+async function openRepoFiles(name) {
+  await openRepoFilesModal(name);
 }
 
 async function openRepoTerminal(name) {
   try {
     const ctx = await repoHostContext();
     if (!ctx) return;
-    openTerminalTab(ctx.server, repoHostPath(ctx, name));
+    // v0.4.30：终端断开 / 关闭标签时回到「仓库列表」页。
+    openTerminalTab(ctx.server, repoHostPath(ctx, name), {
+      onClose: () => { switchView('repos'); },
+    });
     toast(`终端已打开并切换到 ${name}`);
   } catch (e) { toast(e.message, true); }
 }
@@ -1642,7 +1765,7 @@ function renderOpenlistStatus(status) {
     : `${label} ${status ? status.url || '' : ''} ${status ? (status.hint || status.error || '') : ''}`;
   $('#openlist-open').href = (status && status.manageUrl) || '#';
   $('#webdav-url').textContent = (status && status.webdav) || '-';
-  if (online && !$('#openlist-frame-card').hidden) {
+  if (online && $('#openlist-frame-card').classList.contains('as-modal')) {
     // v0.4.7：走平台同源代理，自动注入 token 登录，避免跨域 / 手动登录。
     $('#openlist-frame').src = '/api/openlist/admin';
   }
@@ -3394,7 +3517,7 @@ function bindEditorPane(tab) {
 
 /* ==================== Web SSH 终端（可多标签多会话） ==================== */
 
-function openTerminalTab(server, cwd) {
+function openTerminalTab(server, cwd, options = {}) {
   // v0.3.10：从仓库列表打开时自动 cd 到该仓库目录，进去就能敲 git 命令。
   const initialCommand = cwd ? `cd '${String(cwd).replace(/'/g, "'\\''")}' && pwd\n` : '';
   const id = `term:${server.id}:${++tabCounter}`;
@@ -3428,7 +3551,7 @@ function openTerminalTab(server, cwd) {
       if (t.ctx.fit) { try { t.ctx.fit(); } catch { /* noop */ } }
       if (t.ctx.term) { try { t.ctx.term.focus(); } catch { /* noop */ } }
     },
-    onClose: cleanupTerminal,
+    onClose: (tab) => { cleanupTerminal(tab); if (options.onClose) options.onClose(tab); },
   });
   bindTerminalPane(tab);
   connectTerminal(tab, server);
@@ -4768,7 +4891,7 @@ function openExtInstall(id) {
   select.value = extState.mode;
   $('#ext-install-title').textContent = `安装 ${m.label}`;
   renderExtInstallForm();
-  $('#ext-install-card').hidden = false;
+  openAsModal('ext-install-card');
 }
 
 /* ------------------------- 备份 / 升级 / 绑定仓库 ------------------------- */
@@ -4827,7 +4950,7 @@ async function openExtRepos(id) {
   if (!repoState.items.length) await loadRepos();
   $('#ext-repos-title').textContent = `绑定仓库 · ${id}`;
   renderExtReposOptions();
-  $('#ext-repos-card').hidden = false;
+  openAsModal('ext-repos-card');
 }
 
 async function loadExtExtras() {
@@ -5028,6 +5151,7 @@ function renderDockerContainers() {
       `<button class="btn btn-sm" data-dk-op="logs" ${meta}>日志</button>`,
       `<button class="btn btn-sm" data-dk-op="inspect" ${meta}>详情</button>`,
       `<button class="btn btn-sm" data-dk-op="stats" ${meta}>资源</button>`,
+      `<button class="btn btn-sm" data-dk-op="term" ${meta}>终端</button>`,
       `<button class="btn btn-sm" data-dk-op="proxy" ${meta}>代理</button>`,
     ];
     const power = isRunning(c)
@@ -5182,6 +5306,348 @@ function switchDockerTab(tab) {
   switchView(map[tab] || 'docker');
 }
 
+/* ------------------------- Docker 应用商店（移植宝塔 appstore） ------------------------- */
+const daState = {
+  apps: [], types: [], type: '', search: '', current: null, version: '',
+  accelerator: null, page: 1, pageSize: 60, total: 0,
+};
+
+async function loadDockerApps() {
+  await Promise.all([loadDockerAppList(), loadDockerAppMeta()]);
+}
+
+async function loadDockerAppMeta() {
+  try {
+    const [status, types] = await Promise.all([
+      api('/docker/apps/status'), api('/docker/apps/types'),
+    ]);
+    daState.types = types || [];
+    daState.accelerator = status && status.accelerator;
+    const acc = daState.accelerator || {};
+    const tag = $('#da-mirror-tag');
+    if (tag) {
+      tag.textContent = acc.mode === 'compose'
+        ? `加速器：改写 compose（${acc.mirror || '原始镜像'}）`
+        : `加速器：宝塔方式（${acc.accelerateUrl || '未设置'}）`;
+    }
+    const box = $('#da-status');
+    if (box) box.textContent = `内置 ${status && status.count || 0} 个应用 · 目录 ${status && status.appsDir || 'appstore/apps'} · 全量兼容宝塔 aaPanel/appstore 官方数据`;
+    renderDockerAppCats();
+  } catch (e) { /* toast 由 api() 统一处理 */ }
+}
+
+async function loadDockerAppList() {
+  const grid = $('#da-grid');
+  const params = new URLSearchParams();
+  if (daState.type) params.set('type', daState.type);
+  if (daState.search) params.set('search', daState.search);
+  params.set('page', String(daState.page));
+  params.set('pageSize', String(daState.pageSize));
+  try {
+    const data = await api('/docker/apps?' + params.toString());
+    daState.apps = (data && data.list) || [];
+    daState.total = (data && data.total) || 0;
+    const all = $('#da-cnt-all');
+    if (all) all.textContent = String(daState.total);
+    renderDockerAppGrid();
+    renderDockerAppPager();
+  } catch (e) {
+    if (grid) grid.innerHTML = '<div class="muted" style="padding:24px">应用加载失败，请点「重载目录」重试。</div>';
+  }
+}
+
+function renderDockerAppPager() {
+  const box = $('#da-pager');
+  if (!box) return;
+  const pages = Math.max(1, Math.ceil(daState.total / daState.pageSize));
+  if (pages <= 1) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  const btn = (p, label, active, disabled) => `<button class="btn btn-sm ${active ? 'btn-primary' : 'btn-ghost'}" data-da-page="${p}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+  const parts = [];
+  parts.push(btn(Math.max(1, daState.page - 1), '‹ 上一页', false, daState.page <= 1));
+  // 简化的页码窗口：当前页 ±2
+  const start = Math.max(1, daState.page - 2);
+  const end = Math.min(pages, daState.page + 2);
+  for (let p = start; p <= end; p += 1) parts.push(btn(p, String(p), p === daState.page, false));
+  parts.push(btn(Math.min(pages, daState.page + 1), '下一页 ›', false, daState.page >= pages));
+  parts.push(`<span class="muted small" style="margin-left:8px">第 ${daState.page}/${pages} 页 · 共 ${daState.total} 个</span>`);
+  box.innerHTML = parts.join('');
+}
+
+function renderDockerAppCats() {
+  const box = $('#da-cats');
+  if (!box) return;
+  const allActive = daState.type ? '' : ' active';
+  box.innerHTML = daState.types.map((t) => {
+    const active = daState.type === t.type ? ' active' : '';
+    return `<div class="da-cat${active}" data-da-type="${escAttr(t.type)}"><span>${escText(t.typeCN || t.type)}</span><span class="da-cnt">${t.count}</span></div>`;
+  }).join('');
+  const allBtn = document.querySelector('.da-cat-all');
+  if (allBtn) allBtn.className = 'da-cat da-cat-all' + allActive;
+}
+
+function renderDockerAppGrid() {
+  const grid = $('#da-grid');
+  const empty = $('#da-empty');
+  if (!grid) return;
+  const apps = daState.apps;
+  if (empty) empty.hidden = apps.length > 0;
+  grid.innerHTML = apps.map((a) => {
+    const initial = escText((a.apptitle || a.appname || '?').slice(0, 1).toUpperCase());
+    const icon = a.icon
+      ? `<img src="/api/docker/apps/${encodeURIComponent(a.appname)}/icon/${encodeURIComponent(a.icon)}" alt="" />`
+      : initial;
+    return `<div class="da-card" data-da-app="${escAttr(a.appname)}" tabindex="0" role="button">
+      <div class="da-card-head">
+        <div class="da-card-icon">${icon}</div>
+        <div class="da-card-title"><b>${escText(a.apptitle || a.appname)}</b><span class="da-card-type">${escText(a.appTypeCN || a.apptype)}</span></div>
+      </div>
+      <p class="da-card-desc">${escText(a.appdesc || '')}</p>
+      <div class="da-card-foot"><span class="muted small">${(a.versions || []).length} 个版本</span><span class="da-card-go">详情 ▸</span></div>
+    </div>`;
+  }).join('');
+}
+
+async function openDockerApp(name) {
+  try {
+    const app = await api('/docker/apps/' + encodeURIComponent(name));
+    daState.current = app;
+    daState.version = (app.versions && app.versions[0]) || 'latest';
+    $('#da-modal-title').textContent = app.apptitle || app.appname;
+    $('#da-modal-sub').textContent = `${app.appTypeCN || app.apptype} · ${app.appname}`;
+    const icon = $('#da-modal-icon');
+    if (app.icon) icon.innerHTML = `<img src="/api/docker/apps/${encodeURIComponent(app.appname)}/icon/${encodeURIComponent(app.icon)}" alt="" />`;
+    else icon.textContent = (app.apptitle || app.appname || '?').slice(0, 1).toUpperCase();
+    $('#da-modal-desc').textContent = app.appdesc || '';
+    const links = [];
+    if (app.home) links.push(`<a href="${escAttr(app.home)}" target="_blank" rel="noopener">官网 ↗</a>`);
+    if (app.help) links.push(`<a href="${escAttr(app.help)}" target="_blank" rel="noopener">文档 ↗</a>`);
+    $('#da-modal-links').innerHTML = links.join('');
+    const dep = $('#da-modal-depend');
+    if (app.depend && app.depend.length) {
+      dep.hidden = false;
+      dep.textContent = '依赖应用：' + app.depend.map((d) => (d.appname || []).join('/')).join('、') + '（请先部署依赖）';
+    } else dep.hidden = true;
+    const vs = $('#da-version');
+    vs.innerHTML = (app.versions || ['latest']).map((v) => `<option value="${escAttr(v)}">${escText(v)}</option>`).join('');
+    vs.value = daState.version;
+    renderDaForm(app.field || []);
+    await refreshDaCompose();
+    // 重置部署面板状态（上一次的日志和按钮状态）
+    const dp = $('#da-deploy-panel'); if (dp) dp.hidden = true;
+    const deployLog = $('#da-deploy-log'); if (deployLog) { deployLog.textContent = '—'; deployLog.style.display = 'none'; }
+    if ($('#da-deploy-btn')) {
+      $('#da-deploy-btn').disabled = false;
+      $('#da-deploy-btn').textContent = '部署到服务器';
+      $('#da-deploy-btn').classList.add('da-deploy-pending');
+      $('#da-deploy-btn').title = '生成部署文件后即可部署';
+    }
+    if ($('#da-deploy-dir')) $('#da-deploy-dir').value = '';
+    loadDaServers();
+    $('#da-modal').hidden = false;
+    document.body.style.overflow = 'hidden';
+  } catch (e) { /* api() 已提示 */ }
+}
+
+// 官方 field.suffix 是宝塔创建弹窗里每项配置右侧的说明；尾部为运行时上限
+// 留空（如「0为不限制,最大可用核心数为: 」）。本平台部署目标机不固定，不能拿
+// 自身资源冒充，补通用文案避免显示半句话。
+function daFieldHelp(f) {
+  let s = String((f && (f.suffix || f.desc)) || '').trim();
+  if (/[:：]\s*$/.test(s)) {
+    if (/核心|cpu|内存|memory/i.test(s)) s += '取决于目标主机实际配置';
+    else s += '（以目标主机实际配置为准）';
+  }
+  const unit = String((f && f.unit) || '').trim();
+  if (unit) s += (s ? ' · ' : '') + '单位：' + unit;
+  return s;
+}
+
+function renderDaForm(fields) {
+  const box = $('#da-form-fields');
+  if (!box) return;
+  if (!fields.length) {
+    box.innerHTML = '<div class="muted small" style="padding:8px 0">该应用无需额外参数，使用模板默认值即可。</div>';
+    return;
+  }
+  box.innerHTML = fields.map((f) => {
+    const attr = escAttr(f.attr || f.key || '');
+    const type = String(f.type || 'text');
+    const isCheck = type === 'checkbox';
+    const isArea = type === 'textarea' || type === 'ace:json';
+    // 官方 default 可能是 0 / false，不能用 `|| ''` 兜底，否则默认值被吞掉
+    const raw = f.default === undefined || f.default === null ? '' : String(f.default);
+    let input;
+    if (isCheck) {
+      const on = f.default === true || f.default === 1 || /^(1|true|yes)$/i.test(raw);
+      input = `<input type="checkbox" data-da-field="${attr}" data-da-kind="checkbox" ${on ? 'checked' : ''} />`;
+    } else if (isArea) {
+      input = `<textarea rows="2" data-da-field="${attr}" placeholder="${escAttr(f.name || attr)}">${escText(raw)}</textarea>`;
+    } else {
+      const inputType = type === 'password' ? 'password' : (type === 'number' || type === 'port') ? 'number' : 'text';
+      input = `<input type="${inputType}" data-da-field="${attr}" value="${escAttr(raw)}" placeholder="${escAttr(f.name || attr)}" />`;
+    }
+    const help = daFieldHelp(f);
+    return `<div class="da-field-row">
+      <div class="da-field-name" title="${escAttr(f.name || attr)}">${escText(f.name || attr)}</div>
+      <div class="da-field-input">${input}</div>
+      <div class="da-field-help">${help ? `<span class="da-help-mark">*</span>${escText(help)}` : ''}</div>
+    </div>`;
+  }).join('');
+}
+
+function collectDaParams() {
+  const params = {};
+  $$('#da-form-fields [data-da-field]').forEach((el) => {
+    const attr = el.getAttribute('data-da-field');
+    params[attr] = el.getAttribute('data-da-kind') === 'checkbox'
+      ? (el.checked ? 'true' : 'false') : el.value;
+  });
+  return params;
+}
+
+async function refreshDaCompose() {
+  if (!daState.current) return;
+  const name = daState.current.appname;
+  const ver = ($('#da-version') && $('#da-version').value) || daState.version;
+  daState.version = ver;
+  try {
+    const data = await api('/docker/apps/' + encodeURIComponent(name) + '/compose?version=' + encodeURIComponent(ver));
+    $('#da-compose').textContent = data.compose || '（无 compose 内容）';
+    // 基础 .env 先展示；点「生成部署文件」后合并表单参数
+    $('#da-env').textContent = data.env || '（无 .env 内容）';
+  } catch (e) { $('#da-compose').textContent = 'compose 加载失败'; }
+}
+
+async function generateDaFiles() {
+  if (!daState.current) return;
+  try {
+    const params = collectDaParams();
+    const data = await api('/docker/apps/' + encodeURIComponent(daState.current.appname) + '/prepare', {
+      method: 'POST',
+      body: { version: daState.version, params },
+    });
+    $('#da-compose').textContent = data.compose || '';
+    $('#da-env').textContent = data.env || '';
+    // 生成后解锁部署按钮（移除半透明 pending 状态）
+    if ($('#da-deploy-btn')) {
+      $('#da-deploy-btn').classList.remove('da-deploy-pending');
+      $('#da-deploy-btn').title = '部署到已选服务器';
+    }
+    const dp = $('#da-deploy-panel');
+    if (dp) dp.hidden = false;
+    toast('部署文件已生成：复制、下载或一键部署到服务器');
+  } catch (e) { /* api() 已提示 */ }
+}
+
+function dlText(filename, text) {
+  const a = document.createElement('a');
+  a.href = 'data:text/plain;charset=utf-8,' + encodeURIComponent(text || '');
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+async function deployDaToServer() {
+  const btn = $('#da-deploy-btn');
+  // 未生成部署文件时点击给用户明确提示（按钮无 disabled，靠 pending class 区分）
+  if (btn && btn.classList.contains('da-deploy-pending')) {
+    toast('请先点「生成部署文件」，再执行部署');
+    return;
+  }
+  const serverId = $('#da-deploy-server') && $('#da-deploy-server').value;
+  if (!serverId) { toast('请先选择目标服务器'); return; }
+  if (!daState.current) return;
+  const compose = $('#da-compose') && $('#da-compose').textContent || '';
+  const env = $('#da-env') && $('#da-env').textContent || '';
+  if (!compose || compose === '—') { toast('请先生成部署文件'); return; }
+  const dir = ($('#da-deploy-dir') && $('#da-deploy-dir').value.trim()) || '';
+  const logBox = $('#da-deploy-log');
+  if (logBox) { logBox.style.display = 'block'; logBox.textContent = '部署中，请稍候…'; }
+  const deployBtn = $('#da-deploy-btn');
+  if (deployBtn) { deployBtn.disabled = true; deployBtn.textContent = '部署中…'; deployBtn.classList.remove('da-deploy-pending'); }
+  try {
+    const data = await api('/docker/apps/' + encodeURIComponent(daState.current.appname) + '/deploy', {
+      method: 'POST',
+      body: { serverId, compose, env, dir },
+      timeout: 200000,
+    });
+    const steps = (data.log || []).map((l) => {
+      const out = [l.out, l.err].filter(Boolean).join('\n').trim();
+      return `[${l.step}]\n${out || '(无输出)'}`;
+    }).join('\n\n');
+    if (logBox) logBox.textContent = `✔ 部署完成 → ${data.server}:${data.dir}\n\n${steps}`;
+    toast(`已在 ${data.server} 成功部署 ${daState.current.apptitle || daState.current.appname}`);
+  } catch (e) {
+    if (logBox) logBox.textContent = '✖ 部署失败：' + (e && e.message || String(e));
+  } finally {
+    if (deployBtn) { deployBtn.disabled = false; deployBtn.textContent = '部署到服务器'; }
+  }
+}
+
+// 加载服务器列表到部署下拉框；固定第一项为「本机」（serverId=local，直接 spawn，无需 SSH）
+async function loadDaServers() {
+  const sel = $('#da-deploy-server');
+  if (!sel) return;
+  try {
+    const srvData = await api('/servers');
+    const servers = (srvData && srvData.items) || [];
+    // 本机始终是第一个选项，无需服务器配置也能用
+    const opts = ['<option value="local">本机（平台宿主机，无需 SSH）</option>'];
+    opts.push(...servers.map((s) => `<option value="${escAttr(s.id)}">${escText(s.name || s.host)}</option>`));
+    sel.innerHTML = opts.join('');
+    // 默认选本机
+    sel.value = 'local';
+  } catch { sel.innerHTML = '<option value="local">本机（平台宿主机）</option>'; }
+}
+
+function closeDaModal() {
+  const m = $('#da-modal');
+  if (m) m.hidden = true;
+  document.body.style.overflow = '';
+  daState.current = null;
+}
+
+function escText(v) {
+  return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escAttr(v) { return escText(v).replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+
+// 事件委托：分类切换 / 卡片打开
+document.addEventListener('click', (e) => {
+  const cat = e.target && e.target.closest ? e.target.closest('[data-da-type]') : null;
+  if (cat) { daState.type = cat.getAttribute('data-da-type') || ''; daState.page = 1; renderDockerAppCats(); loadDockerAppList(); return; }
+  const pg = e.target && e.target.closest ? e.target.closest('[data-da-page]') : null;
+  if (pg) { daState.page = parseInt(pg.getAttribute('data-da-page'), 10) || 1; loadDockerAppList(); return; }
+  const card = e.target && e.target.closest ? e.target.closest('[data-da-app]') : null;
+  if (card) { openDockerApp(card.getAttribute('data-da-app')); return; }
+  const closeBtn = e.target && e.target.closest ? e.target.closest('[data-da-close]') : null;
+  if (closeBtn) { closeDaModal(); return; }
+  const damClose = e.target && e.target.closest ? e.target.closest('[data-dam-close]') : null;
+  if (damClose) { const m = $('#da-mirror-modal'); if (m) m.hidden = true; return; }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target && e.target.matches && e.target.matches('[data-da-app]')) {
+    openDockerApp(e.target.getAttribute('data-da-app'));
+  }
+  if (e.key === 'Escape') { closeDaModal(); const m = $('#da-mirror-modal'); if (m) m.hidden = true; }
+});
+
+let daSearchTimer = null;
+document.addEventListener('input', (e) => {
+  if (!e.target || e.target.id !== 'da-search') return;
+  daState.search = e.target.value.trim();
+  daState.page = 1;
+  clearTimeout(daSearchTimer);
+  daSearchTimer = setTimeout(() => loadDockerAppList(), 250);
+});
+document.addEventListener('change', (e) => {
+  if (!e.target || e.target.id !== 'da-version') return;
+  daState.version = e.target.value;
+  refreshDaCompose();
+});
+
 /* -------------------------------- 事件绑定 ------------------------------- */
 
 const loaders = {
@@ -5195,12 +5661,91 @@ const loaders = {
   extensions: loadExtensions, gitsrc: loadGitSources,
   docker: loadDocker, 'docker-containers': loadDocker, 'docker-images': loadDocker,
   'docker-volumes': loadDocker, 'docker-networks': loadDocker, 'docker-compose': loadDocker,
+  'docker-apps': loadDockerApps,
   proxy: loadProxy,
   dbgate: loadExtExtras, backups: loadExtExtras,
   ai: loadAI, 'ai-list': loadAI, 'ai-test': loadAI, ops: loadOps, aichat: loadAIChat,
   environment: loadEnvironment, envcfg: loadEnvConfig,
   users: loadUsers,
 };
+
+// 应用商店：目录重载 / 镜像源设置 / 生成部署文件 / 复制
+const daReload = $('#da-reload');
+if (daReload) daReload.addEventListener('click', async () => {
+  try { const r = await api('/docker/apps/reload', { method: 'POST', body: '{}' }); toast(`已重载 ${r.count} 个应用`); await loadDockerAppMeta(); loadDockerAppList(); }
+  catch (e) { /* api() 已提示 */ }
+});
+async function refreshDaDaemonPreview() {
+  const box = $('#da-daemon-json');
+  if (!box) return;
+  try {
+    const data = await api('/docker/apps/config/daemon-json');
+    box.textContent = data && data.json || '（无内容）';
+    box.dataset.cmd = data && data.commands ? data.commands.join('\n') : '';
+  } catch (e) { box.textContent = 'daemon.json 预览加载失败'; }
+}
+
+function openDaAccModal() {
+  const m = $('#da-mirror-modal');
+  const acc = daState.accelerator || {};
+  const mode = $('#da-acc-mode');
+  if (mode) mode.value = acc.mode || 'baota';
+  const url = $('#da-acc-url');
+  if (url) url.value = acc.accelerateUrl || '';
+  const mirror = $('#da-acc-mirror');
+  if (mirror) mirror.value = acc.mirror || '';
+  m.hidden = false;
+  refreshDaDaemonPreview();
+}
+
+const daMirrorBtn = $('#da-mirror-btn');
+if (daMirrorBtn) daMirrorBtn.addEventListener('click', openDaAccModal);
+const daAccMode = $('#da-acc-mode');
+if (daAccMode) daAccMode.addEventListener('change', refreshDaDaemonPreview);
+const daAccUrl = $('#da-acc-url');
+if (daAccUrl) daAccUrl.addEventListener('change', refreshDaDaemonPreview);
+const daMirrorSave = $('#da-mirror-save');
+if (daMirrorSave) daMirrorSave.addEventListener('click', async () => {
+  try {
+    const body = {
+      mode: ($('#da-acc-mode') || {}).value || 'baota',
+      accelerateUrl: ($('#da-acc-url') || {}).value || '',
+      mirror: ($('#da-acc-mirror') || {}).value || '',
+    };
+    await api('/docker/apps/config/accelerator', { method: 'PUT', body });
+    $('#da-mirror-modal').hidden = true;
+    await loadDockerAppMeta(); loadDockerAppList();
+    toast('镜像加速设置已保存');
+  } catch (e) { /* api() 已提示 */ }
+});
+const daCopyDaemon = $('#da-copy-daemon');
+if (daCopyDaemon) daCopyDaemon.addEventListener('click', () => copyText($('#da-daemon-json').textContent, 'daemon.json 已复制'));
+const daCopyDaemonCmd = $('#da-copy-daemon-cmd');
+if (daCopyDaemonCmd) daCopyDaemonCmd.addEventListener('click', () => {
+  const cmd = ($('#da-daemon-json').dataset || {}).cmd || '';
+  copyText(cmd, '配置命令已复制');
+});
+const daGenerate = $('#da-generate');
+if (daGenerate) daGenerate.addEventListener('click', generateDaFiles);
+const daCopyCompose = $('#da-copy-compose');
+if (daCopyCompose) daCopyCompose.addEventListener('click', () => copyText($('#da-compose').textContent, 'compose 已复制'));
+const daCopyEnv = $('#da-copy-env');
+if (daCopyEnv) daCopyEnv.addEventListener('click', () => copyText($('#da-env').textContent, '.env 已复制'));
+
+const daDlCompose = $('#da-dl-compose');
+if (daDlCompose) daDlCompose.addEventListener('click', () => {
+  const name = (daState.current && daState.current.appname) || 'app';
+  dlText('docker-compose.yml', $('#da-compose').textContent);
+  toast(`docker-compose.yml 已下载（${name}）`);
+});
+const daDlEnv = $('#da-dl-env');
+if (daDlEnv) daDlEnv.addEventListener('click', () => {
+  const name = (daState.current && daState.current.appname) || 'app';
+  dlText('.env', $('#da-env').textContent);
+  toast(`.env 已下载（${name}）`);
+});
+const daDeployBtn = $('#da-deploy-btn');
+if (daDeployBtn) daDeployBtn.addEventListener('click', deployDaToServer);
 
 /* 每个独立页顶部的子导航：点按钮打开对应标签，而不是把功能堆在一页里。 */
 document.addEventListener('click', (e) => {
@@ -5386,7 +5931,7 @@ $('#ext-mode').addEventListener('change', (e) => {
   extState.mode = e.target.value;
   renderExtInstallForm();
 });
-$('#ext-install-close').addEventListener('click', () => { $('#ext-install-card').hidden = true; });
+$('#ext-install-close').addEventListener('click', () => closeAsModal({ cardId: 'ext-install-card' }));
 $('#ext-install-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const values = formData(e.target);
@@ -5395,11 +5940,11 @@ $('#ext-install-form').addEventListener('submit', async (e) => {
       method: 'POST', body: { catalogId: extState.manifestId, mode: extState.mode, values },
     });
     toast(`已创建实例 ${created.name}`);
-    $('#ext-install-card').hidden = true;
+    closeAsModal({ cardId: 'ext-install-card' });
     await loadExtensions();
   } catch (err) { toast(err.message || String(err), true); }
 });
-$('#ext-log-close').addEventListener('click', () => { $('#ext-log-card').hidden = true; });
+$('#ext-log-close').addEventListener('click', () => closeAsModal({ cardId: 'ext-log-card' }));
 document.addEventListener('click', (e) => {
   if (e.target.closest && e.target.closest('[data-ext-cred-close]')) {
     $('#ext-cred-modal').hidden = true;
@@ -5478,7 +6023,7 @@ $('#ext-list').addEventListener('click', async (e) => {
     } else if (op === 'logs') {
       const d = await api(`/extensions/instances/${id}/logs?tail=200`);
       $('#ext-log').textContent = d.text || '(暂无日志)';
-      $('#ext-log-card').hidden = false;
+      openAsModal('ext-log-card');
     } else if (op === 'remove') {
       const name = button.dataset.extName || '该实例';
       if (!await confirmDialog({ message: `确定卸载扩展实例「${name}」？` })) return;
@@ -5489,7 +6034,7 @@ $('#ext-list').addEventListener('click', async (e) => {
       });
       const d = await api(`/extensions/instances/${id}?purge=${purge ? 1 : 0}`, { method: 'DELETE' });
       toast(d.volumeKept ? '已卸载，数据卷已保留' : '已卸载');
-      $('#ext-log-card').hidden = true;
+      closeAsModal({ cardId: 'ext-log-card' });
       await loadExtensions();
     }
   } catch (err) { toast(err.message || String(err), true); }
@@ -5536,7 +6081,7 @@ $('#ext-dbgate').addEventListener('click', async (e) => {
   } catch (err) { toast(err.message || String(err), true); }
 });
 
-$('#ext-repos-close').addEventListener('click', () => { $('#ext-repos-card').hidden = true; });
+$('#ext-repos-close').addEventListener('click', () => closeAsModal({ cardId: 'ext-repos-card' }));
 $('#ext-repos-save').addEventListener('click', async () => {
   const id = extState.reposInstanceId;
   if (!id) return;
@@ -5544,7 +6089,7 @@ $('#ext-repos-save').addEventListener('click', async () => {
   try {
     const d = await api(`/extensions/instances/${id}/repos`, { method: 'PUT', body: { repoIds } });
     toast(`已绑定 ${d.repoIds.length} 个仓库`);
-    $('#ext-repos-card').hidden = true;
+    closeAsModal({ cardId: 'ext-repos-card' });
     await loadExtensions();
   } catch (err) { toast(err.message || String(err), true); }
 });
@@ -5895,7 +6440,7 @@ $('#gitsrc-list').addEventListener('click', async (e) => {
           <td class="muted">${esc(fmtTime(r.updatedAt))}</td>
           <td><button class="btn btn-sm" data-clone-repo="${esc(r.cloneUrl)}" data-clone-source="${esc(id)}" data-clone-name="${esc(r.name)}">填入克隆表单</button></td>
         </tr>`));
-      $('#gitsrc-repos-card').hidden = false;
+      openAsModal('gitsrc-repos-card');
       if (!items.length && d.error) toast(d.error, true);
     } else if (op === 'remove') {
       if (!await confirmDialog({ message: `确定删除 Git 源「${button.dataset.gitsrcName || id}」？只移除本地登记，不会影响远端仓库。` })) return;
@@ -5907,15 +6452,14 @@ $('#gitsrc-list').addEventListener('click', async (e) => {
   } catch (err) { toast(err.message || String(err), true); }
 });
 
-$('#gitsrc-repos-close').addEventListener('click', () => { $('#gitsrc-repos-card').hidden = true; });
+$('#gitsrc-repos-close').addEventListener('click', () => closeAsModal({ cardId: 'gitsrc-repos-card' }));
 $('#gitsrc-repos').addEventListener('click', (e) => {
   const button = e.target.closest('[data-clone-repo]');
   if (!button) return;
-  $('#clone-form').elements.cloneUrl.value = button.dataset.cloneRepo || '';
-  $('#clone-form').elements.name.value = button.dataset.cloneName || '';
-  $('#clone-source').value = button.dataset.cloneSource || '';
-  switchView('repo-clone');
-  toast('已填入克隆表单，点击「克隆到工作区」执行');
+  fillCloneForm(button.dataset.cloneRepo || '', button.dataset.cloneName || '', button.dataset.cloneSource || '', '');
+  // v0.4.30：源仓库列表本身也是弹窗，先关它再开克隆弹窗，避免两层遮罩叠着。
+  closeAsModal({ cardId: 'gitsrc-repos-card' });
+  openRepoCloneModal(button.dataset.cloneName || '');
 });
 
 /* ------------------------------ Docker 管理 ----------------------------- */
@@ -5931,11 +6475,391 @@ if ($('#docker-container-filter')) {
 }
 $('#docker-log-close').addEventListener('click', () => { $('#docker-log-card').hidden = true; });
 
+/* ─────── 通用「弹窗化」工具函数 ────────────────────────────────────────────
+ * 把原本在页面底部展开的卡片浮层化为弹窗，不移动 DOM，只加/移除 class。
+ * 点遮罩或 Esc 关闭；closeId 是卡片内的关闭按钮 id（可选，同时触发其原本逻辑）。
+ * ────────────────────────────────────────────────────────────────────────── */
+let _asModalActive = null;
+
+function openAsModal(cardId, { wide = false, onClose = null } = {}) {
+  const card = $(`#${cardId}`);
+  if (!card) return;
+  if (_asModalActive) closeAsModal(_asModalActive);
+  card.hidden = false;
+  card.classList.add('as-modal');
+  if (wide) card.classList.add('as-modal-wide');
+  const mask = $('#card-modal-mask');
+  if (mask) mask.hidden = false;
+  document.body.style.overflow = 'hidden';
+  _asModalActive = { cardId, onClose };
+}
+
+function closeAsModal(ctx) {
+  if (!ctx) ctx = _asModalActive;
+  if (!ctx) return;
+  const card = $(`#${ctx.cardId}`);
+  if (card) { card.classList.remove('as-modal', 'as-modal-wide'); card.hidden = true; }
+  const mask = $('#card-modal-mask');
+  if (mask) mask.hidden = true;
+  document.body.style.overflow = '';
+  if (ctx.onClose) ctx.onClose();
+  _asModalActive = null;
+}
+
+// 点遮罩关闭
+(function () {
+  const mask = $('#card-modal-mask');
+  if (mask) mask.addEventListener('click', () => closeAsModal(_asModalActive));
+})();
+
 function dockerShowLog(title, text) {
   $('#docker-log').textContent = text || '(无输出)';
   $('#docker-log-card').hidden = false;
   $('#docker-log-card').querySelector('h2').textContent = title;
 }
+
+/* ─────── 容器操作弹窗（日志 / 详情 / 资源 / 终端）────────────────────────── */
+const dkModalState = { id: '', name: '', tab: '', statsTimer: null, termHistory: [], termIdx: -1 };
+
+function dkOpenPanel(tab) {
+  ['logs', 'inspect', 'stats', 'term'].forEach((p) => {
+    const el = $(`#dk-panel-${p}`);
+    if (el) el.hidden = p !== tab;
+  });
+  $$('#dk-modal-tabs button').forEach((b) => b.classList.toggle('active', b.dataset.dkTab === tab));
+  dkModalState.tab = tab;
+}
+
+async function openDkModal(id, name, tab) {
+  // v0.4.30：终端是全局单例，换了容器必须先断开旧 PTY，否则输入会串到别的容器。
+  if (dkTerm.sid && dkModalState.id && dkModalState.id !== id) {
+    void dkTermDisconnect('已切换到其它容器');
+  }
+  dkModalState.id = id;
+  dkModalState.name = name;
+  $('#dk-modal-title').textContent = name || id.slice(0, 12);
+  // 渲染标签栏
+  $('#dk-modal-tabs').innerHTML = [
+    ['logs', '日志'], ['inspect', '详情'], ['stats', '资源'], ['term', '终端'],
+  ].map(([t, l]) => `<button class="btn btn-sm${tab === t ? ' active' : ''}" data-dk-tab="${escAttr(t)}">${l}</button>`).join('');
+  $('#dk-modal').hidden = false;
+  document.body.style.overflow = 'hidden';
+  dkOpenPanel(tab);
+  if (tab === 'logs') await dkLoadLogs();
+  else if (tab === 'inspect') await dkLoadInspect();
+  else if (tab === 'stats') { for (const k of Object.keys(dkHistories)) dkHistories[k] = []; dkPrevStats = null; await dkLoadStats(); }
+  else if (tab === 'term') dkInitTerm();
+}
+
+function closeDkModal() {
+  // v0.4.30：关闭弹窗即断开 PTY 会话，避免 exec 进程与 SSE 长期挂在后台。
+  if (dkTerm.sid) void dkTermDisconnect('弹窗已关闭');
+  $('#dk-modal').hidden = true;
+  document.body.style.overflow = '';
+  if (dkModalState.statsTimer) { clearInterval(dkModalState.statsTimer); dkModalState.statsTimer = null; }
+  const autoChk = $('#dk-stats-auto');
+  if (autoChk) autoChk.checked = false;
+}
+
+async function dkLoadLogs() {
+  const tail = ($('#dk-log-tail') && $('#dk-log-tail').value) || '200';
+  const box = $('#dk-log-content');
+  box.textContent = '加载中…';
+  try {
+    const d = await api(`/docker/containers/${encodeURIComponent(dkModalState.id)}/logs?${dockerQuery()}&tail=${tail}`);
+    box.textContent = d.text || '（无日志输出）';
+    box.scrollTop = box.scrollHeight;
+  } catch (e) { box.textContent = '加载失败：' + e.message; }
+}
+
+async function dkLoadInspect() {
+  const box = $('#dk-inspect-content');
+  box.textContent = '加载中…';
+  try {
+    const d = await api(`/docker/containers/${encodeURIComponent(dkModalState.id)}/inspect?${dockerQuery()}`);
+    box.textContent = JSON.stringify(d, null, 2);
+  } catch (e) { box.textContent = '加载失败：' + e.message; }
+}
+
+// 双线 SVG 折线图（带面积）
+function dkSvgChart2(svgId, seriesA, seriesB, colorA, colorB) {
+  const svg = $(`#${svgId}`);
+  if (!svg) return;
+  const W = 400, H = 120, PAD = 24, RPAD = 12;
+  const all = [...(seriesA || []).map((p) => p.v), ...(seriesB || []).map((p) => p.v)];
+  const maxV = Math.max(...all, 0.001);
+  const n = Math.max((seriesA || []).length, (seriesB || []).length, 1);
+  const toX = (i) => PAD + (i / (n - 1 || 1)) * (W - PAD - RPAD);
+  const toY = (v) => H - PAD - (v / maxV) * (H - PAD - 10);
+  const line = (s, c) => {
+    if (!s || !s.length) return '';
+    const pts = s.map((p, i) => `${toX(i).toFixed(1)},${toY(p.v).toFixed(1)}`).join(' ');
+    const areaClose = `${toX(s.length - 1).toFixed(1)},${(H - PAD)} ${PAD},${(H - PAD)}`;
+    return `<polygon fill="${c}" opacity="0.15" points="${pts} ${areaClose}" />
+      <polyline fill="none" stroke="${c}" stroke-width="1.8" points="${pts}" />`;
+  };
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map((f) => {
+    const y = toY(maxV * f).toFixed(1);
+    const label = (maxV * f).toFixed(maxV < 1 ? 3 : maxV < 100 ? 1 : 0);
+    return `<line x1="${PAD}" y1="${y}" x2="${W - RPAD}" y2="${y}" stroke="var(--border)" stroke-width="0.5" />
+      <text x="${PAD - 3}" y="${y}" font-size="8" fill="var(--muted)" text-anchor="end" dominant-baseline="middle">${label}</text>`;
+  });
+  const timeLabels = (seriesA || seriesB || []).filter((_, i, a) => i === 0 || i === a.length - 1).map((p, j, a) =>
+    `<text x="${j === 0 ? PAD : W - RPAD}" y="${H - 4}" font-size="8" fill="var(--muted)" text-anchor="${j === 0 ? 'start' : 'end'}">${p.label || ''}</text>`
+  );
+  svg.innerHTML = gridLines.join('') + line(seriesA, colorA) + line(seriesB, colorB) + timeLabels.join('');
+}
+
+function dkSvgChart(svgId, points, color) {
+  dkSvgChart2(svgId, points, null, color, null);
+}
+
+const dkHistories = { cpu: [], mem: [], memCache: [], blkR: [], blkW: [], netRx: [], netTx: [] };
+let dkPrevStats = null; // 上一次采样值，用于差值计算
+
+async function dkLoadStats() {
+  const info = $('#dk-stats-info');
+  try {
+    const d = await api(`/docker/containers/${encodeURIComponent(dkModalState.id)}/stats?${dockerQuery()}`);
+    if (!d || !d.available) {
+      const msg = `<div class="muted small" style="padding:16px">${(d && d.hint) || '容器未运行或不支持实时统计'}</div>`;
+      if (info) info.outerHTML = msg;
+      return;
+    }
+    const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
+    // 基础信息
+    const ml = $('#dk-info-memlimit'); if (ml) ml.textContent = d.memLimitMB ? (d.memLimitMB / 1024).toFixed(2) + ' GB' : '不限';
+    const pt = $('#dk-info-pids'); if (pt) pt.textContent = d.pids || '-';
+    const ntx = $('#dk-info-nettx'); if (ntx) ntx.textContent = fmtKB(d.netTxKB);
+    const nrx = $('#dk-info-netrx'); if (nrx) nrx.textContent = fmtKB(d.netRxKB);
+
+    // CPU 直接用百分比
+    dkHistories.cpu.push({ v: d.cpuPercent, label: now });
+
+    // 内存（MB）
+    dkHistories.mem.push({ v: d.memUsedMB, label: now });
+    dkHistories.memCache.push({ v: d.memCacheMB || 0, label: now });
+
+    // 磁盘/网络需要差值（累计值的速率）
+    if (dkPrevStats) {
+      const dt = 1; // 2 秒轮询，取 1 作为系数（近似）
+      dkHistories.blkR.push({ v: Math.max(0, d.blkReadKB - dkPrevStats.blkReadKB) / dt, label: now });
+      dkHistories.blkW.push({ v: Math.max(0, d.blkWriteKB - dkPrevStats.blkWriteKB) / dt, label: now });
+      dkHistories.netRx.push({ v: Math.max(0, d.netRxKB - dkPrevStats.netRxKB) / dt, label: now });
+      dkHistories.netTx.push({ v: Math.max(0, d.netTxKB - dkPrevStats.netTxKB) / dt, label: now });
+    } else {
+      dkHistories.blkR.push({ v: 0, label: now });
+      dkHistories.blkW.push({ v: 0, label: now });
+      dkHistories.netRx.push({ v: 0, label: now });
+      dkHistories.netTx.push({ v: 0, label: now });
+    }
+    dkPrevStats = d;
+
+    // 限制历史长度
+    for (const k of Object.keys(dkHistories)) {
+      if (dkHistories[k].length > 30) dkHistories[k].shift();
+    }
+
+    // 渲染 4 图表
+    dkSvgChart('dk-chart-cpu', dkHistories.cpu, '#3b82f6');
+    dkSvgChart2('dk-chart-mem', dkHistories.mem, dkHistories.memCache, '#3b82f6', '#ec4899');
+    dkSvgChart2('dk-chart-blk', dkHistories.blkR, dkHistories.blkW, '#ec4899', '#3b82f6');
+    dkSvgChart2('dk-chart-net', dkHistories.netTx, dkHistories.netRx, '#f97316', '#3b82f6');
+
+    const t = $('#dk-stats-time'); if (t) t.textContent = '更新于 ' + now;
+  } catch (e) { const t = $('#dk-stats-time'); if (t) t.textContent = '加载失败：' + e.message; }
+}
+
+function fmtKB(kb) {
+  if (!kb && kb !== 0) return '-';
+  if (kb < 1024) return kb.toFixed(1) + ' KB';
+  return (kb / 1024).toFixed(2) + ' MB';
+}
+
+/* ---------- v0.4.30 容器交互式终端（xterm.js + Docker exec PTY 流式接口） ---------- */
+const dkTerm = {
+  sid: '', term: null, fit: null, source: null, onData: null,
+  resizeObserver: null, connected: false,
+};
+
+function dkTermSetState(text, tone) {
+  const el = $('#dk-term-state');
+  if (!el) return;
+  el.textContent = text;
+  el.className = `chip${tone ? ` chip-${tone}` : ''}`;
+}
+
+function dkTermWrite(text) {
+  if (dkTerm.term) dkTerm.term.write(text);
+}
+
+/** 断开并释放 xterm / SSE / 后端会话；关闭弹窗、切换标签页时都会调用。 */
+async function dkTermDisconnect(reason) {
+  const sid = dkTerm.sid;
+  dkTerm.sid = '';
+  dkTerm.connected = false;
+  if (dkTerm.source) { try { dkTerm.source.close(); } catch { /* noop */ } dkTerm.source = null; }
+  if (dkTerm.resizeObserver) { try { dkTerm.resizeObserver.disconnect(); } catch { /* noop */ } dkTerm.resizeObserver = null; }
+  if (sid) {
+    try {
+      await api(`/docker/containers/${encodeURIComponent(dkModalState.id)}/terminal/close?${dockerQuery()}`, {
+        method: 'POST', body: { sid },
+      });
+    } catch { /* 后端可能已回收 */ }
+  }
+  if (dkTerm.term) {
+    try { dkTerm.term.write(`\r\n\x1b[90m[${reason || '已断开'}]\x1b[0m\r\n`); } catch { /* noop */ }
+  }
+  dkTermSetState('未连接', '');
+}
+
+function dkInitTerm() {
+  // 每次切到终端标签：已有会话就聚焦并自适应，否则只初始化一次 xterm 实例等待连接。
+  const wrap = $('#dk-term-xterm');
+  if (!wrap) return;
+  if (dkTerm.term) {
+    if (dkTerm.fit) { try { dkTerm.fit.fit(); } catch { /* noop */ } }
+    if (dkTerm.connected) dkTerm.term.focus();
+    return;
+  }
+  if (typeof Terminal === 'undefined') {
+    wrap.innerHTML = '<div class="notice error" style="margin:12px;color:#fecaca;background:#451b1b;border:0">终端组件未加载：请确认 /vendor/xterm.min.js 已部署</div>';
+    return;
+  }
+  const term = new Terminal({
+    cols: 100, rows: 28, cursorBlink: true, fontSize: 13, scrollback: 5000,
+    fontFamily: 'Consolas, "SF Mono", Menlo, monospace',
+    theme: { background: '#0f172a', foreground: '#e2e8f0', cursor: '#60a5fa', selectionBackground: '#1d4ed855' },
+  });
+  if (typeof FitAddon !== 'undefined' && FitAddon.FitAddon) {
+    dkTerm.fit = new FitAddon.FitAddon();
+    term.loadAddon(dkTerm.fit);
+  }
+  term.open(wrap);
+  dkTerm.term = term;
+  try { dkTerm.fit && dkTerm.fit.fit(); } catch { /* noop */ }
+  dkTerm.onData = (data) => {
+    if (!dkTerm.sid) return;
+    api(`/docker/containers/${encodeURIComponent(dkModalState.id)}/terminal/input?${dockerQuery()}`, {
+      method: 'POST', body: { sid: dkTerm.sid, input: data },
+    }).catch(() => {});
+  };
+  term.onData(dkTerm.onData);
+  dkTermWrite('\x1b[90m点击「连接」进入容器交互式终端（sh / bash，可切换 root 权限）\x1b[0m\r\n');
+  // 弹窗尺寸变化时同步 xterm 列宽与后端 PTY 窗口。
+  if (typeof ResizeObserver !== 'undefined') {
+    dkTerm.resizeObserver = new ResizeObserver(() => {
+      if (!dkTerm.term || !$('#dk-term-xterm') || $('#dk-term-xterm').offsetParent === null) return;
+      try { dkTerm.fit && dkTerm.fit.fit(); } catch { /* noop */ }
+      if (dkTerm.sid) dkTermResize();
+    });
+    dkTerm.resizeObserver.observe(wrap);
+  }
+}
+
+function dkTermResize() {
+  if (!dkTerm.sid || !dkTerm.term) return;
+  api(`/docker/containers/${encodeURIComponent(dkModalState.id)}/terminal/resize?${dockerQuery()}`, {
+    method: 'POST', body: { sid: dkTerm.sid, cols: dkTerm.term.cols, rows: dkTerm.term.rows },
+  }).catch(() => {});
+}
+
+async function dkTermConnect() {
+  const wrap = $('#dk-term-xterm');
+  if (!wrap) return;
+  if (dkTerm.sid) { toast('终端已连接；如需换 shell 或 root，请先点「断开」', true); return; }
+  dkInitTerm();
+  if (!dkTerm.term) return;
+  dkTermSetState('连接中…', '');
+  const shell = ($('#dk-term-shell') && $('#dk-term-shell').value) || 'sh';
+  const root = Boolean($('#dk-term-root') && $('#dk-term-root').checked);
+  try {
+    const session = await api(`/docker/containers/${encodeURIComponent(dkModalState.id)}/terminal/open?${dockerQuery()}`, {
+      method: 'POST', body: {
+        target: dockerState.target, shell, root,
+        confirm: true,
+        cols: dkTerm.term.cols, rows: dkTerm.term.rows,
+      },
+    });
+    dkTerm.sid = session.sid;
+    dkTerm.connected = true;
+    dkTermSetState(`已连接 · ${shell}${root ? ' · root' : ''}`, 'green');
+    // 建立 SSE 输出流（Tty=true 时是原始字节，base64 编码在每个事件里）。
+    dkTerm.source = new EventSource(`/api/docker/containers/${encodeURIComponent(dkModalState.id)}/terminal/stream?sid=${encodeURIComponent(session.sid)}&target=${encodeURIComponent(dockerState.target)}${streamToken()}`);
+    dkTerm.source.onmessage = (event) => {
+      if (!dkTerm.term) return;
+      try {
+        const binary = atob(event.data);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+        dkTerm.term.write(bytes);
+      } catch { /* 忽略坏帧 */ }
+    };
+    dkTerm.source.addEventListener('closed', (event) => {
+      let reason = '容器终端已关闭';
+      try { reason = JSON.parse(event.data).reason || reason; } catch { /* noop */ }
+      // 后端以 200 结束 SSE 流；不 close() 会被浏览器当成断线每 3 秒自动重连、刷屏。
+      if (dkTerm.source) { try { dkTerm.source.close(); } catch { /* noop */ } dkTerm.source = null; }
+      dkTerm.sid = '';
+      dkTerm.connected = false;
+      dkTermSetState(reason, '');
+      dkTermWrite(`\r\n\x1b[90m[${reason}]\x1b[0m\r\n`);
+    });
+    dkTerm.source.onerror = () => {
+      if (dkTerm.sid) dkTermSetState('连接中断', '');
+    };
+    dkTermResize();
+    dkTerm.term.focus();
+  } catch (e) {
+    dkTermSetState('连接失败', '');
+    dkTermWrite(`\r\n\x1b[31m连接失败：${e.message}\x1b[0m\r\n`);
+  }
+}
+
+async function dkRunCmd() { /* v0.4.30：一次性命令终端已由 xterm PTY 取代，保留空实现兼容旧调用点 */ }
+
+// 弹窗事件绑定
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'dk-modal-close') { closeDkModal(); return; }
+  if (e.target && e.target.id === 'dk-modal-mask') { closeDkModal(); return; }
+  const tab = e.target && e.target.closest ? e.target.closest('[data-dk-tab]') : null;
+  if (tab && $('#dk-modal') && !$('#dk-modal').hidden) {
+    const t = tab.dataset.dkTab;
+    dkOpenPanel(t);
+    if (t === 'logs') dkLoadLogs();
+    else if (t === 'inspect') dkLoadInspect();
+    else if (t === 'stats') { for (const k of Object.keys(dkHistories)) dkHistories[k] = []; dkPrevStats = null; dkLoadStats(); }
+    else if (t === 'term') dkInitTerm();
+    return;
+  }
+  if (e.target && e.target.id === 'dk-log-refresh') { dkLoadLogs(); return; }
+  if (e.target && e.target.id === 'dk-log-copy') { copyText($('#dk-log-content').textContent, '日志已复制'); return; }
+  if (e.target && e.target.id === 'dk-stats-refresh') { dkLoadStats(); return; }
+  if (e.target && e.target.id === 'dk-term-connect') { dkTermConnect(); return; }
+  if (e.target && e.target.id === 'dk-term-disconnect') { dkTermDisconnect('用户已断开'); return; }
+  if (e.target && e.target.id === 'dk-term-clear') { if (dkTerm.term) dkTerm.term.clear(); return; }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('#dk-modal') && !$('#dk-modal').hidden) { closeDkModal(); return; }
+  // v0.4.30：Git 仓库弹窗（后开的优先）
+  if (e.key === 'Escape' && $('#repo-files-modal') && !$('#repo-files-modal').hidden) { closeRepoFilesModal(); return; }
+  if (e.key === 'Escape' && $('#repo-clone-modal') && !$('#repo-clone-modal').hidden) { closeRepoCloneModal(); return; }
+  if (e.key === 'Escape' && _asModalActive) { closeAsModal(_asModalActive); return; }
+});
+
+document.addEventListener('change', (e) => {
+  if (e.target && e.target.id === 'dk-stats-auto') {
+    if (e.target.checked) {
+      if (!dkModalState.statsTimer) dkModalState.statsTimer = setInterval(() => { if (!$('#dk-modal').hidden && dkModalState.tab === 'stats') dkLoadStats(); }, 2000);
+    } else {
+      if (dkModalState.statsTimer) { clearInterval(dkModalState.statsTimer); dkModalState.statsTimer = null; }
+    }
+    return;
+  }
+  if (e.target && e.target.id === 'dk-log-tail') { dkLoadLogs(); return; }
+});
 
 const dockerQuery = () => `target=${encodeURIComponent(dockerState.target)}`;
 const dockerNeedConfirm = async (label, owned) => {
@@ -5972,11 +6896,13 @@ document.addEventListener('click', async (e) => {
       toast(d.removed ? '容器已删除' : '操作已完成');
       await loadDocker();
     } else if (op === 'logs') {
-      const d = await api(`/docker/containers/${encodeURIComponent(id)}/logs?${dockerQuery()}&tail=200`);
-      dockerShowLog('容器日志', d.text);
-    } else if (op === 'inspect' || op === 'stats') {
-      const d = await api(`/docker/containers/${encodeURIComponent(id)}/${op}?${dockerQuery()}`);
-      dockerShowLog(op === 'inspect' ? '容器详情' : '资源占用', JSON.stringify(d, null, 2));
+      openDkModal(id, button.dataset.dkName || id, 'logs');
+    } else if (op === 'inspect') {
+      openDkModal(id, button.dataset.dkName || id, 'inspect');
+    } else if (op === 'stats') {
+      openDkModal(id, button.dataset.dkName || id, 'stats');
+    } else if (op === 'term') {
+      openDkModal(id, button.dataset.dkName || id, 'term');
     } else if (op === 'export') {
       window.open(`/api/docker/images/export?${dockerQuery()}&ref=${encodeURIComponent(ref)}${streamToken()}`, '_blank');
     } else if (op === 'rmi') {
@@ -6184,6 +7110,13 @@ $('#clone-form').addEventListener('submit', async (e) => {
     // 本次填写的凭据不留在表单里，也不写入 state.json。
     if (e.target.elements.password) e.target.elements.password.value = '';
     if (e.target.elements.token) e.target.elements.token.value = '';
+    // v0.4.30：克隆成功后关闭弹窗并回到仓库列表。
+    const cloneModal = $('#repo-clone-modal');
+    if (cloneModal && !cloneModal.hidden) {
+      cloneModal.hidden = true;
+      document.body.style.overflow = '';
+      switchView('repos');
+    }
     loadRepos();
   } catch (err) {
     // v0.3.6：409 是「工作区已有同名目录」的业务冲突，给出可操作指引，
@@ -6197,7 +7130,11 @@ $('#clone-form').addEventListener('submit', async (e) => {
         </span>`;
       conflictBox.hidden = false;
       conflictBox.querySelectorAll('[data-clone-goto]').forEach((b) => {
-        b.addEventListener('click', () => switchView(b.dataset.cloneGoto));
+        b.addEventListener('click', () => {
+          const cloneModal = $('#repo-clone-modal');
+          if (cloneModal && !cloneModal.hidden) { cloneModal.hidden = true; document.body.style.overflow = ''; }
+          switchView(b.dataset.cloneGoto);
+        });
       });
       toast('工作区已有同名目录，请按下方提示处理', true);
     } else toast(err.message, true);
@@ -6415,15 +7352,12 @@ $('#ol-conn-cancel').addEventListener('click', closeOpenlistConnectionForm);
 $('#ol-conn-reload').addEventListener('click', () => loadStorage());
 $('#openlist-embed-toggle').addEventListener('click', () => {
   const card = $('#openlist-frame-card');
-  card.hidden = !card.hidden;
-  if (!card.hidden) {
-    // v0.4.7：走平台同源代理，后端注入 token，SPA 自动登录进入管理后台。
-    $('#openlist-frame').src = '/api/openlist/admin';
-  }
+  if (!card.hidden) { closeAsModal({ cardId: 'openlist-frame-card', onClose: () => { $('#openlist-frame').src = 'about:blank'; } }); return; }
+  $('#openlist-frame').src = '/api/openlist/admin';
+  openAsModal('openlist-frame-card', { wide: true });
 });
 $('#openlist-frame-close').addEventListener('click', () => {
-  $('#openlist-frame-card').hidden = true;
-  $('#openlist-frame').src = 'about:blank';
+  closeAsModal({ cardId: 'openlist-frame-card', onClose: () => { $('#openlist-frame').src = 'about:blank'; } });
 });
 $('#openlist-config-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -7756,14 +8690,14 @@ async function renderCollabInline(type, id) {
     const rows = (d.users || []).map((u) => {
       const cur = (d.collaborators || []).find((c) => c.userId === u.id);
       const dis = d.canManage ? '' : 'disabled';
-      return `<label class="check collab-inline-row">
+      return `<div class="collab-inline-row">
         <input type="checkbox" data-collab-user="${esc(u.id)}" ${cur ? 'checked' : ''} ${dis} />
-        <span>${esc(u.displayName || u.username)}</span>
-        <select class="ui-select ui-select-sm" data-collab-perm="${esc(u.id)}" ${dis}>
+        <span title="${esc(u.displayName || u.username)}">${esc(u.displayName || u.username)}</span>
+        <select data-collab-perm="${esc(u.id)}" ${dis}>
           <option value="read"${cur && cur.permission === 'write' ? '' : ' selected'}>只读</option>
           <option value="write"${cur && cur.permission === 'write' ? ' selected' : ''}>可写</option>
         </select>
-      </label>`;
+      </div>`;
     }).join('');
     box.innerHTML = `<div class="collab-inline-head"><b>协作者</b><span class="muted small">${d.canManage ? '保存对象时一并生效' : '仅所有者 / 管理员可修改'}</span></div>
       <div class="collab-inline-list">${rows || '<div class="muted small">暂无其它可协作账号</div>'}</div>`;

@@ -1,0 +1,123 @@
+services:
+  visbot-ubuntu:
+    image: xnx3/visbot-ubuntu:latest
+    networks:
+      - bizbot-network
+    ports:
+      - "${VISBOT_RDP_HOST_PORT:-3391}:3389"
+      - "${VISBOT_PERSONBOT_HOST_PORT:-5173}:${VISBOT_PERSONBOT_CONTAINER_PORT:-18020}"
+      - "${VISBOT_WEB_HOST_PORT:-8030}:8030"
+    environment:
+      - LANG=zh_CN.UTF-8
+      - LANGUAGE=zh_CN:zh
+      - LC_ALL=zh_CN.UTF-8
+      - TZ=Asia/Shanghai
+      - CHROME_PROXY=${CHROME_PROXY:-}
+      - RDP_PASSWORD=${RDP_PASSWORD:-VisBot}
+      - PERSONBOT_API_KEY=${PERSONBOT_API_KEY:-CHANGE_ME_LOCAL_API_KEY_8020}
+      - SCREEN_WIDTH=${SCREEN_WIDTH:-1920}
+      - SCREEN_HEIGHT=${SCREEN_HEIGHT:-1080}
+      - SCREEN_DEPTH=${SCREEN_DEPTH:-24}
+    volumes:
+      - chrome-data:/home/appuser/.config/google-chrome
+      - wechat-data:/home/appuser/.xwechat
+      - wechat-files:/home/appuser/Documents/xwechat_files
+      - downloads:/home/appuser/Downloads
+      - ${APP_PATH}/personbot-data/skills/wechat/skill.sqlite3:/opt/personbot/data/skills/wechat/skill.sqlite3
+      - ${APP_PATH}/personbot-data/skills/whatsapp/skill.sqlite3:/opt/personbot/data/skills/whatsapp/skill.sqlite3
+      - personbot-logs:/opt/personbot/logs
+    restart: unless-stopped
+    labels:
+      createdBy: "bt_apps"
+
+  mysql:
+    image: xnx3/bizbot-mysql-auto:8.0
+    networks:
+      - bizbot-network
+    environment:
+      - TZ=Asia/Shanghai
+    command:
+      - --innodb-buffer-pool-size=96M
+      - --max-connections=30
+      - --performance-schema=OFF
+      - --table-open-cache=128
+      - --sort-buffer-size=1M
+      - --read-buffer-size=512K
+      - --read-rnd-buffer-size=512K
+    volumes:
+      - ${APP_PATH}/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "bizexplore", "-p55SpfeTzFKfy6aXa"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      createdBy: "bt_apps"
+
+  bizbot:
+    image: xnx3/bizbot:latest
+    networks:
+      - bizbot-network
+    ports:
+      - "${GATEWAY_PORT:-8085}:8085"
+      - "${MAIN_PORT:-8089}:8089"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - JAVA_OPTS=-Xms512m -Xmx${JVM_MEMORY}m -XX:+UseG1GC -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=64m
+      - TZ=Asia/Shanghai
+    volumes:
+      - /etc/machine-id:/etc/machine-id
+      - ${APP_PATH}/license:/opt/bizexplore/config/license
+      - ${APP_PATH}/config:/opt/bizexplore/config
+      - ${APP_PATH}/logs:/opt/bizexplore/logs
+      - ${APP_PATH}/config.properties:/opt/bizexplore/config.properties
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8089/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    labels:
+      createdBy: "bt_apps"
+
+  bizbot-nginx:
+    image: xnx3/bizbot-nginx:latest
+    networks:
+      - bizbot-network
+    ports:
+      - "${NGINX_PORT:-8090}:80"
+    depends_on:
+      bizbot:
+        condition: service_healthy
+      visbot-ubuntu:
+        condition: service_started
+    environment:
+      - PERSONBOT_API_KEY=${PERSONBOT_API_KEY:-CHANGE_ME_LOCAL_API_KEY_8020}
+      - PERSONBOT_CHANNEL_TASK_URL=http://visbot-ubuntu:${VISBOT_PERSONBOT_CONTAINER_PORT:-18020}/tasks/execute
+      - BIZBOT_SERVICE_FRAME_URL=/bizbot/html/simple/data_restore.html
+      - BIZBOT_SERVICE_URL=/
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    labels:
+      createdBy: "bt_apps"
+
+networks:
+  bizbot-network:
+    driver: bridge
+
+volumes:
+  chrome-data:
+  wechat-data:
+  wechat-files:
+  downloads:
+  personbot-logs:

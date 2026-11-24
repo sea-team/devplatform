@@ -1,0 +1,56 @@
+{
+    "appid": 285,
+    "appname": "discourse",
+    "apptitle": "Discourse",
+    "apptype": "BuildWebsite",
+    "appTypeCN": "建站",
+    "appversion": [
+        {
+            "m_version": "3.5.1",
+            "s_version": []
+        }
+    ],
+    "appdesc": "一款现代化的开源论坛软件，提供优秀的用户体验和强大的社区功能。支持实时通知、Markdown编辑器、邮件集成等特性，是构建在线社区的理想选择。",
+    "appstatus": 1,
+    "icon": "",
+    "sort": 23,
+    "home": "https://github.com/discourse/discourse",
+    "help": "https://docs.discourse.org/",
+    "cpu": 0,
+    "mem": 0,
+    "disk": 10240,
+    "updateat": 1765761348,
+    "installed": false,
+    "reuse": true,
+    "depend": null,
+    "field": [
+        {"attr": "domain", "name": "域名", "type": "textarea", "default": "", "suffix": "浏览器访问的域名,非必填", "unit": ""},
+        {"attr": "allow_access", "name": "允许外部访问", "type": "checkbox", "default": true, "suffix": "允许直接通过主机IP+端口访问", "unit": ""},
+        {"attr": "discourse_web_port", "name": "Web端口", "type": "number", "default": 8001, "suffix": "Discourse论坛访问端口", "unit": ""},
+        {"attr": "discourse_host", "name": "论坛域名", "type": "string", "default": "", "suffix": "论坛的域名地址(域名 或 ip:端口)", "unit": ""},
+        {"attr": "DISCOURSE_SMTP_ADDRESS", "name": "SMTP地址", "type": "string", "default": "", "suffix": "SMTP服务地址 请使用域名", "unit": ""},
+        {"attr": "DISCOURSE_SMTP_PORT", "name": "SMTP端口", "type": "string", "default": "587", "suffix": "", "unit": ""},
+        {"attr": "DISCOURSE_SMTP_USER_NAME", "name": "SMTP用户名", "type": "string", "default": "", "suffix": "", "unit": ""},
+        {"attr": "DISCOURSE_SMTP_PASSWORD", "name": "SMTP用户密码", "type": "string", "default": "", "suffix": "", "unit": ""},
+        {"attr": "DISCOURSE_DEVELOPER_EMAILS", "name": "管理员邮箱", "type": "string", "default": "", "suffix": "Discourse管理员邮箱（安装成功后用于注册管理员）", "unit": ""},
+        {"attr": "cpus", "name": "cpu核心数限制", "type": "number", "default": 0, "suffix": "0为不限制,最大可用核心数为: ", "unit": ""},
+        {"attr": "memory_limit", "name": "内存限制", "type": "number", "default": 0, "suffix": "0为不限制,最大可用内存为: ", "unit": ""}
+    ],
+    "env": [
+        {"key": "version", "type": "string", "default": null, "desc": "版本号"},
+        {"key": "discourse_web_port", "type": "port", "default": 3000, "desc": "论坛访问端口"},
+        {"key": "discourse_host", "type": "string", "default": null, "desc": "论坛域名"},
+        {"key": "DISCOURSE_SMTP_ADDRESS", "type": "string", "default": null, "desc": "SMTP地址"},
+        {"key": "DISCOURSE_SMTP_PORT", "type": "string", "default": null, "desc": "SMTP端口"},
+        {"key": "DISCOURSE_SMTP_USER_NAME", "type": "string", "default": null, "desc": "SMTP用户名"},
+        {"key": "DISCOURSE_SMTP_PASSWORD", "type": "string", "default": null, "desc": "SMTP用户密码"},
+        {"key": "DISCOURSE_DEVELOPER_EMAILS", "type": "string", "default": null, "desc": "管理员邮箱"},
+        {"key": "app_path", "type": "path", "default": null, "desc": "应用数据目录"},
+        {"key": "host_ip", "type": "string", "default": null, "desc": "主机IP"},
+        {"key": "cpus", "type": "number", "default": null, "desc": "CPU核心数限制"},
+        {"key": "memory_limit", "type": "number", "default": null, "desc": "内存大小限制"}
+    ],
+    "volumes": {
+        "data": {"type": "path", "desc": "应用数据目录"}
+    }
+}

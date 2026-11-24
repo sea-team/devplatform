@@ -4,7 +4,7 @@
     powershell -NoProfile -ExecutionPolicy Bypass -File windows\pack-dist.ps1
     powershell -NoProfile -ExecutionPolicy Bypass -File windows\pack-dist.ps1 -Output D:\share\devplatform-dist.zip
   GitHub Actions 用同一个脚本打包，保证 zip 结构与安装器解压逻辑一致。
-  只包含 devplatform.exe / bundle.cjs / release.json / public/，
+  只包含 devplatform.exe / bundle.cjs / release.json / public/ / appstore/，
   绝不包含 .env、data/、workspace/、state.json 等本机状态与凭据。
 #>
 [CmdletBinding()]
@@ -32,6 +32,8 @@ foreach ($f in $required) {
   }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $Dist 'public'))) { throw "缺少 $Dist\public" }
+# v0.4.29：应用商店模板随包分发（exe 绿色包/组件包 appRoot 指向 dist/）。
+if (-not (Test-Path -LiteralPath (Join-Path $Dist 'appstore'))) { throw "缺少 $Dist\appstore；请先在含 Node 的机器执行 npm run build" }
 
 if (Test-Path -LiteralPath $Output) { Remove-Item -LiteralPath $Output -Force }
 $stage = Join-Path $env:TEMP ('dp-pack-' + [guid]::NewGuid().ToString('N'))
@@ -39,6 +41,7 @@ New-Item -ItemType Directory -Path $stage -Force | Out-Null
 try {
   foreach ($f in $required) { Copy-Item -LiteralPath (Join-Path $Dist $f) -Destination $stage -Force }
   Copy-Item -LiteralPath (Join-Path $Dist 'public') -Destination (Join-Path $stage 'public') -Recurse -Force
+  Copy-Item -LiteralPath (Join-Path $Dist 'appstore') -Destination (Join-Path $stage 'appstore') -Recurse -Force
   # 用 .NET ZipFile 而非 Compress-Archive：条目路径严格相对 stage，安装器能直接解压到 dist/
   [System.IO.Compression.ZipFile]::CreateFromDirectory(
     $stage, $Output, [System.IO.Compression.CompressionLevel]::Optimal, $false)

@@ -315,6 +315,91 @@ async function execContainerTimed(id, cmd, timeout = 120000) {
   return { exitCode: Number((info && info.ExitCode) || 0), output: demux(buf) };
 }
 
+/**
+ * v0.4.30 交互式容器终端：创建 Tty=true + AttachStdin 的 exec。
+ * Cmd 用 shell 名（daemon 会按容器 PATH 解析）；root=true 时以 root 身份进入。
+ */
+async function execCreateInteractive(id, { shell = 'sh', root = false } = {}) {
+  const bin = shell === 'bash' ? 'bash' : 'sh';
+  const created = await request('POST', `/containers/${encodeURIComponent(id)}/exec`, {
+    AttachStdin: true, AttachStdout: true, AttachStderr: true, Tty: true,
+    Cmd: [bin],
+    ...(root ? { User: 'root' } : {}),
+  }, { timeout: 15000 });
+  if (!created || !created.Id) throw new Error('Docker 未返回 exec ID');
+  return created.Id;
+}
+
+/**
+ * v0.4.30：以 Docker 的 connection hijack 拿到 exec 的双向裸流 socket。
+ * 关键：请求头带 `Connection: Upgrade` + `Upgrade: tcp` 时，Docker daemon 返回
+ * 101 UPGRADED，Node 的 http 客户端触发 'upgrade' 事件而不是普通 'response'。
+ * Tty=true 时 socket 上是原始字节（无 8 字节复用帧头），可直接喂给 xterm。
+ * 返回 { socket, source, upgradeHead }：socket 用于写入键盘输入，source 是输出字节来源
+ * （升级成功时就是 socket；降级时是 HTTP 响应流），调用方统一监听 source 的 'data'。
+ */
+function execAttach(execId) {
+  return new Promise((resolve, reject) => {
+    const payload = Buffer.from(JSON.stringify({ Detach: false, Tty: true }));
+    const ep = endpoint();
+    const options = {
+      path: `/exec/${encodeURIComponent(execId)}/start`,
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(payload.length),
+        connection: 'Upgrade',
+        upgrade: 'tcp',
+      },
+    };
+    if (ep.socketPath) {
+      options.socketPath = ep.socketPath;
+    } else {
+      options.host = ep.host;
+      options.port = ep.port;
+      const resolved = proxyModule.resolve('docker', { itemId: 'docker-engine', host: ep.host });
+      if (resolved.url && !proxyModule.shouldBypass(ep.host, resolved.noProxy)
+        && /^https?:\/\//i.test(resolved.url)) {
+        options.agent = proxyModule.tunnelAgent(resolved.url, ep.host, ep.port);
+      }
+    }
+    const req = http.request(options);
+    let settled = false;
+    const finish = (fn, value) => { if (settled) return; settled = true; fn(value); };
+    // 标准路径：daemon 返回 101 UPGRADED，socket 是双向裸流，输出直接来自 socket。
+    req.on('upgrade', (res, socket, upgradeHead) => finish(resolve, {
+      socket, source: socket, upgradeHead,
+    }));
+    req.on('response', (res) => {
+      if (res.statusCode >= 400) {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => finish(reject, new Error(
+          `Docker exec attach 失败（HTTP ${res.statusCode}）：${Buffer.concat(chunks).toString('utf8').slice(0, 300)}`,
+        )));
+        return;
+      }
+      // 降级路径：某些代理 / 老版本 daemon 不升级协议，返回 200 且保持连接。
+      // 此时 res 是输出流、res.socket 仍可写，不能干等 'end'（它永不结束）。
+      const socket = res.socket;
+      if (!socket) {
+        finish(reject, new Error('Docker exec attach 未返回可写 socket'));
+        return;
+      }
+      finish(resolve, { socket, source: res, upgradeHead: Buffer.alloc(0) });
+    });
+    req.on('error', (err) => finish(reject, new Error(`Docker exec attach 连接失败：${err.message}`)));
+    req.write(payload);
+    req.end();
+  });
+}
+
+/** 调整交互式 exec 的终端窗口大小（xterm FitAddon 变化时调用）。 */
+async function execResize(execId, cols, rows) {
+  await request('POST', `/exec/${encodeURIComponent(execId)}/resize?${qs({ w: cols, h: rows })}`,
+    undefined, { timeout: 5000 });
+}
+
 module.exports = {
   runContainer, SOCKET_PATH, endpoint, request,
   ping, version, listContainers, inspectContainer, imageExists, pullImage,
@@ -325,6 +410,7 @@ module.exports = {
   listNetworks, createNetwork, removeNetwork,
   pauseContainer, unpauseContainer, containerStats,
   getArchive, putArchive, execContainerTimed,
+  execCreateInteractive, execAttach, execResize,
 };
 
 /**

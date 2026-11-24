@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261124b" />
+  <link rel="stylesheet" href="/style.css?v=20261124q" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -299,7 +299,7 @@
           </div>
         </section>
 
-        <!-- 克隆到工作区（独立页） -->
+        <!-- 克隆到工作区（独立页：克隆表单已弹窗化，这里保留压缩包导入与说明） -->
         <section class="page" id="view-repo-clone">
           <div class="subnav">
             <span class="subnav-label">Git 仓库</span>
@@ -310,40 +310,11 @@
             <button class="subnav-btn" data-open-view="gitsrc">外部 Git 源</button>
           </div>
           <div class="card">
-            <div class="card-head"><h2>克隆到工作区</h2><span class="muted">克隆后可直接用在线 IDE 打开</span></div>
-            <form id="clone-form" class="form">
-              <div class="grid-2">
-                <label>仓库地址<input name="cloneUrl" placeholder="从「仓库列表」点克隆自动填入，也可手填 http(s)/git@ 地址" required /></label>
-                <label>本地目录名（可选）<input name="name" placeholder="留空则用仓库名" /></label>
-              </div>
-              <div class="grid-2">
-                <label>凭据方式<select name="authMode" id="clone-auth-mode">
-                  <option value="source">使用已登记 Git 源的凭据</option>
-                  <option value="password">本次填写账号密码</option>
-                  <option value="token">本次填写访问令牌 Token</option>
-                  <option value="none">不带凭据（公开仓库 / SSH 密钥）</option>
-                </select></label>
-                <label>Git 源（配合上一项）<select name="sourceId" id="clone-source"></select></label>
-              </div>
-              <div id="clone-inline-fields" class="grid-2" hidden>
-                <label id="clone-username-field">用户名<input name="username" id="clone-username" placeholder="Git 账号，GitHub 请填用户名" autocomplete="off" /></label>
-                <label id="clone-password-field">密码 / 个人访问令牌<input name="password" id="clone-password" type="password" placeholder="GitHub 请填 PAT，不要填登录密码" autocomplete="new-password" /></label>
-                <label id="clone-token-field" hidden>访问令牌 Token<input name="token" id="clone-token" type="password" placeholder="ghp_... / Gitea Token / GitLab PAT" autocomplete="new-password" /></label>
-              </div>
-              <label>本次克隆代理（可选）<input name="proxy" placeholder="填一个地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连；留空继承上级" /></label>
-              <label>TLS 证书校验（本次克隆）<select name="insecure">
-                <option value="auto">跟随 Git 源 / 全局设置（默认严格校验）</option>
-                <option value="on">忽略证书校验（仅限可信内网应急）</option>
-                <option value="off">强制严格校验</option>
-              </select></label>
-              <input type="hidden" name="repoId" id="clone-repo-id" value="" />
-              <div class="form-actions"><button class="btn btn-primary" type="submit">克隆到工作区</button></div>
-            </form>
-            <div class="notice warn" id="clone-conflict" hidden></div>
-            <div class="notice">
-              <b>凭据安全</b>：本次填写的账号密码 / Token 只在 <code>git clone</code> 进程参数里出现，通过临时 <code>http.extraHeader</code> 传递，<b>不会写入 .git/config、不会落到工作区、也不会保存进 state.json</b>；失败日志会自动脱敏。SSH 地址（<code>git@</code> / <code>ssh://</code>）走本机 SSH 密钥，账号密码无效。<br />
-              <b>代理优先级</b>：本次指定 &gt; 单个仓库代理 &gt; Git Host 匹配规则 &gt; Git 分组代理 &gt; 全局代理；<code>direct</code> 表示强制直连。更多说明见「代理配置」页。<br />
-              <b>Git 运行时</b>：克隆需要 Git 可执行文件。容器内没有 Git 时，平台会自动改用已登记的 SSH 宿主机（依据 <code>HOST_WORKSPACE_DIR</code> 挂载映射）执行，效果等同本地克隆；也可在上方直接指定 Git 路径。容器镜像缺 Git 不会再出现 <code>spawn git ENOENT</code>。
+            <div class="card-head"><h2>克隆到工作区</h2><span class="muted">从仓库列表点「克隆到工作区」以弹窗填写</span></div>
+            <div class="hint">「克隆到工作区」已改为弹窗方式：在「仓库列表」点击对应仓库的「克隆到工作区」按钮，会自动带入地址并弹出表单，无需跳转页面。</div>
+            <div class="form-actions" style="margin-top:12px">
+              <button class="btn btn-primary" type="button" id="repo-clone-open-btn">打开克隆弹窗</button>
+              <button class="btn" type="button" data-open-view="repos">前往仓库列表</button>
             </div>
           </div>
 
@@ -396,6 +367,7 @@
             <button class="subnav-btn" data-open-view="docker-volumes">存储卷</button>
             <button class="subnav-btn" data-open-view="docker-networks">网络</button>
             <button class="subnav-btn" data-open-view="docker-compose">容器编排</button>
+            <button class="subnav-btn" data-open-view="docker-apps">应用商店</button>
           </div>
           <div class="card">
             <div class="card-head"><h2>Docker 运行环境</h2>
@@ -455,6 +427,7 @@
             <button class="subnav-btn" data-open-view="docker-volumes">存储卷</button>
             <button class="subnav-btn" data-open-view="docker-networks">网络</button>
             <button class="subnav-btn" data-open-view="docker-compose">容器编排</button>
+            <button class="subnav-btn" data-open-view="docker-apps">应用商店</button>
           </div>
           <div class="card">
             <div class="card-head"><h2>容器</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
@@ -478,6 +451,152 @@
           </div>
         </section>
 
+  <!-- 容器操作弹窗：日志 / 详情 / 资源 / 终端 -->
+  <div class="modal" id="dk-modal" hidden aria-modal="true" role="dialog" aria-labelledby="dk-modal-title">
+    <div class="modal-mask" id="dk-modal-mask"></div>
+    <div class="modal-panel" style="width:min(900px,96vw)">
+      <div class="modal-head">
+        <h2 id="dk-modal-title">容器</h2>
+        <div class="dk-modal-tabs" id="dk-modal-tabs" style="display:flex;gap:6px;margin-left:16px"></div>
+        <button class="btn btn-ghost btn-sm" id="dk-modal-close" style="margin-left:auto">关闭</button>
+      </div>
+      <div class="modal-body" id="dk-modal-body" style="padding:0;overflow:hidden;display:flex;flex-direction:column">
+        <!-- 日志面板 -->
+        <div id="dk-panel-logs" class="dk-modal-panel" hidden>
+          <div style="display:flex;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border)">
+            <select id="dk-log-tail" class="ui-select ui-select-sm" style="width:120px">
+              <option value="100">最近 100 行</option>
+              <option value="200" selected>最近 200 行</option>
+              <option value="500">最近 500 行</option>
+              <option value="1000">最近 1000 行</option>
+            </select>
+            <button class="btn btn-sm" id="dk-log-refresh">刷新</button>
+            <button class="btn btn-sm" id="dk-log-copy">复制</button>
+          </div>
+          <pre class="log" id="dk-log-content" style="margin:0;border-radius:0;max-height:60vh;overflow:auto;min-height:200px">—</pre>
+        </div>
+        <!-- 详情面板 -->
+        <div id="dk-panel-inspect" class="dk-modal-panel" hidden>
+          <pre class="log" id="dk-inspect-content" style="margin:0;border-radius:0;max-height:65vh;overflow:auto;min-height:200px">—</pre>
+        </div>
+        <!-- 资源面板（宝塔风格：基础信息 + 4 实时图表 + 自动轮询） -->
+        <div id="dk-panel-stats" class="dk-modal-panel" hidden style="padding:14px 16px;overflow:auto;max-height:72vh">
+          <!-- 基础信息 -->
+          <div class="dk-stats-info" id="dk-stats-info" style="margin-bottom:12px;padding:10px 14px;background:var(--surface-alt);border-radius:9px;font-size:13px;display:flex;gap:24px;flex-wrap:wrap">
+            <span><b>内存限制：</b><span id="dk-info-memlimit">—</span></span>
+            <span><b>流量情况：</b>上行 <span id="dk-info-nettx">—</span> · 下行 <span id="dk-info-netrx">—</span></span>
+            <span><b>PID 数：</b><span id="dk-info-pids">—</span></span>
+          </div>
+          <!-- 4 图表区 -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+            <div class="dk-chart-wrap">
+              <div class="dk-chart-label">CPU 使用率（%）</div>
+              <svg id="dk-chart-cpu" width="100%" viewBox="0 0 400 120" preserveAspectRatio="none" class="dk-chart-svg"></svg>
+            </div>
+            <div class="dk-chart-wrap">
+              <div class="dk-chart-label">内存使用（MB）<span class="muted" style="font-size:11px;margin-left:6px">· 蓝=使用 粉=缓存</span></div>
+              <svg id="dk-chart-mem" width="100%" viewBox="0 0 400 120" preserveAspectRatio="none" class="dk-chart-svg"></svg>
+            </div>
+            <div class="dk-chart-wrap">
+              <div class="dk-chart-label">磁盘 I/O（KB/s）<span class="muted" style="font-size:11px;margin-left:6px">· 粉=读 蓝=写</span></div>
+              <svg id="dk-chart-blk" width="100%" viewBox="0 0 400 120" preserveAspectRatio="none" class="dk-chart-svg"></svg>
+            </div>
+            <div class="dk-chart-wrap">
+              <div class="dk-chart-label">网络 I/O（KB/s）<span class="muted" style="font-size:11px;margin-left:6px">· 橙=上行 蓝=下行</span></div>
+              <svg id="dk-chart-net" width="100%" viewBox="0 0 400 120" preserveAspectRatio="none" class="dk-chart-svg"></svg>
+            </div>
+          </div>
+          <div style="margin-top:12px;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span id="dk-stats-time">—</span>
+            <button class="btn btn-sm" id="dk-stats-refresh">刷新</button>
+            <label class="check" style="font-size:12px"><input type="checkbox" id="dk-stats-auto" /> 自动刷新（2 秒）</label>
+          </div>
+        </div>
+        <!-- 终端面板（v0.4.30：xterm.js 交互式 PTY，支持 shell / root 选择与窗口自适应） -->
+        <div id="dk-panel-term" class="dk-modal-panel" hidden style="display:flex;flex-direction:column;height:100%">
+          <div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <label class="muted small" style="display:flex;align-items:center;gap:5px">Shell
+              <select id="dk-term-shell" class="ui-select ui-select-sm" style="width:96px">
+                <option value="sh">sh</option>
+                <option value="bash">bash</option>
+              </select>
+            </label>
+            <label class="check small" style="display:flex;align-items:center;gap:5px;color:var(--muted)">
+              <input type="checkbox" id="dk-term-root" checked /> 使用 root 权限执行
+            </label>
+            <span class="flex-spacer"></span>
+            <span class="chip" id="dk-term-state">未连接</span>
+            <button class="btn btn-sm btn-primary" id="dk-term-connect">连接</button>
+            <button class="btn btn-sm" id="dk-term-disconnect">断开</button>
+            <button class="btn btn-sm" id="dk-term-clear">清屏</button>
+          </div>
+          <div style="padding:5px 16px;font-size:11px;color:var(--muted);border-bottom:1px solid var(--border)">
+            交互式终端（Docker exec PTY）：支持 vi / top / Tab 补全 / Ctrl+C；切换 shell 或 root 后需重新连接。窗口大小自动同步。
+          </div>
+          <div id="dk-term-xterm" style="flex:1;min-height:260px;max-height:58vh;overflow:hidden;background:#0f172a;padding:8px 4px 4px 10px"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Git 仓库：文件管理 / 克隆到工作区 弹窗化（v0.4.30） -->
+  <div class="modal" id="repo-clone-modal" hidden aria-modal="true" role="dialog" aria-labelledby="repo-clone-modal-title">
+    <div class="modal-mask" data-repo-modal-close="clone"></div>
+    <div class="modal-panel" style="width:min(760px,96vw)">
+      <div class="modal-head">
+        <h2 id="repo-clone-modal-title">克隆到工作区</h2>
+        <button class="btn btn-ghost btn-sm" data-repo-modal-close="clone">关闭</button>
+      </div>
+      <div class="modal-body" id="repo-clone-modal-slot">
+        <form id="clone-form" class="form">
+          <div class="grid-2">
+            <label>仓库地址<input name="cloneUrl" placeholder="从「仓库列表」点克隆自动填入，也可手填 http(s)/git@ 地址" required /></label>
+            <label>本地目录名（可选）<input name="name" placeholder="留空则用仓库名" /></label>
+          </div>
+          <div class="grid-2">
+            <label>凭据方式<select name="authMode" id="clone-auth-mode">
+              <option value="source">使用已登记 Git 源的凭据</option>
+              <option value="password">本次填写账号密码</option>
+              <option value="token">本次填写访问令牌 Token</option>
+              <option value="none">不带凭据（公开仓库 / SSH 密钥）</option>
+            </select></label>
+            <label>Git 源（配合上一项）<select name="sourceId" id="clone-source"></select></label>
+          </div>
+          <div id="clone-inline-fields" class="grid-2" hidden>
+            <label id="clone-username-field">用户名<input name="username" id="clone-username" placeholder="Git 账号，GitHub 请填用户名" autocomplete="off" /></label>
+            <label id="clone-password-field">密码 / 个人访问令牌<input name="password" id="clone-password" type="password" placeholder="GitHub 请填 PAT，不要填登录密码" autocomplete="new-password" /></label>
+            <label id="clone-token-field" hidden>访问令牌 Token<input name="token" id="clone-token" type="password" placeholder="ghp_... / Gitea Token / GitLab PAT" autocomplete="new-password" /></label>
+          </div>
+          <label>本次克隆代理（可选）<input name="proxy" placeholder="填一个地址：如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；direct 直连；留空继承上级" /></label>
+          <label>TLS 证书校验（本次克隆）<select name="insecure">
+            <option value="auto">跟随 Git 源 / 全局设置（默认严格校验）</option>
+            <option value="on">忽略证书校验（仅限可信内网应急）</option>
+            <option value="off">强制严格校验</option>
+          </select></label>
+          <input type="hidden" name="repoId" id="clone-repo-id" value="" />
+          <div class="form-actions"><button class="btn btn-primary" type="submit">克隆到工作区</button></div>
+        </form>
+        <div class="notice warn" id="clone-conflict" hidden></div>
+        <div class="notice">
+          <b>凭据安全</b>：本次填写的账号密码 / Token 只在 <code>git clone</code> 进程参数里出现，通过临时 <code>http.extraHeader</code> 传递，<b>不会写入 .git/config、不会落到工作区、也不会保存进 state.json</b>；失败日志会自动脱敏。SSH 地址（<code>git@</code> / <code>ssh://</code>）走本机 SSH 密钥，账号密码无效。<br />
+          <b>代理优先级</b>：本次指定 &gt; 单个仓库代理 &gt; Git Host 匹配规则 &gt; Git 分组代理 &gt; 全局代理；<code>direct</code> 表示强制直连。更多说明见「代理配置」页。<br />
+          <b>Git 运行时</b>：克隆需要 Git 可执行文件。容器内没有 Git 时，平台会自动改用已登记的 SSH 宿主机（依据 <code>HOST_WORKSPACE_DIR</code> 挂载映射）执行，效果等同本地克隆；也可在上方直接指定 Git 路径。容器镜像缺 Git 不会再出现 <code>spawn git ENOENT</code>。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="repo-files-modal" hidden aria-modal="true" role="dialog" aria-labelledby="repo-files-modal-title">
+    <div class="modal-mask" data-repo-modal-close="files"></div>
+    <div class="modal-panel" style="width:min(1000px,96vw)">
+      <div class="modal-head">
+        <h2 id="repo-files-modal-title">文件管理</h2>
+        <button class="btn btn-ghost btn-sm" data-repo-modal-close="files">关闭</button>
+      </div>
+      <div class="modal-body" id="repo-files-modal-slot" style="padding:0;display:flex;flex-direction:column;height:min(72vh,680px);overflow:hidden"></div>
+    </div>
+  </div>
+
         <!-- Docker 管理 · 镜像 / 仓库（独立页） -->
         <section class="page" id="view-docker-images">
           <div class="subnav">
@@ -488,6 +607,7 @@
             <button class="subnav-btn" data-open-view="docker-volumes">存储卷</button>
             <button class="subnav-btn" data-open-view="docker-networks">网络</button>
             <button class="subnav-btn" data-open-view="docker-compose">容器编排</button>
+            <button class="subnav-btn" data-open-view="docker-apps">应用商店</button>
           </div>
           <div class="grid-2">
             <div class="card">
@@ -542,6 +662,7 @@
             <button class="subnav-btn active" data-open-view="docker-volumes">存储卷</button>
             <button class="subnav-btn" data-open-view="docker-networks">网络</button>
             <button class="subnav-btn" data-open-view="docker-compose">容器编排</button>
+            <button class="subnav-btn" data-open-view="docker-apps">应用商店</button>
           </div>
           <div class="grid-2">
             <div class="card">
@@ -592,6 +713,7 @@
             <button class="subnav-btn" data-open-view="docker-volumes">存储卷</button>
             <button class="subnav-btn active" data-open-view="docker-networks">网络</button>
             <button class="subnav-btn" data-open-view="docker-compose">容器编排</button>
+            <button class="subnav-btn" data-open-view="docker-apps">应用商店</button>
           </div>
           <div class="grid-2">
             <div class="card">
@@ -643,6 +765,7 @@
             <button class="subnav-btn" data-open-view="docker-volumes">存储卷</button>
             <button class="subnav-btn" data-open-view="docker-networks">网络</button>
             <button class="subnav-btn active" data-open-view="docker-compose">容器编排</button>
+            <button class="subnav-btn" data-open-view="docker-apps">应用商店</button>
           </div>
           <div class="card">
             <div class="card-head"><h2>Compose 编排模板</h2><span class="muted">登记 / 校验 / 导出，不在平台内执行</span></div>
@@ -685,6 +808,41 @@
             <div class="card-head"><h2>已保存的编排模板</h2><button class="btn btn-ghost btn-sm" data-reload="docker">刷新</button></div>
             <div class="hint">「载入」把模板回填到上方表单继续编辑；「复制 / 下载」用于到服务器执行。</div>
             <div id="docker-templates" class="table-wrap" style="margin-top:12px"></div>
+          </div>
+        </section>
+
+        <!-- Docker 管理 · 应用商店（独立页，移植宝塔 appstore） -->
+        <section class="page" id="view-docker-apps">
+          <div class="subnav">
+            <span class="subnav-label">Docker 管理</span>
+            <button class="subnav-btn" data-open-view="docker">总览 / 设置</button>
+            <button class="subnav-btn" data-open-view="docker-containers">容器</button>
+            <button class="subnav-btn" data-open-view="docker-images">镜像 / 仓库</button>
+            <button class="subnav-btn" data-open-view="docker-volumes">存储卷</button>
+            <button class="subnav-btn" data-open-view="docker-networks">网络</button>
+            <button class="subnav-btn" data-open-view="docker-compose">容器编排</button>
+            <button class="subnav-btn active" data-open-view="docker-apps">应用商店</button>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>Docker 应用商店</h2><span class="muted" id="da-mirror-tag">加速器：检测中…</span></div>
+            <div class="hint">复用宝塔官方开源应用商店（aaPanel/appstore）的全量模板（314 个应用）。选应用 → 填参数 → 生成 compose / .env，复制到目标服务器执行 <code>docker compose up -d</code>；平台不在自身内执行编排。镜像加速默认按宝塔方式（配置加速 URL → 目标机 <code>daemon.json</code>），也可切换为改写 compose 镜像源。</div>
+            <div class="notice" id="da-status">应用加载中…</div>
+          </div>
+          <div class="da-layout">
+            <aside class="da-sidebar">
+              <div class="da-cat da-cat-all active" data-da-type=""><span>全部应用</span><span class="da-cnt" id="da-cnt-all">0</span></div>
+              <div id="da-cats"></div>
+            </aside>
+            <div class="da-main">
+              <div class="da-toolbar">
+                <input type="search" id="da-search" class="ui-input" placeholder="搜索应用名称 / 描述…" />
+                <button class="btn btn-ghost btn-sm" id="da-reload" title="重新扫描内置应用目录">重载目录</button>
+                <button class="btn btn-ghost btn-sm" id="da-mirror-btn" title="设置镜像加速（宝塔方式 / compose 换源）">镜像加速设置</button>
+              </div>
+              <div id="da-grid" class="da-grid"><div class="muted" style="padding:24px">加载中…</div></div>
+              <div id="da-empty" class="da-empty" hidden>没有匹配的应用。</div>
+              <div id="da-pager" class="da-pager" hidden></div>
+            </div>
           </div>
         </section>
 
@@ -2042,13 +2200,98 @@
       </div>
     </div>
   </div>
+  <!-- Docker 应用商店 · 应用详情 / 部署弹窗 -->
+  <div class="modal" id="da-modal" hidden aria-modal="true" role="dialog" aria-labelledby="da-modal-title">
+    <div class="modal-mask" data-da-close></div>
+    <div class="modal-panel" style="max-width:760px;width:94vw;max-height:88vh;overflow:auto">
+      <div class="modal-head">
+        <div class="da-modal-icon" id="da-modal-icon">▦</div>
+        <div><h2 id="da-modal-title">应用</h2><div class="muted small" id="da-modal-sub"></div></div>
+        <button class="btn btn-ghost btn-sm" data-da-close style="margin-left:auto">关闭</button>
+      </div>
+      <div class="modal-body">
+        <p class="da-modal-desc" id="da-modal-desc"></p>
+        <div class="da-modal-links" id="da-modal-links"></div>
+        <div class="notice" id="da-modal-depend" hidden></div>
+        <div class="da-form-head"><b>部署参数</b><span class="muted small">填写后生成 .env；仅覆盖模板已声明的变量</span></div>
+        <div class="da-form-fields" id="da-form-fields" style="margin-top:8px"></div>
+        <div class="da-compose-head" style="margin-top:16px">
+          <b>docker-compose.yml 预览</b>
+          <label class="muted small">版本
+            <select id="da-version" class="ui-select ui-select-sm" style="min-width:110px"></select>
+          </label>
+        </div>
+        <pre class="log" id="da-compose" style="max-height:260px;overflow:auto;margin-top:8px">—</pre>
+        <div class="da-env-head" style="margin-top:14px"><b>生成的 .env</b><span class="muted small">参数已合并</span></div>
+        <pre class="log" id="da-env" style="max-height:180px;overflow:auto;margin-top:8px">—</pre>
+        <!-- 部署面板：服务器选择 + 目标目录 + 日志输出 -->
+        <div id="da-deploy-panel" hidden style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px">
+          <div class="da-form-head"><b>部署到服务器</b><span class="muted small">SSH 上传 compose + .env 并执行 docker compose up -d</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+            <label style="font-size:12px;color:var(--muted)">目标服务器
+              <select id="da-deploy-server" class="ui-select"></select>
+            </label>
+            <label style="font-size:12px;color:var(--muted)">目标目录（留空自动设为 /data/apps/&lt;name&gt;）
+              <input id="da-deploy-dir" class="ui-input" placeholder="/data/apps/appname" />
+            </label>
+          </div>
+          <pre class="log" id="da-deploy-log" style="max-height:220px;overflow:auto;margin-top:10px;min-height:48px;display:none">—</pre>
+        </div>
+      </div>
+      <div class="modal-actions" style="flex-wrap:wrap;gap:8px">
+        <button class="btn" type="button" id="da-copy-compose">复制 compose</button>
+        <button class="btn" type="button" id="da-copy-env">复制 .env</button>
+        <button class="btn" type="button" id="da-dl-compose" title="下载 docker-compose.yml">下载 compose</button>
+        <button class="btn" type="button" id="da-dl-env" title="下载 .env">下载 .env</button>
+        <button class="btn btn-primary" type="button" id="da-generate">生成部署文件</button>
+        <button class="btn btn-primary da-deploy-pending" type="button" id="da-deploy-btn" title="生成部署文件后即可部署">部署到服务器</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 镜像加速设置弹窗（宝塔方式 accelerateUrl / compose 换源，二者并存） -->
+  <div class="modal" id="da-mirror-modal" hidden aria-modal="true" role="dialog" aria-labelledby="da-mirror-title">
+    <div class="modal-mask" data-dam-close></div>
+    <div class="modal-panel">
+      <div class="modal-head"><h2 id="da-mirror-title">镜像加速设置</h2></div>
+      <div class="modal-body">
+        <p class="muted small">默认按宝塔面板方式：配置一个加速 URL，平台生成 <code>/etc/docker/daemon.json</code> 的 registry-mirrors 片段供目标机应用，compose 保持官方镜像名不变。也可切换为「改写 compose」模式（旧行为）。</p>
+        <label style="display:block;margin-top:10px">加速方式
+          <select id="da-acc-mode" class="ui-select">
+            <option value="baota">宝塔方式（加速 URL → daemon.json，推荐）</option>
+            <option value="compose">改写 compose 镜像源（旧行为）</option>
+          </select>
+        </label>
+        <label style="display:block;margin-top:10px">加速 URL（宝塔方式用）
+          <input id="da-acc-url" class="ui-input" placeholder="https://docker.1ms.run" />
+        </label>
+        <div class="hint" style="margin-top:6px">宝塔推荐：https://docker.1ms.run · https://docker.m.daocloud.io · https://docker.kubesre.xyz</div>
+        <label style="display:block;margin-top:10px">镜像源前缀（改写 compose 模式用）
+          <input id="da-acc-mirror" class="ui-input" placeholder="registry.cn-hangzhou.aliyuncs.com" />
+        </label>
+        <div id="da-daemon-box" style="margin-top:14px">
+          <div class="muted small" style="margin-bottom:6px">目标机 daemon.json（点复制后在服务器执行）：</div>
+          <pre class="log" id="da-daemon-json" style="max-height:160px">检测中…</pre>
+          <button class="btn btn-ghost btn-sm" type="button" id="da-copy-daemon">复制 daemon.json</button>
+          <button class="btn btn-ghost btn-sm" type="button" id="da-copy-daemon-cmd">复制配置命令</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" type="button" data-dam-close>取消</button>
+        <button class="btn btn-primary" type="button" id="da-mirror-save">保存</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="toast"></div>
   <script src="/vendor/xterm.min.js"></script>
   <script src="/vendor/addon-fit.min.js"></script>
   <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/cm-modes.js"></script>
+  <!-- 通用「浮层化」遮罩：给页内卡片加 .as-modal class 时显示 -->
+  <div id="card-modal-mask" hidden></div>
   <script src="/vendor/cm-addons.js"></script>
   <script src="/vendor/qrcode.js"></script>
-  <script src="/app.js?v=20261124b"></script>
+  <script src="/app.js?v=20261124q"></script>
 </body>
 </html>

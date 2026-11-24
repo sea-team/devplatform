@@ -1,0 +1,24 @@
+services:
+  cloudbeaver:
+    image: dbeaver/cloudbeaver:latest
+    ports:
+      - "${HOST_IP}:${CLOUDBEAVER_WEB_PORT}:8978"
+    volumes:
+      - ${APP_PATH}/data/workspace:/opt/cloudbeaver/workspace
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      restart_policy:
+        condition: always
+      resources:
+        limits:
+          cpus: "${CPUS}"
+          memory: "${MEMORY_LIMIT}"
+    labels:
+      createdBy: "bt_apps"
+    networks:
+      - baota_net
+
+networks:
+  baota_net:
+    external: true

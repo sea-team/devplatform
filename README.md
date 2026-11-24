@@ -1,9 +1,11 @@
 # DevPlatform · 统一 Web 开发管理平台 使用说明
 
-> 适用版本：一期（2026-11-07）
+> 适用版本：v0.4.30（2026-11-24；仓库版本号仍标记 0.4.28，本轮尚未发版）
 > 当前线上环境：`http://10.0.0.246:9000`（部署目录 `/data/platform`，容器 `devplatform`）
 > 本地代码：`devplatform/`，Git 分支 `main`
 > 本文中的 `10.0.0.246` 为示例/测试机地址，换环境时请全局替换。
+>
+> 版本演进详见 `release-notes.md`；本文 §19 起按版本顺序记录各阶段功能与修复，最新为 §69。
 
 ---
 
@@ -29,6 +31,11 @@
 | 16 | 目录结构、Git 与已知限制 |
 | 17 | 单文件可执行程序、热更新与本机集成服务配置（本机免 Node） |
 | 18 | Windows 一键安装：Docker / 无 Docker 原生 / 复用服务器三种模式、Release 免安装发行包、服务管理与排错 |
+| 19–41 | 扩展 / 数据库、编译后端、外部 Git 源、Docker 管理、DbGate、OpenList、分层代理、环境适配、账号体系与资源协作 |
+| 42–64 | v0.4.x 各版发布记录、AI 终端 / AI 会话 / 模型配置、功能补充 A–E 批、安全审核与 P0/P1/P2 全修、渐进式类型检查 |
+| 65–67 | OpenList 根目录映射、rclone 存储层 + SMB 网关、Windows exe 提权 + WinFsp 自动安装（v0.4.28） |
+| 68 | Docker 应用商店（移植宝塔 aaPanel/appstore，320 应用 / 314 有效模板、双模式镜像加速、一键部署） |
+| 69 | Git 仓库弹窗化、Docker exec PTY 交互式终端（xterm + bash/sh + root）、「连接」按钮点击无响应修复（v0.4.30） |
 
 ---
 
@@ -38,16 +45,34 @@
 
 | 能力 | 落地方式 | 控制台入口 |
 |---|---|---|
-| Git 仓库管理 | Gitea REST API：创建、列表、克隆到工作区 | Git 仓库 |
-| 在线 VSCode | code-server，按项目目录打开工作区 | 在线 IDE |
-| 多存储挂载 / 文件管理 | OpenList API + WebDAV | 存储 / 文件 |
-| 多语言编译测试 | 6 种构建 Profile，本地或隔离容器执行 | 构建 · 部署 |
+| Git 仓库管理 | Gitea REST API：创建、列表、克隆到工作区（弹窗化）、仓库 Git 命令白名单、压缩包导入 | Git 仓库 |
+| 外部 Git 源 | GitHub / 自建 Gitea / GitLab 聚合，Token 脱敏、本源代理、三态 TLS 校验 | Git 仓库 → 外部源 |
+| 在线 VSCode | code-server，按项目目录打开工作区；`/api/ide/open` 代登录免密 + read 权限校验 | 在线 IDE |
+| 多存储挂载 / 文件管理 | OpenList API + WebDAV；多连接、根目录映射、文件编辑弹窗、Windows 网络盘映射 | 存储 / 文件 |
+| rclone 存储层 + SMB 网关 | rclone 子命令白名单（shell:false）、远端配置与文件浏览、FUSE 容器 / WinFsp 双路径 | 存储 → rclone |
+| 多语言编译测试 | 6 种构建 Profile，本地或隔离容器执行；编译环境四级降级 | 构建 · 部署 |
 | 自动部署 | SSH + SFTP 上传产物并执行远端命令 | 构建 · 部署 |
 | 服务器状态 | SSH 采集负载、内存、磁盘、容器 | 服务器 |
 | 服务器 SSH | xterm.js Web 终端（SSE 推流） | 服务器 → Web 终端 |
-| 远程文件 | SFTP 列目录 / 读写 / 上传下载 / 建删改名 | 服务器 → 文件管理 |
-| AI 服务 | OpenAI 兼容网关 + 宿主机 / WSL 本地 CLI + 代理 | AI 服务配置 |
+| 远程文件 | SFTP 列目录 / 读写 / 上传下载 / 建删改名；路径条 + 排序 + 目录分组 | 服务器 → 文件管理 |
+| Docker 管理 | 容器 / 镜像 / 卷 / 网络 / 编排模板 / 审计六分区；非平台容器只读 + 二次确认 | Docker 管理 |
+| Docker 应用商店 | 官方 aaPanel/appstore 320 应用（314 有效模板）、分类 / 分页 / 搜索、逐项配置说明、双模式镜像加速、生成部署文件 + 一键部署 | Docker 管理 → 应用商店 |
+| 容器交互式终端 | Docker exec PTY（Engine API hijack / 远端 SSH pty）+ xterm.js；bash\|sh 选择、root 开关、窗口自适应、SSE 推流 | Docker 管理 → 容器 → 终端 |
+| 容器资源监控 | 原始 stats 字段解析 + 4 张 SVG 实时图表，2 秒轮询 | Docker 管理 → 容器 → 资源 |
+| AI 服务 | OpenAI 兼容网关 + 宿主机 / WSL 本地 CLI + 代理；模型目录与可用模型拉取 | AI 模型配置 |
+| AI 会话 | DeepSeek Harness 驱动，两页并存（AI 运维 / AI 会话）、结构化事件通道、按服务分组选模型 | AI 会话 |
 | AI 管理服务器 | 只读工具 + 可选写授权的运维 Agent | AI 运维 |
+| 账号与权限 | 账号体系、对象级协作者（owner / 可写 / read）、admin 全局写护栏、2FA、ADMIN_TOKEN 机器通道 | 用户管理 / 环境配置 |
+| 环境适配 | 环境档案自动推导（container-lite 等）、体检 / 自动处置 / 策略保存 / 处置日志 | 环境 |
+| 代理治理 | 四级优先级（全局 / 分组 / 规则 / 单项覆盖）、SSRF 属地分级、socks5 示例 | 代理 |
+| Windows 分发 | 单文件 exe（SEA）、组件包 / 绿色包、管理员提权、WinFsp 静默安装、离线安装集成服务 | 见 §17–18、§67 |
+
+### 1.1.1 当前版本状态（v0.4.30）
+
+- 代码已部署 `10.0.0.246` 并实测：health `0.4.28/normal`、环境体检 `8 正常 / 0 提醒 / 0 异常`。
+- 仓库版本号仍标记 `0.4.28`（`platform/package.json`）；v0.4.29 / v0.4.30 的功能改动**尚未发版**，详见 `release-notes.md`。
+- 前端静态资源缓存戳 `20261124q`；`npm run check`、`npm run typecheck`（基线 78）、`node scripts/check-frontend.js` 全过。
+- 官方应用模板位于 `platform/appstore/`（319 个模板 `.env` 属样例配置，必须随仓库入库；`.gitignore` 已加白名单）。
 
 ### 1.2 架构示意
 
@@ -3534,3 +3559,94 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 
 - 与 §65/§66 一起随 v0.4.28 发版；2026-11-24 已部署 246（Linux 端 WinFsp 正确降级为 `mode:container`）；缓存戳 `20261124b`。
 - Windows 提权与 WinFsp 自动安装的最终效果需在 CI 出包后、在干净 Windows 机上双击 exe 复验 UAC 弹窗与静默安装（本机为开发态、且有历史 WinFsp 安装记录，无法完整复验首装）。
+
+
+## §68 Docker 应用商店（移植宝塔 aaPanel/appstore）
+
+承接 §22「Docker 管理」六分区：本版新增第七个分区「应用商店」，全量移植宝塔官方开源应用商店（[aaPanel/appstore](https://github.com/aaPanel/appstore)）的 320 个应用模板（314 个有效）与处理方案，用户可在面板内浏览模板、筛选搜索、填参生成可直接部署的 compose / .env；镜像加速默认按宝塔方式（加速 URL → 目标机 daemon.json）。
+
+### 68.1 来源与移植口径
+
+- 分享任务（WorkBuddy `bt_docker`）给出方案与原型：宝塔应用商店本质是 docker-compose 模板库，每个应用为 `app.json`（元数据）+ 图标 + `<版本目录>/docker-compose.yml` + `<版本目录>/.env`；官方数据完全开源在 GitHub（[aaPanel/appstore](https://github.com/aaPanel/appstore)）。原型是独立 Express 服务 + Python 解析脚本 + 单页前端，但「一键部署」是空壳（仅 console.log + toast）。
+- 本版把原型**融入平台**而非并列运行：复用其数据格式，接入平台的状态、权限、前端标签体系，并补齐原型缺失的「参数 → .env 合并 → 生成部署文件」闭环。
+- **全量同步**：官方 `apps/` 目录有 320 个应用。受限网络下 `git clone` / codeload tarball 会超时，故新增 `scripts/sync-appstore.js`——通过 GitHub API 一次取完整 git tree（9770 条目），再用 raw 端点低并发（4）+ 重试（4 次）+ keepAlive 批量下载需用的 app.json / 版本目录 compose+.env / 应用根图标（1272 文件、6.3MB）。支持 `--app` / `--limit` / `--no-icon` / `--dry-run`，已存在且大小一致则跳过（可断点续传）。以后要更新官方数据，重跑 `node scripts/sync-appstore.js` 即可。
+
+### 68.2 实现要点
+
+- **模板数据**：从官方全量同步 320 个应用目录，其中 **314 个有效**（含 app.json + 至少一个含 docker-compose.yml 的版本目录 + 图标）、5 个 GPU 变体目录无 app.json（配套资源，解析时跳过）、btpanel 无 compose（面板自身，跳过）。官方真实目录结构是 `apps/<appname>/app.json` + `ico-dkapp_<appname>.png` + `<appname>/docker-compose.yml` + `<appname>/.env`——**版本目录名 = appname**（或 lite/latest 等特例），而 `appversion`（`m_version` + `s_version`）描述的是镜像 tag、不是目录名。放在 `platform/appstore/apps/`，随源码部署（避开 remote.js 排除的 data/workspace/dist）；Windows 端另经 build.mjs 同步到 `dist/appstore/` + SEA 内嵌随 exe/绿色包分发（见 §68.4）。12 个官方分类（apptags.json）：建站/数据库/存储/AI/实用工具/NAS/中间件/DevOps/多媒体/邮件/系统/MCP。
+- **`platform/src/dockerApps.js`**：Node 版解析。`discoverVersionDirs()` 按「含 docker-compose.yml 的子目录」发现真实版本（而非把 appversion 当目录名，否则官方应用 compose 全空）；`prepare()` 把表单参数合并进 `.env`——官方 `field.attr` 是小写（如 `mysql_port`）而 `.env` 键是大写（`MYSQL_PORT`），建立大小写映射后合并，只在 .env 值为空/占位符时用 field.default 填充；只覆盖已声明变量防注入。目录项白名单正则 + 拒绝符号链接；图标接口支持 png/jpg/svg、限定 apps 子目录、缺失回 204 避免 SPA 误接管。
+- **镜像加速器双模式（对齐宝塔）**：
+  - **宝塔方式（默认）**：面板配置一个「加速 URL」（默认 `https://docker.1ms.run`，即宝塔 Docker 设置的「修改加速 URL」），平台生成 `/etc/docker/daemon.json` 的 `registry-mirrors` 片段 + 配置命令供目标机应用；**compose 保持官方镜像名不变**。存 `state().appStore.accelerator`，也支持 `.env` 的 `DP_DOCKER_ACCELERATE_URL`。
+  - **改写 compose（可选，旧行为）**：把 docker.io 官方镜像替换为镜像源前缀（默认 `registry.cn-hangzhou.aliyuncs.com`），存 `state().appStore.mirror` 或 `.env` 的 `REGISTRY_MIRROR`。
+  - 两种模式并存，默认宝塔；切换即时生效（compose 重新生成）。旧接口 `config/mirror` 保留兼容（`setMirror` 会切到 compose 模式）。
+- **路由**（server.js，`/api/docker/apps/*`）：`GET status|types|list|:name|:name/compose|:name/icon/:file|config/mirror|config/accelerator|config/daemon-json`、`POST :name/prepare|reload`、`PUT config/mirror|config/accelerator`。注意静态子路径必须两段（`config/*`），单段（如 `/daemon-json`）会被 `/:name` 抢先匹配返回 404（已实测踩坑并修复）。图标必须挂在 `/api/` 前缀下——mini.js 分发层对非 `/api/` 路径一律走静态文件（会回退 index.html）。权限沿用 `/^\/api\/docker\//` 全局写护栏（写操作仅管理员），特权项再显式 `requireAdmin`。
+- **前端**：Docker 管理「应用商店」子页（`view-docker-apps`），类宝塔布局——左侧 12 类分类栏 + 搜索/重载/镜像加速设置工具条 + 应用卡片网格 + 分页（每页 60，314 应用分 6 页）；详情弹窗含描述/版本/参数表单/compose 与 .env 预览；「镜像加速设置」弹窗支持模式切换、加速 URL、镜像源、daemon.json 片段预览与一键复制。**参数表单按宝塔创建弹窗对齐**：三列布局（左标签 / 中控件 / 右逐项说明），说明取官方 `field.suffix`（1364 处），尾部留空的动态上限（如「最大可用核心数为: 」）补「取决于目标主机实际配置」；按 `field.type` 渲染 checkbox / textarea / number / password / text，`default` 为 `0`/`false` 时不再被吞。官方 `allow_access` 复选框不在 `.env` 中，`prepare()` 将其映射为 `HOST_IP=0.0.0.0|127.0.0.1`（外部访问开关真正生效）。**平台不在自身执行 compose**（沿用 §22 产品约束），复制后到目标机 `docker compose up -d`。缓存戳 `20261124e`。
+
+### 68.3 接口与实测（本机 + 246，2026-11-24）
+
+| 接口 | 实测结果 |
+|---|---|
+| `GET /api/docker/apps/status` | 246 返回 `count=314`，`accelerator.mode=baota`、`accelerateUrl=https://docker.1ms.run` |
+| `GET /api/docker/apps/types` | 13 个分类（含 1 个遗留 Web服务器），官方 12 类齐全 |
+| `GET /api/docker/apps?page=1&pageSize=5` | `total=314`，分页/排序正常；`?search=alist`→1 |
+| `GET /api/docker/apps/:name/compose` | alist 版本目录=alist、镜像 `xhofe/alist:v${VERSION}`（宝塔原样，未改）；mysql 版本目录=mysql |
+| `POST /api/docker/apps/:name/prepare` | mysql 传 `mysql_port=3307`（小写 attr）→ .env 含 `MYSQL_PORT=3307`；alist 传 `alist_web_port=15245` 命中 |
+| `GET /api/docker/apps/config/daemon-json` | 返回 `/etc/docker/daemon.json` 的 `registry-mirrors=["https://docker.1ms.run"]` + 3 条配置命令 |
+| `PUT /api/docker/apps/config/accelerator` | 切 compose 模式 → alist 镜像变 `ccr.ccs.tencentyun.com/xhofe/alist`；切回宝塔 → 官方镜像恢复 |
+| 安全 | 未登录写接口 HTTP 401；图标越界路径 HTTP 400/204 |
+
+- 246 部署实测 health 0.4.28/normal、体检 8/0/0、缓存戳 `20261124e`。`npm run check` 全过、`npm run typecheck` 未超基线（78=基线）、前端自检全过（页面数 35，新增应用数量/加速器双模式/官方格式解析/配置说明/外部访问映射 5 条护栏）。
+- **配置说明实测**（nginxpulse，对齐宝塔创建弹窗截图）：10 个字段全部带官方 suffix 说明；checkbox 默认选中、textarea 多行、`default=0` 未丢；`prepare()` 传 `allow_access=false` → `HOST_IP=127.0.0.1`、`true` → `0.0.0.0`，`WEB_HTTP_PORT=8089` 合并正确。
+- **踩坑**：① 官方版本目录名≠appversion，初版按 appversion 定位导致 compose 全空，改为发现真实目录；② 官方 field.attr 小写 vs .env 键大写，初版 prepare 参数合并不生效，加大小写映射；③ `/api/docker/apps/daemon-json` 单段被 `/:name` 抢先匹配 404，改挂 `config/daemon-json`；④ 部署覆盖式解压不删远端多余目录，线上一度残留一个已删的 nginx，手动清理后与本地一致（314）；⑤ 官方 `allow_access` 复选框不在 `.env` 中，宝塔据此设置 `HOST_IP`，不映射则勾选无效；⑥ 表单默认值用 `|| ''` 兜底会把 `0` 吞掉，改为显式 nullish 判断。
+
+### 68.4 Windows 端分发链修复（v0.4.29，本轮补充）
+
+- **问题**：`dockerApps.js` 从 `appRoot/appstore/apps` 读模板。源码直跑与 246 部署的 `appRoot` 指向 `platform/`（模板在源码里，正常）；但单文件 exe 与绿色包的 `appRoot` 指向 `dist/`（launcher 注入 `DP_ROOT=DIST`），而 build.mjs 只复制 `public/`、两个打包脚本只带 `dist/ + scripts + windows`——`appstore/` 从未进入桌面分发路径，Windows 端应用商店会是空壳。
+- **修复**（全链路，缺一即回归）：
+  - `build.mjs`：`copyTree()` 抽出公共复制逻辑，`syncAppstore()` 把 `platform/appstore/` 同步到 `dist/appstore/`；`tarGzDir()` 泛化 tar 打包，`appstore.tar.gz` 作为 SEA asset 内嵌 exe；`release.json` 新增 `appstore` 文件清单（public 12 + appstore 全量）；`--bundle-only` 也同步模板。
+  - `launcher.js`：新增 `SEA_APPSTORE_ASSET` 与 `ensureAppstore()`，首启从内嵌 asset 释放到 `dist/appstore/apps`；独立于 `public/index.html` 的存在性判断（老实例升级也能补齐），已存在则不覆盖热更新；`readRelease()` 默认值补 `appstore: []`。
+  - `windows/pack-dist.ps1`（组件包）与 `windows/pack-release.ps1`（绿色包/全量/轻量）：均要求 `dist/appstore` 存在并随包复制。
+  - `scripts/check-frontend.js` 新增第 3 条应用商店护栏，锁死上述四段接线；`platform/package.json` 的 `check` 清单补入 `src/dockerApps.js` 语法检查（此前遗漏）。
+- **实测**：`npm run build` 真实产物——appstore 全量模板（8 应用时 24 文件，全量同步后 1272 文件）同步到 `dist/`、`appstore.tar.gz` 内嵌、`release.json` 记录完整 appstore 清单、管理员清单注入成功；前端自检与 `npm run check` 全过、类型检查 78=基线。246 走整仓 tar 打包本就包含模板，不受影响。
+
+### 68.5 当前状态
+
+- 全量 314 个官方应用 + 加速器双模式已落地本地仓库并**部署 246 实测通过**（count=314、13 分类、分页/搜索、compose/prepare、daemon.json、双模式切换全部正常）；中文缓存戳 `20261124d`。
+- **尚未提交推送 / 发版**，版本仍 0.4.28，预期随 v0.4.29 发布。原型独立项目留在 `C:/Users/n/WorkBuddy/2026-11-18-11-13-40/docker-appstore/`（分享任务工作区），平台内实现为 `platform/src/dockerApps.js` + `platform/appstore/apps/` + `scripts/sync-appstore.js`，二者互不依赖。
+
+## §69 Git 仓库弹窗化与容器交互式终端（v0.4.30）
+
+### 69.1 Git 仓库：文件管理 / 克隆到工作区弹窗化
+
+- **动机**：仓库列表的「文件管理」「克隆到工作区」原先分别 `newPane` 开标签 / `switchView('repo-clone')` 跳页，用户要求统一为弹窗，且「终端」断开时返回原仓库列表。
+- **克隆弹窗**：`#repo-clone-modal`（`index.html`，位于 `#dk-modal` 之后、`#content` 之外）。`clone-form` 整块静态搬进 `#repo-clone-modal-slot`——元素仍在 DOM，现有 `$('#clone-form').addEventListener('submit')`、`syncCloneAuthFields()`、`#clone-auth-mode`、`loadRepos()` 填充 `#clone-source` 等绑定全部无需改动。`repo-clone` 独立页保留「打开克隆弹窗」按钮 + 上传压缩包导入（后者不适合弹窗，保留原页）。
+- **文件管理弹窗**：`#repo-files-modal` 内嵌轻量浏览器，不复用 `openFilesTab`（它依赖 tab 系统 / 编辑器标签 / pathbar 绑定，搬进弹窗风险大）。改为直接调 `repoHostContext()` 定位宿主机 + 仓库目录，用 `/servers/:id/files` 渲染表格：`repoModalState.files` 存 ctx/path/seq，`loadRepoFs()` 带请求序号防晚到覆盖，目录点击进入、上一级 / 刷新，Esc / 遮罩 / 关闭按钮关闭并 `switchView('repos')`。
+- **触发点**：`renderRepos()` 里 `[data-clone-repo]` → `fillCloneForm()` + `openRepoCloneModal()`；外部 Git 源列表弹窗里的「填入克隆表单」先 `closeAsModal('gitsrc-repos-card')` 再开克隆弹窗，避免两层遮罩。克隆成功 / 冲突提示跳转 / 关闭都回仓库列表。
+- **终端**：`openRepoTerminal()` 仍是标签页（xterm 需要完整标签页布局），但 `onClose: () => switchView('repos')` 保证断开返回仓库列表。
+
+### 69.2 Docker exec PTY 流式接口
+
+- **新增模块** `platform/src/dockerExecTerm.js`，与 `remoteOps.js` 的 SSH Web 终端同构：SSE 单向推送输出（每帧 base64）、POST 送键盘输入 / 窗口尺寸 / 关闭，不引入 WebSocket。
+- **本机（target=local）**：`dockerApi.execCreateInteractive()` 建 `Tty=true + AttachStdin` 的 exec（Cmd 为 `bash|sh`，`root:true` 时带 `User: 'root'`）；`dockerApi.execAttach()` 用 `Connection: Upgrade` + `Upgrade: tcp` 让 Node http 客户端触发 `upgrade` 事件拿双向裸 socket（Docker daemon 返回 101 UPGRADED）。`Tty=true` 时 socket 上是原始字节、无 8 字节复用帧头，可直接喂 xterm。对未升级的 200 响应做降级（`res` 作输出流、`res.socket` 仍可写），避免挂死。`execResize()` 调 `/exec/{id}/resize?w=&h=`。
+- **远端（target=server:<id>）**：ssh2 带 pty 执行 `docker exec -it [-u root] <id> <shell>`，容器标识过 `SAFE_ID` 白名单 + `remoteDocker.shq()` 单引号转义；`stream.setWindow()` 同步窗口。
+- **会话治理**：`sessions` Map 按 sid 存 `{ ownerId, subscribers, pending, channel, conn, execId, cols, rows, timer }`；`canUse()` 校验 owner（管理员 / cli / off 例外），`broadcast()` 无订阅者时缓存最近 400 帧（SSE 连上后补发，不丢首提示符）；15 分钟空闲且无订阅者回收；关闭时销毁 socket / stream / SSH 连接并推送 `event: closed`。
+- **6 个路由**（`server.js`，放在 `/containers/:id/exec` 之后、应用商店 `/:name` 路由之前）：`POST terminal/open`、`GET terminal/stream`、`POST terminal/input|resize|close`、`GET terminals`。`/open` 复用 `dockerPanel.assertWritable()` 做容器存在性 + 非平台容器二次确认，并写审计日志；写接口命中 `/^\/api\/docker\//` 全局护栏仅管理员，SSE 订阅是 GET 但 `attachStream` 二次校验 owner。
+
+### 69.3 前端 xterm 交互式终端
+
+- `#dk-panel-term` 从「一次性命令输入 + `<pre>` 输出」换成 `#dk-term-xterm` 容器 + 工具栏：shell 下拉（bash|sh）、root 权限复选框、连接 / 断开 / 清屏、状态 chip。
+- `dkTermConnect()` 先 `open` 拿 sid，再建 `EventSource` 订阅 `terminal/stream?sid=...`（`streamToken()` 带令牌），`onmessage` 把 base64 解成 `Uint8Array` 喂 `term.write()`；`onData` 把键盘输入 POST 到 `terminal/input`；`ResizeObserver` + `FitAddon` 同步列宽到 `terminal/resize`。
+- 单例 `dkTerm` 存 `{ sid, term, fit, source, resizeObserver }`；`closeDkModal()` / 切换容器时先 `dkTermDisconnect()` 断开旧会话，避免输入串容器；`event: closed` 时主动 `source.close()` 防止浏览器 3 秒重连刷屏。
+
+### 69.4 验证与状态
+
+- **246 端到端实测**（平台自建容器 `nginxpulse-nginxpulse-1`）：`open → input("echo PTY_OK_12345\r") → SSE` 还原真实交互式 shell：`/app # ` root 提示符、命令回显与执行结果、ANSI 控制码 `\x1b[6n` / `\x1b[J`；bash / 非 root 模式、resize(120×30)、close 均正常。安全边界：非平台容器缺 `confirm` → 400、无效 sid 注入 → 403、无 token → 401、会话列表与回收正常，测试会话全部清理。
+- 缓存戳 `20261124p`；`npm run check`（已纳入 `dockerExecTerm.js`）全过、`npm run typecheck` 78 = 基线（未超）、`node scripts/check-frontend.js` 全过（新增两条护栏：Git 弹窗化 + PTY 全链路）。
+- health `0.4.28/normal`、体检 8/0/0。**本轮与 v0.4.29 一样：未提交 / 未推送 / 未发版**，版本仍 0.4.28。
+
+### 69.5 修复：容器终端「连接」按钮点击无响应（用户截图反馈）
+
+- **症状**：Docker 管理 → 容器弹窗 → 终端标签页 → 点击「连接」毫无反应，状态 chip 一直停在「未连接」。
+- **根因**：`app.js` 弹窗事件委托（约 6823 行）里，「连接」「断开」两个按钮的判断写成了 `e.id === 'dk-term-connect'` / `'dk-term-disconnect'`——事件对象 `e` 没有 `id` 属性，恒为 `undefined`，因此 `dkTermConnect()` 永远不会被调用。同一段的「清屏」用的是正确写法 `e.target.id === 'dk-term-clear'`，所以只有连接/断开失效。后端 PTY 接口本身正常（69.4 端到端已验证），这是纯前端事件绑定缺陷。
+- **修复**：两行统一改为 `e.target.id === ...`；`scripts/check-frontend.js` 新增回归护栏（同时断言正确写法存在、错误写法 `e.id` 不存在）；缓存戳 `20261124p → 20261124q` 强制刷新浏览器缓存。
+- **复验**：246 重新部署后，`grep` 确认线上 `app.js` 已含 `e.target.id === 'dk-term-connect'` 且无残留 `e.id === 'dk-term-connect'`，`index.html` 缓存戳 `20261124q`；PTY 端到端复测还原真实 shell（`echo TERM_BTN_FIX_OK` 回显成功）、resize / close 正常，测试会话已清理。`npm run check`、`npm run typecheck`（78 = 基线）、`node scripts/check-frontend.js` 全过。

@@ -1,0 +1,196 @@
+{
+  "appid": 297,
+  "appname": "nginxpulse",
+  "apptitle": "NginxPulse",
+  "apptype": "DevOps",
+  "appTypeCN": "DevOps",
+  "appversion": [
+    {
+      "m_version": "v1",
+      "s_version": [
+        "6.15"
+      ]
+    }
+  ],
+  "appdesc": "轻量级 Nginx 访问日志分析与可视化面板，提供实时统计、PV 过滤、IP 归属地与客户端解析。",
+  "appstatus": 1,
+  "icon": "",
+  "sort": 0,
+  "home": "https://nginx-pulse.kaisir.cn/",
+  "help": "https://nginx-pulse-docs.kaisir.cn/",
+  "cpu": 0,
+  "mem": 0,
+  "disk": 10240,
+  "updateat": 1773820687,
+  "installed": false,
+  "reuse": true,
+  "depend": null,
+  "field": [
+    {
+      "attr": "domain",
+      "name": "域名",
+      "type": "textarea",
+      "default": "",
+      "suffix": "浏览器访问的域名,非必填",
+      "unit": ""
+    },
+    {
+      "attr": "allow_access",
+      "name": "允许外部访问",
+      "type": "checkbox",
+      "default": true,
+      "suffix": "允许直接通过主机IP+端口访问，如果设置了域名建议取消勾选",
+      "unit": ""
+    },
+    {
+      "attr": "web_http_port",
+      "name": "Web 端口",
+      "type": "number",
+      "default": 8088,
+      "suffix": "NginxPulse Web UI 访问端口",
+      "unit": ""
+    },
+    {
+      "attr": "log_path",
+      "name": "日志目录",
+      "type": "text",
+      "default": "/var/log/nginx",
+      "suffix": "宿主机 Nginx 日志目录，会以只读方式挂载到容器",
+      "unit": ""
+    },
+    {
+      "attr": "puid",
+      "name": "PUID",
+      "type": "number",
+      "default": 1000,
+      "suffix": "容器内应用用户 UID，需与宿主机目录权限匹配",
+      "unit": ""
+    },
+    {
+      "attr": "pgid",
+      "name": "PGID",
+      "type": "number",
+      "default": 1000,
+      "suffix": "容器内应用用户 GID，需与宿主机目录权限匹配",
+      "unit": ""
+    },
+    {
+      "attr": "tz",
+      "name": "时区",
+      "type": "text",
+      "default": "Asia/Shanghai",
+      "suffix": "建议与宿主机时区保持一致",
+      "unit": ""
+    },
+    {
+      "attr": "db_dsn",
+      "name": "外置数据库 DSN",
+      "type": "text",
+      "default": "",
+      "suffix": "可选，填写后将禁用内置 PostgreSQL",
+      "unit": ""
+    },
+    {
+      "attr": "cpus",
+      "name": "CPU 核心数限制",
+      "type": "number",
+      "default": 0,
+      "suffix": "0 为不限制,最大可用核心数为: ",
+      "unit": ""
+    },
+    {
+      "attr": "memory_limit",
+      "name": "内存限制",
+      "type": "number",
+      "default": 0,
+      "suffix": "0 为不限制,最大可用内存为: ",
+      "unit": ""
+    }
+  ],
+  "env": [
+    {
+      "key": "version",
+      "type": "string",
+      "default": "v1.6.15",
+      "desc": "镜像版本号"
+    },
+    {
+      "key": "web_http_port",
+      "type": "port",
+      "default": 8088,
+      "desc": "Web UI 访问端口"
+    },
+    {
+      "key": "log_path",
+      "type": "string",
+      "default": "/var/log/nginx",
+      "desc": "宿主机 Nginx 日志目录"
+    },
+    {
+      "key": "puid",
+      "type": "number",
+      "default": 1000,
+      "desc": "容器内应用用户 UID"
+    },
+    {
+      "key": "pgid",
+      "type": "number",
+      "default": 1000,
+      "desc": "容器内应用用户 GID"
+    },
+    {
+      "key": "tz",
+      "type": "string",
+      "default": "Asia/Shanghai",
+      "desc": "容器时区"
+    },
+    {
+      "key": "db_dsn",
+      "type": "string",
+      "default": "",
+      "desc": "外置 PostgreSQL 连接串，留空则使用内置 PostgreSQL"
+    },
+    {
+      "key": "app_path",
+      "type": "path",
+      "default": null,
+      "desc": "应用数据目录"
+    },
+    {
+      "key": "host_ip",
+      "type": "string",
+      "default": null,
+      "desc": "主机 IP"
+    },
+    {
+      "key": "cpus",
+      "type": "number",
+      "default": null,
+      "desc": "CPU 核心数限制"
+    },
+    {
+      "key": "memory_limit",
+      "type": "number",
+      "default": null,
+      "desc": "内存大小限制"
+    }
+  ],
+  "volumes": {
+    "nginxpulse_data": {
+      "type": "path",
+      "desc": "应用数据目录"
+    },
+    "pgdata": {
+      "type": "path",
+      "desc": "内置 PostgreSQL 数据目录"
+    },
+    "configs": {
+      "type": "path",
+      "desc": "初始化向导与配置文件目录"
+    },
+    "logs": {
+      "type": "path",
+      "desc": "宿主机 Nginx 日志目录（只读挂载）"
+    }
+  }
+}

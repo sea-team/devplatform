@@ -27,7 +27,9 @@ function splitTarget(target) {
 
 function isOwned(c) {
   const labels = c.Labels || {};
-  return labels[LABEL] === '1' || (c.Names || []).some((n) => /^\/?dp-(ext|build)-/.test(n));
+  return labels[LABEL] === '1'
+    || labels.createdBy === 'bt_apps'
+    || (c.Names || []).some((n) => /^\/?dp-(ext|build)-/.test(n));
 }
 
 function normalizeContainer(c) {
@@ -196,22 +198,87 @@ async function containerInspect(target, id) {
 async function containerStats(target, id) {
   const t = splitTarget(target);
   if (t.remote) return { available: false, hint: '远程目标暂不提供实时资源曲线，可用「服务器」页查看整机状态' };
-  try { return { available: true, stats: await docker.containerStats(id) }; }
-  catch (e) { return { available: false, hint: String(e.message || e) }; }
+  try {
+    const raw = await docker.containerStats(id);
+    // 解析 Docker stats 原始字段为平台格式
+    const cpu = raw.cpu_stats || {};
+    const preCpu = raw.precpu_stats || {};
+    const mem = raw.memory_stats || {};
+    const nets = raw.networks || {};
+    const blk = raw.blkio_stats || {};
+
+    // CPU 使用率（%）
+    const cpuDelta = (cpu.cpu_usage && cpu.cpu_usage.total_usage || 0) - (preCpu.cpu_usage && preCpu.cpu_usage.total_usage || 0);
+    const sysDelta = (cpu.system_cpu_usage || 0) - (preCpu.system_cpu_usage || 0);
+    const numCpu = cpu.online_cpus || (cpu.cpu_usage && Array.isArray(cpu.cpu_usage.percpu_usage) ? cpu.cpu_usage.percpu_usage.length : 1) || 1;
+    const cpuPercent = sysDelta > 0 ? (cpuDelta / sysDelta) * numCpu * 100 : 0;
+
+    // 内存（MB）
+    const memUsed = ((mem.usage || 0) - (mem.stats && mem.stats.cache || 0)) / 1024 / 1024;
+    const memCache = (mem.stats && mem.stats.cache || 0) / 1024 / 1024;
+    const memLimit = (mem.limit || 0) / 1024 / 1024;
+
+    // 网络 I/O（KB/s 累计，前端自行差值）
+    let netRx = 0, netTx = 0;
+    for (const iface of Object.values(nets)) { netRx += iface.rx_bytes || 0; netTx += iface.tx_bytes || 0; }
+    const netRxKB = netRx / 1024;
+    const netTxKB = netTx / 1024;
+
+    // 磁盘 I/O（KB 累计）
+    let blkRead = 0, blkWrite = 0;
+    for (const e of (blk.io_service_bytes_recursive || [])) {
+      if (e.op === 'Read' || e.op === 'read') blkRead += e.value || 0;
+      else if (e.op === 'Write' || e.op === 'write') blkWrite += e.value || 0;
+    }
+    const blkReadKB = blkRead / 1024;
+    const blkWriteKB = blkWrite / 1024;
+
+    // PID
+    const pids = (raw.pids_stats && raw.pids_stats.current) || 0;
+    const ts = raw.read || new Date().toISOString();
+
+    return {
+      available: true,
+      cpuPercent: parseFloat(cpuPercent.toFixed(3)),
+      numCpu,
+      memUsedMB: parseFloat(memUsed.toFixed(1)),
+      memCacheMB: parseFloat(memCache.toFixed(1)),
+      memLimitMB: parseFloat(memLimit.toFixed(0)),
+      netRxKB: parseFloat(netRxKB.toFixed(1)),
+      netTxKB: parseFloat(netTxKB.toFixed(1)),
+      blkReadKB: parseFloat(blkReadKB.toFixed(1)),
+      blkWriteKB: parseFloat(blkWriteKB.toFixed(1)),
+      pids,
+      ts,
+    };
+  } catch (e) { return { available: false, hint: String(e.message || e) }; }
 }
 
 async function containerExec(target, id, command, confirm = false) {
   const t = splitTarget(target);
   const { owned, name } = await assertWritable(t, id, confirm);
-  // 只提供固定白名单命令，不接受任意 shell 字符串，避免把面板变成远程命令执行入口。
+  // 固定只读诊断命令（白名单）
   const PRESETS = {
     'ps': ['ps', 'aux'], 'env': ['env'], 'top': ['top', '-b', '-n', '1'],
     'df': ['df', '-h'], 'ip': ['ip', 'addr'], 'shell-version': ['sh', '-c', 'echo $0; uname -a'],
   };
-  if (!PRESETS[command]) throw new Error('只允许执行内置只读诊断命令');
-  audit(`container:exec:${command}`, t.label, name || id, confirm || owned);
-  if (t.remote) return remoteDocker.exec(t.serverId, name || id, PRESETS[command], 30000);
-  return docker.execContainerTimed(id, PRESETS[command], 30000);
+  let cmdArgs;
+  if (PRESETS[command]) {
+    // 白名单预设：直接使用
+    cmdArgs = PRESETS[command];
+  } else {
+    // 任意 shell 命令：通过 sh -c 执行，须 confirm=true（由前端二次确认后传入）
+    if (!confirm) throw new Error('执行任意命令需要二次确认（confirm=true）');
+    // 基本安全校验：拒绝过长命令和明显危险操作（rm -rf / 等）
+    const cmd = String(command || '').trim();
+    if (!cmd) throw new Error('命令不能为空');
+    if (cmd.length > 1000) throw new Error('命令过长');
+    if (/rm\s+-rf\s+\/(?!tmp|data|app)/.test(cmd)) throw new Error('拒绝高危命令，请通过 SSH 终端操作');
+    cmdArgs = ['sh', '-c', cmd];
+  }
+  audit(`container:exec:${String(command).slice(0, 80)}`, t.label, name || id, confirm || owned);
+  if (t.remote) return remoteDocker.exec(t.serverId, name || id, cmdArgs, 30000);
+  return docker.execContainerTimed(id, cmdArgs, 30000);
 }
 
 /* ------------------------------ 镜像 ------------------------------ */
@@ -354,7 +421,7 @@ function auditList() {
 }
 
 module.exports = {
-  overview, normalizeContainer, isOwned, splitTarget,
+  overview, normalizeContainer, isOwned, splitTarget, assertWritable, audit,
   containerAction, containerRemove, containerLogs, containerInspect, containerStats, containerExec,
   pullImage, removeImage, loadImage, exportImage,
   removeVolume, createVolume, removeNetwork, createNetwork,

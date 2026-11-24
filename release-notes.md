@@ -375,3 +375,23 @@ v0.4.28 · 2026-11-24 · rclone 存储层 + SMB 网关 + Windows 提权与 WinFs
 只跑 START.bat 时三项集成服务显示「未配置 / 离线」是预期行为，不是故障。
 全程不需要 git、Node.js、Docker 或 bash；不再需要单独下载集成服务程序。
 校验：Get-FileHash <文件> -Algorithm SHA256，与 SHA256SUMS.txt 比对。
+
+v0.4.29 · 2026-11-24 · Docker 应用商店全量同步 + 镜像加速对齐宝塔
+  本版新增与修复：
+  - Docker 应用商店全量同步：从官方 aaPanel/appstore 一次性拉取 320 个应用模板（314 个有效：含 app.json + compose + .env + 图标），覆盖 12 个官方分类（建站/数据库/存储/AI/工具/NAS/中间件/DevOps/多媒体/邮件/系统/MCP）。新增 scripts/sync-appstore.js（GitHub API git tree + raw 端点低并发重试，支持断点续传），以后可一条命令更新官方数据。前端改为分类 + 分页（每页 60）展示。
+  - 官方格式适配：修正版本目录定位——官方真实版本目录名 = appname（如 apps/mysql/mysql/），appversion 是镜像 tag 而非目录名，改为按「含 docker-compose.yml 的子目录」发现；修正参数合并——官方 field.attr 小写（mysql_port）与 .env 大写键（MYSQL_PORT）建立大小写映射，占位符用默认值填充。
+  - 镜像加速对齐宝塔（双模式并存，默认宝塔）：宝塔方式配置「加速 URL」（默认 https://docker.1ms.run），平台生成 /etc/docker/daemon.json 的 registry-mirrors 片段 + 配置命令，compose 保持官方镜像名不变；可选「改写 compose」模式（旧行为，默认镜像源 registry.cn-hangzhou.aliyuncs.com）。新增 GET/PUT /api/docker/apps/config/accelerator 与 GET /config/daemon-json，旧 config/mirror 接口保留兼容。前端「镜像加速设置」弹窗支持模式切换、加速 URL、镜像源、daemon.json 预览与一键复制。
+  - Windows 端分发链修复：appstore 模板此前未进入 exe/绿色包分发路径（appRoot 指向 dist/），Windows 端应用商店会为空。build.mjs 同步模板到 dist/ + appstore.tar.gz 作 SEA asset 内嵌、launcher.js 首启释放、两个 PowerShell 打包脚本随包复制，check-frontend.js 护栏锁死四段。
+  - 部署脚本 .env 误杀修复：remote.js 此前按纯文件名排除所有 .env，把 appstore 的模板 .env 也当凭据排除，导致线上 prepare 生成空 .env；改为只排除仓库根凭据 .env，子目录模板 .env 放行，.env.bak.* 仍全层级排除。
+  - 一键部署与文件下载：生成部署文件后新增「下载 compose」「下载 .env」（浏览器下载到本地）和「部署到服务器」按钮；部署面板选择已配置服务器 + 目标目录，平台 SSH 上传 docker-compose.yml 和 .env 后执行 docker compose up -d；自动兼容 V1（docker-compose）和 V2（docker compose plugin）；日志逐步展示 mkdir / upload / compose_up 步骤；246 实测通过（文件正确上传、容器镜像拉取启动）。
+  - 配置说明对齐宝塔：参数表单改为三列布局（左标签 / 中控件 / 右逐项说明），说明取官方 field.suffix（1364 处），尾部留空的动态上限补「取决于目标主机实际配置」；按 field.type 渲染 checkbox / textarea / number / password / text，default 为 0/false 时不再被吞。官方 allow_access 复选框不在 .env 中，prepare() 新增映射到 HOST_IP=0.0.0.0|127.0.0.1，外部访问开关真正生效。
+  - 验证：所有功能 246 线上实测通过，缓存戳 20261124f，npm run check 全过、类型检查 78=基线、前端自检全过。
+
+v0.4.30 · 2026-11-24 · Git 仓库弹窗化 + Docker exec PTY 交互式终端（未提交 / 未发版）
+  本版新增与修复：
+  - Git 仓库弹窗化：「文件管理」「克隆到工作区」不再新建标签页 / 跳页，改为弹窗。clone-form 静态搬入 #repo-clone-modal（现有 JS 绑定不受影响），从仓库列表或外部 Git 源列表点「克隆到工作区 / 填入克隆表单」自动带入地址并弹出；克隆成功 / 关闭 / Esc 都回到仓库列表。文件管理用 #repo-files-modal 内嵌轻量浏览器（复用 /servers/:id/files，路径条 + 目录进入 + 上一级 / 刷新），不依赖 tab 系统。「终端」断开时返回仓库列表页（onClose 回调）。
+  - Docker exec PTY 流式接口：新增 platform/src/dockerExecTerm.js，与 SSH Web 终端同构（SSE 推送输出 base64 / POST 送输入 / resize / close），不引入 WebSocket。本机走 Docker Engine API 的 connection hijack（execCreateInteractive 建 Tty=true + AttachStdin 的 exec，execAttach 用 Connection: Upgrade 拿双向裸 socket，Tty=true 无复用帧头，字节直接喂 xterm；对未升级的 200 响应做降级处理）；远端 target=server:<id> 走 ssh2 pty 执行 docker exec -it [-u root] <id> <shell>。会话按 ownerId 归属、15 分钟空闲回收，订阅 / 注入 / 尺寸 / 关闭都校验归属；写接口命中 /^\/api\/docker\// 全局护栏仅管理员。新增 6 个路由：terminal/open|stream|input|resize|close|terminals。
+  - 容器终端 xterm 化：#dk-panel-term 从「一次性命令 + <pre> 输出」换成 xterm.js + FitAddon 交互式终端，支持 shell 选择（bash|sh）、root 权限执行复选框、连接 / 断开 / 清屏、窗口 ResizeObserver 自适应同步后端 PTY；关闭弹窗或切换容器自动断开旧会话，避免输入串到别的容器。
+  - 自检与护栏：check-frontend.js 新增两条（Git 弹窗化 + PTY 全链路），package.json 的 npm run check 纳入 dockerExecTerm.js；dockerApi.js / dockerPanel.js 导出补齐。缓存戳 20261124p。
+  - 验证：246 线上实测通过——health 0.4.28/normal、体检 8/0/0；PTY 端到端验证还原真实交互式 shell（/app # root 提示符、echo 命令回显与结果、ANSI 控制码）、bash / 非 root 模式、非平台容器二次确认 400、无效 sid 注入 403、无 token 401、resize / close / 会话回收均正常；测试会话已全部清理。npm run check 全过、类型检查 78=基线（未超）、前端自检全过。
+  - 修复（用户反馈「docker终端连接无响应」）：app.js 全局 click 委托里「连接」「断开」按钮判断误写成 `e.id`（事件对象无此属性，恒为 undefined），导致 dkTermConnect() 永不触发；同一段「清屏」用的是正确的 `e.target.id`。已统一改为 `e.target.id === 'dk-term-connect'` / `'dk-term-disconnect'`，并在 check-frontend.js 加回归护栏（正确写法存在 + 错误写法不存在）。缓存戳 20261124p → 20261124q。246 重新部署并复测：线上文件已含修复，PTY 端到端仍还原真实 shell（echo TERM_BTN_FIX_OK 回显成功），会话已清理。后端 PTY 接口本身无问题，纯前端事件绑定缺陷。

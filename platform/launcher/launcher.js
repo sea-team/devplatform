@@ -24,10 +24,13 @@ const DIST = isSea ? path.dirname(process.execPath) : path.join(REPO_ROOT, 'dist
 const BUNDLE = path.join(DIST, 'bundle.cjs');
 const RELEASE = path.join(DIST, 'release.json');
 const PUBLIC_DIR = path.join(DIST, 'public');
+// v0.4.29：Docker 应用商店模板目录，appRoot 指向 dist/（见 core.js 的 DP_ROOT 注入）。
+const APPSTORE_DIR = path.join(DIST, 'appstore');
 const DATA_DIR = path.join(DIST, 'data');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const BUILD_SCRIPT = path.join(REPO_ROOT, 'build.mjs');
 const SEA_PUBLIC_ASSET = 'public.tar.gz';
+const SEA_APPSTORE_ASSET = 'appstore.tar.gz';
 // 单独从 GitHub Release 下载 exe 时目录里没有任何外置文件，首启从 SEA asset 释放。
 // 仅当目标文件不存在时写入，绝不覆盖热更新过的 bundle / release.json。
 const SEA_FILE_ASSETS = { 'bundle.cjs': BUNDLE, 'release.json': RELEASE };
@@ -78,7 +81,7 @@ function loadDotEnv() {
 
 function readRelease() {
   try { return JSON.parse(fs.readFileSync(RELEASE, 'utf8')); }
-  catch { return { version: '0.0.0', buildTime: null, bundle: null, public: [] }; }
+  catch { return { version: '0.0.0', buildTime: null, bundle: null, public: [], appstore: [] }; }
 }
 
 function copyDir(from, to) {
@@ -119,6 +122,8 @@ function untar(buf, dest) {
 
 // 首次启动时从 exe 内嵌资源释放前端目录；已存在则保留，避免覆盖热更新过的文件。
 function ensurePublic() {
+  // 与 public 独立判断：老实例 public 已存在但尚未释放 appstore 时也能补齐。
+  ensureAppstore();
   if (fs.existsSync(path.join(PUBLIC_DIR, 'index.html'))) return;
   let buf = null;
   if (isSea) {
@@ -130,6 +135,21 @@ function ensurePublic() {
   }
   untar(zlib.gunzipSync(buf), PUBLIC_DIR);
   log('首次启动：已释放前端资源到', PUBLIC_DIR);
+}
+
+// v0.4.29：首次启动时从 exe 内嵌资源释放 Docker 应用商店模板到 dist/appstore。
+// 仅 SEA 模式需要（源码/246 部署直接读 platform/appstore）；已存在则不覆盖热更新。
+function ensureAppstore() {
+  if (!isSea) return;
+  if (fs.existsSync(path.join(APPSTORE_DIR, 'apps'))) return;
+  let buf = null;
+  try { buf = Buffer.from(sea.getAsset(SEA_APPSTORE_ASSET)); } catch { /* 老包无此 asset */ }
+  if (!buf) {
+    console.warn('[launcher] 未找到 appstore 内嵌资源；Docker 应用商店将无内置模板');
+    return;
+  }
+  untar(zlib.gunzipSync(buf), APPSTORE_DIR);
+  log('首次启动：已释放应用商店模板到', APPSTORE_DIR);
 }
 
 // 把内嵌的业务包 / 版本清单 / 默认配置补到 exe 所在目录。

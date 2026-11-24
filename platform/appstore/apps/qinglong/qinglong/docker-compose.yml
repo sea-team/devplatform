@@ -1,0 +1,24 @@
+services:
+  BT_SERVICE_NAME6:
+    image: whyour/qinglong:${VERSION}
+    deploy:
+      resources:
+        limits:
+          cpus: ${CPUS}
+          memory: ${MEMORY_LIMIT}
+    restart: always
+    environment:
+      # 部署路径非必须，以斜杠开头和结尾，比如 /test/
+      QlBaseUrl: '/'
+    ports:
+      - ${HOST_IP}:${QINGLONG_PORT}:5700
+    volumes:
+      - ${APP_PATH}/data:/ql/data
+    labels:
+      createdBy: "bt_apps"
+    networks:
+      - baota_net
+
+networks:
+  baota_net:
+    external: true

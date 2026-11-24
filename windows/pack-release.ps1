@@ -54,6 +54,8 @@ foreach ($f in $required) {
   }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $Dist 'public\index.html'))) { throw "缺少 $Dist\public\index.html" }
+# v0.4.29：应用商店模板随绿色包分发（appRoot 指向 dist/）。
+if (-not (Test-Path -LiteralPath (Join-Path $Dist 'appstore'))) { throw "缺少 $Dist\appstore；请先在含 Node 的机器执行 npm run build" }
 if (-not (Test-Path -LiteralPath $Template)) { throw "缺少发行模板目录 $Template" }
 
 $SvcDir   = if ($ServicesDir) { $ServicesDir } else { Join-Path $WinDir 'bin' }
@@ -113,6 +115,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $Dist $f) -Destination $targetDist -Force
   }
   Copy-Item -LiteralPath (Join-Path $Dist 'public') -Destination (Join-Path $targetDist 'public') -Recurse -Force
+  Copy-Item -LiteralPath (Join-Path $Dist 'appstore') -Destination (Join-Path $targetDist 'appstore') -Recurse -Force
 
   $targetWin = Join-Path $base 'windows'
   New-Item -ItemType Directory -Path $targetWin -Force | Out-Null

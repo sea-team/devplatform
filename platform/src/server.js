@@ -20,6 +20,7 @@ const repoImporter = require('./repoImporter');
 const gitRuntime = require('./gitRuntime');
 const environment = require('./environment');
 const dockerPanel = require('./dockerPanel');
+const dockerExecTerm = require('./dockerExecTerm');
 const backup = require('./backup');
 const extLifecycle = require('./extLifecycle');
 const dbgateSync = require('./dbgateSync');
@@ -42,6 +43,7 @@ const aiNetworkPolicy = require('./aiNetworkPolicy');
 const driveMount = require('./driveMount');
 const rclone = require('./rclone');
 const storageGateway = require('./storageGateway');
+const dockerApps = require('./dockerApps');
 
 // 面板里保存过的 OpenList 连接优先于 .env（不改文件、重启后仍然生效）。
 openlist.applyConfig();
@@ -1964,6 +1966,58 @@ app.post('/api/docker/containers/:id/exec', wrap(async (req, res) => {
     String((req.body && req.body.command) || ''), dockerConfirm(req)));
 }));
 
+/* ---------- v0.4.30 容器交互式终端（xterm + PTY 流式接口） ----------
+ * 与 SSH 终端同构：SSE 推送输出、POST 送输入 / 尺寸。所有写操作（open/input/resize/close）
+ * 命中 /^\/api\/docker\// 全局写护栏，仅管理员可用；SSE 订阅是 GET，读权限可放行，
+ * 但 openSession 已把 ownerId 写入会话，attachStream 再按 owner 校验，普通账号无法订阅他人会话。
+ * 路由放在 /containers/:id/exec 之后、/:name 应用商店路由之前，避免被参数路由抢匹配。 */
+app.post('/api/docker/containers/:id/terminal/open', wrap(async (req, res) => {
+  const id = String(req.params.id || '');
+  if (!id) throw badRequest('缺少容器标识');
+  // 容器存在性 / 非平台容器二次确认：复用面板层的 assertWritable。
+  const { owned, name } = await dockerPanel.assertWritable(
+    dockerPanel.splitTarget(dockerTarget(req)), id, dockerConfirm(req));
+  const body = req.body || {};
+  const shell = body.shell === 'bash' ? 'bash' : 'sh';
+  const session = await dockerExecTerm.openSession({
+    target: dockerTarget(req), containerId: name || id, shell,
+    root: body.root === true || body.root === 'true',
+    cols: Number(body.cols) || 100, rows: Number(body.rows) || 28,
+    user: req.user,
+  });
+  dockerPanel.audit(`container:terminal:open:${shell}${body.root ? ':root' : ''}`,
+    dockerTarget(req), name || id, dockerConfirm(req) || owned);
+  ok(res, session);
+}));
+
+app.get('/api/docker/containers/:id/terminal/stream', (req, res) => {
+  dockerExecTerm.attachStream(String((req.query && req.query.sid) || ''), req, res);
+});
+
+app.post('/api/docker/containers/:id/terminal/input', wrap(async (req, res) => {
+  const body = req.body || {};
+  if (!body.sid) throw badRequest('缺少 sid');
+  if (body.input === undefined) throw badRequest('缺少 input');
+  ok(res, dockerExecTerm.input(String(body.sid), String(body.input), req.user));
+}));
+
+app.post('/api/docker/containers/:id/terminal/resize', wrap(async (req, res) => {
+  const body = req.body || {};
+  if (!body.sid) throw badRequest('缺少 sid');
+  ok(res, await dockerExecTerm.resize(String(body.sid), body.cols, body.rows, req.user));
+}));
+
+app.post('/api/docker/containers/:id/terminal/close', wrap(async (req, res) => {
+  const body = req.body || {};
+  if (!body.sid) throw badRequest('缺少 sid');
+  ok(res, dockerExecTerm.close(String(body.sid), req.user));
+}));
+
+app.get('/api/docker/containers/:id/terminals', (req, res) => ok(res, {
+  items: dockerExecTerm.active(req.user).filter((t) => t.container === req.params.id
+    || t.container === (req.params.id || '').slice(0, 12)),
+}));
+
 app.post('/api/docker/images/pull', wrap(async (req, res) => {
   requireBody(req.body, ['image']);
   ok(res, await dockerPanel.pullImage(dockerTarget(req), String(req.body.image), String(req.body.tag || 'latest')));
@@ -2060,6 +2114,196 @@ app.post('/api/docker/templates', wrap(async (req, res) => {
 app.delete('/api/docker/templates/:id', wrap(async (req, res) => {
   ok(res, dockerPanel.deleteTemplate(req.params.id));
 }));
+
+/* ---------------------------- Docker 应用商店 ---------------------------- */
+// 移植宝塔 aaPanel/appstore 的数据格式与处理：内置应用目录解析 + 镜像源替换 +
+// 参数化部署文件生成。写操作由 permissions 的 /^\/api\/docker\// 全局护栏限定管理员，
+// 特权项（改镜像源 / 重载目录 / 生成部署文件）再显式 requireAdmin 双保险。
+
+app.get('/api/docker/apps/status', (req, res) => ok(res, dockerApps.status()));
+
+app.get('/api/docker/apps', (req, res) => {
+  const q = req.query || {};
+  ok(res, dockerApps.list({
+    type: String(q.type || ''), search: String(q.search || ''),
+    page: q.page, pageSize: q.pageSize,
+  }));
+});
+
+app.get('/api/docker/apps/types', (req, res) => ok(res, dockerApps.types()));
+
+app.get('/api/docker/apps/:name', (req, res) => ok(res, dockerApps.detail(req.params.name)));
+
+app.get('/api/docker/apps/:name/compose', (req, res) => {
+  ok(res, dockerApps.compose(req.params.name, req.query && req.query.version));
+});
+
+// 生成部署文件（表单参数合并进 .env）；平台不直接执行 compose。
+app.post('/api/docker/apps/:name/prepare', wrap(async (req, res) => {
+  requireAdmin(req);
+  const b = req.body || {};
+  ok(res, dockerApps.prepare(req.params.name, String(b.version || ''), b.params || {}));
+}));
+
+app.get('/api/docker/apps/config/mirror', (req, res) => ok(res, { mirror: dockerApps.status().mirror }));
+
+app.put('/api/docker/apps/config/mirror', wrap(async (req, res) => {
+  requireAdmin(req);
+  ok(res, dockerApps.setMirror((req.body || {}).mirror));
+}));
+
+// v0.4.29：加速器配置（宝塔方式 accelerateUrl + daemon.json / compose 换源，二者并存）
+app.get('/api/docker/apps/config/accelerator', (req, res) => {
+  ok(res, { accelerator: dockerApps.accelerator(), daemon: dockerApps.daemonJson(req.query || {}) });
+});
+
+app.put('/api/docker/apps/config/accelerator', wrap(async (req, res) => {
+  requireAdmin(req);
+  ok(res, dockerApps.setAccelerator(req.body || {}));
+}));
+
+// 注意：单段路径（如 /api/docker/apps/daemon-json）会被上面的 /:name 抢先匹配，
+// 因此静态子路径统一挂在 config/ 下（两段），避免与应用名冲突。
+app.get('/api/docker/apps/config/daemon-json', (req, res) => ok(res, dockerApps.daemonJson(req.query || {})));
+
+app.post('/api/docker/apps/reload', wrap(async (req, res) => {
+  requireAdmin(req);
+  ok(res, dockerApps.reload());
+}));
+
+// 一键部署到服务器：SSH 上传 compose + .env 再执行 docker compose up -d。
+// serverId='local' → 平台自身所在宿主机（通过 Docker socket，直接 spawn，无需 SSH）。
+// 权限：写操作，须管理员。
+app.post('/api/docker/apps/:name/deploy', wrap(async (req, res) => {
+  requireAdmin(req);
+  const os = require('os');
+  const b = req.body || {};
+  const serverId = String(b.serverId || 'local');
+  const compose = String(b.compose || '');
+  const env = String(b.env || '');
+  const rawDir = String(b.dir || '').trim();
+  if (!compose) throw new Error('缺少 compose 内容，请先点「生成部署文件」');
+  const isLocal = serverId === 'local';
+
+  // 安全：目标目录必须是绝对路径，拒绝路径穿越字符。
+  const deployDir = rawDir && /^\/[^;|&`$<>]+$/.test(rawDir)
+    ? rawDir : '/data/apps/' + String(req.params.name).replace(/[^a-zA-Z0-9_-]/g, '');
+  const composePath = deployDir + '/docker-compose.yml';
+  const envPath = deployDir + '/.env';
+  const log = [];
+
+  if (isLocal) {
+    // ── 本机路径：直接在平台进程中操作，无需 SSH ──────────────────────────────
+    // 平台容器（node:20-alpine）默认无 Docker CLI；自动安装后可复用 socket。
+    const { spawnSync } = require('child_process');
+    const composePluginPath = '/usr/lib/docker/cli-plugins/docker-compose';
+    // docker-compose 在 alpine 是指向 cli-plugin 的软链接，检测同一路径即可
+    const findDockerBin = () => ['/usr/bin/docker', '/usr/local/bin/docker'].find((p) => {
+      try { return fs.statSync(p).isFile(); } catch { return false; }
+    }) || null;
+    const hasComposePlugin = () => { try { return fs.statSync(composePluginPath).isFile(); } catch { return false; } };
+
+    let dockerBin = findDockerBin();
+    let useV2 = !!(dockerBin && hasComposePlugin());
+    let useV1 = !useV2 && spawnSync('docker-compose', ['--version'], { stdio: 'ignore' }).status === 0;
+
+    if (!useV2 && !useV1) {
+      // alpine 3.x：先 apk update 刷新索引，再装 docker-cli 和 compose plugin
+      log.push({ step: 'install_docker_cli', out: '容器内缺少 Docker CLI，正在安装（apk update + add docker-cli docker-cli-compose）…' });
+      spawnSync('apk', ['update', '-q'], { stdio: 'pipe', timeout: 60000 });
+      const inst = spawnSync('apk', ['add', '--no-cache', 'docker-cli', 'docker-cli-compose'], { stdio: 'pipe', timeout: 120000 });
+      const instOut = (inst.stdout || Buffer.alloc(0)).toString() + (inst.stderr || Buffer.alloc(0)).toString();
+      const instFailed = inst.status !== 0 && inst.status !== null;
+      log.push({ step: 'install_docker_cli', out: instOut.slice(0, 600), err: instFailed ? 'exit ' + inst.status : '' });
+      if (instFailed) {
+        return ok(res, { success: false, dir: deployDir, server: '本机', log,
+          hint: '安装 Docker CLI 失败，请检查容器网络或手动执行 apk add docker-cli docker-cli-compose' });
+      }
+      // 安装后重新检测路径
+      dockerBin = findDockerBin();
+      useV2 = !!(dockerBin && hasComposePlugin());
+      if (!useV2) {
+        // docker-compose 软链接也算 V2（alpine 的实现方式）
+        useV1 = spawnSync('docker-compose', ['--version'], {
+          stdio: 'ignore',
+          env: { ...process.env, PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' },
+        }).status === 0;
+      }
+    }
+    if (!dockerBin) dockerBin = '/usr/bin/docker'; // 兜底绝对路径
+    // 确定 compose 命令：V2 用 docker compose plugin，V1 用独立 docker-compose
+    const composeCmd = useV2 ? [dockerBin, 'compose'] : ['docker-compose'];
+
+    fs.mkdirSync(deployDir, { recursive: true });
+    fs.writeFileSync(composePath, compose, 'utf8');
+    fs.writeFileSync(envPath, env, 'utf8');
+    log.push({ step: 'mkdir+write', out: `compose → ${composePath}  .env → ${envPath}  (${composeCmd.join(' ')})` });
+
+    const upArgs = [...composeCmd.slice(1), '-f', composePath, '--env-file', envPath, 'up', '-d', '--pull', 'always'];
+    const upOut = await new Promise((resolve) => {
+      const chunks = [];
+      const p = spawn(composeCmd[0], upArgs, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        // 确保 Node 进程的 PATH 包含 apk 刚安装的二进制路径
+        env: { ...process.env, PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' },
+      });
+      p.stdout.on('data', (d) => chunks.push(d));
+      p.stderr.on('data', (d) => chunks.push(d));
+      const timer = setTimeout(() => { p.kill(); resolve({ out: Buffer.concat(chunks).toString(), err: 'timeout' }); }, 180000);
+      p.on('close', (code) => { clearTimeout(timer); resolve({ out: Buffer.concat(chunks).toString(), code }); });
+      p.on('error', (e) => { clearTimeout(timer); resolve({ out: '', err: e.message }); });
+    });
+    log.push({ step: 'compose_up', out: upOut.out, err: upOut.err });
+    const failed = (upOut.err && upOut.err !== 'timeout') ? /error|failed|no such/i.test(upOut.err) : upOut.code !== 0;
+    return ok(res, { success: !failed, dir: deployDir, server: '本机', log });
+  }
+
+  // ── 远端 SSH 路径 ────────────────────────────────────────────────────────────
+  const { sftpPut, sshExec } = require('./integrations');
+  const tmpId = Date.now().toString(36);
+  const tmpCompose = path.join(os.tmpdir(), `dp-compose-${tmpId}.yml`);
+  const tmpEnv = path.join(os.tmpdir(), `dp-env-${tmpId}`);
+  const server = state().servers.find((s) => s.id === serverId);
+  if (!server) throw new Error('未找到服务器，请先在「服务器」页面添加');
+  try {
+    fs.writeFileSync(tmpCompose, compose, 'utf8');
+    fs.writeFileSync(tmpEnv, env, 'utf8');
+    const mkdir = await sshExec(server, `mkdir -p ${deployDir}`, 20000);
+    log.push({ step: 'mkdir', out: mkdir.stdout, err: mkdir.stderr });
+    await sftpPut(server, tmpCompose, composePath);
+    await sftpPut(server, tmpEnv, envPath);
+    log.push({ step: 'upload', out: `compose → ${composePath}  .env → ${envPath}` });
+    const upCmd = [
+      `if docker compose version >/dev/null 2>&1;`,
+      `then docker compose -f ${composePath} --env-file ${envPath} up -d --pull always 2>&1;`,
+      `else docker-compose -f ${composePath} --env-file ${envPath} up -d 2>&1;`,
+      `fi`,
+    ].join(' ');
+    const up = await sshExec(server, upCmd, 180000);
+    log.push({ step: 'compose_up', out: up.stdout, err: up.stderr });
+    const failed = up.stderr && /error|failed|no such/i.test(up.stderr);
+    ok(res, { success: !failed, dir: deployDir, server: server.name || server.host, log });
+  } finally {
+    try { fs.unlinkSync(tmpCompose); } catch { /* noop */ }
+    try { fs.unlinkSync(tmpEnv); } catch { /* noop */ }
+  }
+}));
+
+// 应用图标（内置模板自带的 png）。严格白名单，只允许读 apps/<name>/<icon> 下的图片。
+// 必须挂在 /api/ 前缀下——mini.js 分发层对非 /api/ 路径一律走静态文件（会回退 index.html）。
+app.get('/api/docker/apps/:name/icon/:file', (req, res) => {
+  const { name, file } = req.params;
+  if (!/^[A-Za-z0-9._-]+$/.test(name) || !/^[\w.-]+\.(png|jpe?g|svg)$/i.test(file)) return res.status(400).end();
+  const iconPath = path.join(dockerApps.APPS_DIR, name, file);
+  if (!iconPath.startsWith(dockerApps.APPS_DIR + path.sep)) return res.status(400).end();
+  try {
+    if (!fs.statSync(iconPath).isFile()) return res.status(204).end();
+  } catch { return res.status(204).end(); }
+  const ext = path.extname(file).toLowerCase();
+  res.setHeader('content-type', ext === '.svg' ? 'image/svg+xml'
+    : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'image/png');
+  res.end(fs.readFileSync(iconPath));
+});
 
 /* -------------------------------- 静态界面 ------------------------------- */
 

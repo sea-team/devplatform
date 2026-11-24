@@ -1,0 +1,39 @@
+{
+    "appid": 289,
+    "appname": "safeline",
+    "apptitle": "雷池SafeLine",
+    "apptype": "Tools",
+    "appTypeCN": "实用工具",
+    "appversion": [
+        {"m_version":"latest","s_version":[]}
+    ],
+    "appdesc": "一款足够简单、好用、强大的免费WAF。",
+    "appstatus": 1,
+    "icon": "",
+    "sort": 87,
+    "home": "https://help.waf-ce.chaitin.cn",
+    "help": "https://help.waf-ce.chaitin.cn",
+    "cpu": 0,
+    "mem": 0,
+    "disk": 10240,
+    "updateat": 1765939690,
+    "installed": false,
+    "reuse": true,
+    "depend": null,
+    "field": [
+        {"attr":"allow_access","name":"允许外部访问","type":"checkbox","default":true,"suffix":"允许直接通过主机IP+端口访问，如果您设置了域名请不要勾选这里","unit":""},
+        {"attr":"MGT_PORT","name":"控制台端口","type":"number","default":9443,"suffix":"","unit":""},
+        {"attr":"SUBNET_PREFIX","name":"safline网段","type":"textarea","default":"172.50.222","suffix":"x.x.x格式 无冲突情况不需要修改","unit":""},
+        {"attr":"desc","name":"获取登录密码","type":"textarea","default":"docker exec safeline-mgt resetadmin ","suffix":"安装完成后进入终端执行","unit":""},
+        {"attr":"desc1","name":"安装说明","type":"textarea","default":"安装雷池会占用80 443端口,请确保本机80、443未被使用(nginx默认占用)","suffix":"","unit":""}
+    ],
+    "env": [
+        {"key":"version","type":"string","default":null,"desc":"版本号"},
+        {"key":"MGT_PORT","type":"port","default":null,"desc":"端口"},
+        {"key":"SUBNET_PREFIX","type":"string","default":null,"desc":"safline网段"},
+        {"key":"app_path","type":"path","default":null,"desc":"应用数据目录"},
+        {"key":"desc","type":"string","default":null,"desc":"获取登录密码"},
+        {"key":"host_ip","type":"string","default":null,"desc":"主机IP"}
+    ],
+    "volumes": {"data": {"type": "path", "desc": "数据目录"}}
+}

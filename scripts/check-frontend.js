@@ -20,6 +20,10 @@ const authSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src',
 const permSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'permissions.js'), 'utf8');
 const serverSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'server.js'), 'utf8');
 const coreSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'core.js'), 'utf8');
+const dockerAppsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'dockerApps.js'), 'utf8');
+const dockerApiSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'dockerApi.js'), 'utf8');
+const dockerPanelSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'dockerPanel.js'), 'utf8');
+const dockerExecTermSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'dockerExecTerm.js'), 'utf8');
 const engineSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'engine.js'), 'utf8');
 const sessionsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'aiSessions.js'), 'utf8');
 const dshSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'dshTerminal.js'), 'utf8');
@@ -41,7 +45,13 @@ const resetPwSrc = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', 'res
 const nativeSrc = fs.readFileSync(path.resolve(__dirname, '..', 'windows', 'native-services.ps1'), 'utf8');
 const buildSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'build.mjs'), 'utf8');
 const fetchSvcSrc = fs.readFileSync(path.resolve(__dirname, '..', 'windows', 'fetch-services.ps1'), 'utf8');
+const APPSTORE_DIR = path.resolve(__dirname, '..', 'platform', 'appstore', 'apps');
+const appstoreDirFiles = fs.existsSync(APPSTORE_DIR)
+  ? fs.readdirSync(APPSTORE_DIR, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) : [];
 const packReleaseSrc = fs.readFileSync(path.resolve(__dirname, '..', 'windows', 'pack-release.ps1'), 'utf8');
+const packDistSrc = fs.readFileSync(path.resolve(__dirname, '..', 'windows', 'pack-dist.ps1'), 'utf8');
+const launcherSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'launcher', 'launcher.js'), 'utf8');
+const deploySrc = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', 'remote.js'), 'utf8');
 const releaseYml = fs.readFileSync(path.resolve(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
 const errors = [];
 const note = (ok, label, extra = '') => {
@@ -60,15 +70,16 @@ note(missing.length === 0, 'app.js 引用的静态 id 均存在', missing.length
 const sections = [...html.matchAll(/class="page" id="view-([a-z0-9-]+)"/g)].map((m) => m[1]);
 const SUBPAGES = ['repo-new', 'repo-clone', 'git-runtime', 'storage-conn', 'storage-mounts', 'storage-drivers',
   'build-start', 'deploys', 'server-new', 'docker-containers', 'docker-images',
-  'docker-volumes', 'docker-networks', 'docker-compose', 'ai-list', 'ai-test'];
+  'docker-volumes', 'docker-networks', 'docker-compose', 'docker-apps', 'ai-list', 'ai-test'];
 // v0.4.10：新增「AI 会话」独立页，总页面数 32 -> 33（AI 运维保留、二者并存）。
 // v0.4.29：新增 rclone 挂载页，总页面数 33 -> 34。
-note(sections.length === 34 && sections.includes('gitsrc') && sections.includes('docker')
+// v0.4.28+：新增 Docker 应用商店页，总页面数 34 -> 35。
+note(sections.length === 35 && sections.includes('gitsrc') && sections.includes('docker')
   && sections.includes('proxy') && sections.includes('environment') && sections.includes('envcfg')
   && sections.includes('ide-config') && sections.includes('users') && sections.includes('git-runtime')
   && sections.includes('aichat') && sections.includes('ops')
   && !sections.includes('collab') && SUBPAGES.every((v) => sections.includes(v)),
-'34 个独立页面（AI 运维 + AI 会话两页并存 + rclone 挂载；资源协作页已下线）均已转为可标签化的 .page', sections.join(', '));
+'35 个独立页面（AI 运维 + AI 会话两页并存 + rclone 挂载 + Docker 应用商店；资源协作页已下线）均已转为可标签化的 .page', sections.join(', '));
 note(['/git-sources', '/docker/overview', '/extensions/backups', '/extensions/dbgate', '/builds/backends']
   .every((p) => app.includes(p)) && app.includes('function loadGitSources') && app.includes('function loadDocker'),
 'Git 源 / Docker 管理 / 备份 / DbGate / 构建后端接口已全部接线');
@@ -132,6 +143,69 @@ note((html.match(/data-open-view=/g) || []).length >= 20
 note(html.includes('id="docker-container-filter"') && html.includes('id="docker-stat-grid"')
   && app.includes('function renderDockerContainers') && app.includes('class="dk-ops"'),
 'Docker 列表筛选、统计卡与操作按钮分组已补齐');
+
+// v0.4.28+：Docker 应用商店（移植宝塔 appstore）—— section / subnav / 分类 / 卡片 / 弹窗 / 接口接线。
+note(html.includes('id="view-docker-apps"') && html.includes('data-open-view="docker-apps"')
+  && html.includes('id="da-grid"') && html.includes('id="da-modal"')
+  && html.includes('id="da-mirror-modal"')
+  && app.includes('function loadDockerApps') && app.includes('function renderDockerAppGrid')
+  && app.includes("'docker-apps': loadDockerApps")
+  && serverSrc.includes('/api/docker/apps/status') && serverSrc.includes('/api/docker/apps/:name/prepare')
+  && coreSrc.includes("'dockerApps'") === false,
+'Docker 应用商店页：section / subnav / 分类卡片 / 部署弹窗 / 后端接口已接线');
+note(app.includes("'/docker/apps?'") && app.includes("'/docker/apps/config/accelerator'")
+  && app.includes('function generateDaFiles') && app.includes('function renderDockerAppPager')
+  && appstoreDirFiles.length >= 300,
+'应用商店前端调用 / 分页 + 全量内置应用模板（≥300 个）就绪');
+// v0.4.29：加速器双模式——默认宝塔（加速 URL → daemon.json），可选 compose 换源。
+note(serverSrc.includes('/api/docker/apps/config/accelerator') && serverSrc.includes('/api/docker/apps/config/daemon-json')
+  && dockerAppsSrc.includes('function daemonJson(') && dockerAppsSrc.includes('function setAccelerator(')
+  && dockerAppsSrc.includes("mode !== 'baota' && mode !== 'compose'")
+  && app.includes('da-acc-mode') && app.includes('refreshDaDaemonPreview'),
+'镜像加速双模式：宝塔 daemon.json（默认）+ compose 换源（可选），前端已接线');
+// v0.4.29：官方真实版本目录=appname，解析器须按「含 docker-compose.yml 的子目录」发现版本，
+// 而非把 appversion 当目录名（否则官方应用 compose 全空）。
+note(dockerAppsSrc.includes('function discoverVersionDirs(')
+  && dockerAppsSrc.includes("path.join(hit.dir, 'docker-compose.yml')")
+  && dockerAppsSrc.includes('upperToKey'),
+'官方格式解析：真实版本目录发现 + 小写 field.attr ↔ 大写 .env 键映射');
+// v0.4.29：宝塔创建弹窗每项配置右侧都有说明（官方 field.suffix），按真实类型渲染控件。
+note(app.includes('function daFieldHelp') && app.includes('f.suffix')
+  && app.includes('data-da-kind="checkbox"') && app.includes("type === 'textarea'")
+  && html.includes('class="da-form-fields" id="da-form-fields"')
+  && css.includes('.da-field-help') && css.includes('.da-field-row'),
+'配置说明对齐宝塔：官方 suffix 逐项展示 + checkbox/textarea 类型适配');
+// v0.4.29：官方 allow_access 复选框不在 .env 中，宝塔据此设置 HOST_IP；不映射则勾选无效。
+note(dockerAppsSrc.includes("hasOwnProperty.call(params, 'allow_access')")
+  && dockerAppsSrc.includes('upperToKey.HOST_IP') && dockerAppsSrc.includes("'0.0.0.0' : '127.0.0.1'"),
+'宝塔外部访问开关：allow_access → HOST_IP 映射已接线');
+// v0.4.29：一键部署（SSH 上传 + docker compose up -d）+ 下载 compose/.env 文件。
+note(serverSrc.includes("'/api/docker/apps/:name/deploy'") && serverSrc.includes('sftpPut(server')
+  && serverSrc.includes('docker compose') && serverSrc.includes('up -d --pull always')
+  && serverSrc.includes("serverId === 'local'") && serverSrc.includes("server: '本机'")
+  && app.includes('function deployDaToServer') && app.includes('function dlText(')
+  && app.includes('function loadDaServers') && app.includes("'#da-deploy-btn'")
+  && app.includes('da-deploy-pending') && app.includes("value=\"local\"")
+  && app.includes("本机（平台宿主机")
+  && html.includes('id="da-deploy-panel"') && html.includes('id="da-deploy-server"')
+  && html.includes('id="da-deploy-log"') && html.includes('id="da-dl-compose"')
+  && html.includes('id="da-dl-env"'),
+'应用商店一键部署（SSH + compose up）和文件下载已接线');
+// v0.4.29：Windows 端 appRoot 指向 dist/，模板必须随 exe/组件包/绿色包全链路分发，
+// 否则桌面端应用商店为空。四段缺一即失败。
+note(buildSrc.includes('APPSTORE_SRC') && buildSrc.includes('syncAppstore()')
+  && buildSrc.includes("'appstore.tar.gz'") && buildSrc.includes('appstore: fs.existsSync')
+  && launcherSrc.includes('SEA_APPSTORE_ASSET') && launcherSrc.includes('function ensureAppstore()')
+  && packDistSrc.includes("Join-Path $Dist 'appstore'") && packDistSrc.includes("Join-Path $stage 'appstore'")
+  && packReleaseSrc.includes("Join-Path $Dist 'appstore'") && packReleaseSrc.includes("Join-Path $targetDist 'appstore'"),
+'应用商店模板随 exe/组件包/绿色包分发（SEA asset + 首启释放 + 两个打包脚本）');
+// v0.4.29：246 部署脚本必须只排除仓库根的凭据 .env，放行 appstore 模板 .env
+// （否则线上 prepare 生成空 .env）。同时 .env.bak.* 任何层级都不能进包。
+note(deploySrc.includes("isExcludedFile = (name, relDir)")
+  && deploySrc.includes("(!relDir && EXCLUDE_FILES.has(name))")
+  && deploySrc.includes("/^\\.env\\.bak\\./.test(name)")
+  && deploySrc.includes("isExcludedFile(entry.name, relDir)"),
+'246 部署排除逻辑：根 .env 凭据排除 + appstore 模板 .env 放行 + .env.bak.* 全层级排除');
 note(html.includes('id="storage-current-conn"') && html.includes('id="view-server-new"')
   && html.includes('id="view-deploys"'),
 '服务器 / 存储 / 构建部署的表单与列表已拆到独立页');
@@ -144,8 +218,42 @@ note(['id="git-runtime-status"', 'id="git-runtime-form"', 'id="git-runtime-bin"'
 note(['function loadGitRuntime', "/git/runtime'", '/git/runtime/refresh',
   'd.channelLabel', 'loadGitRuntime().catch'].every((s) => app.includes(s)),
 'Git 运行时诊断 / 保存 / 重新检测接口与克隆通道提示已接线');
+// v0.4.30：Git 仓库「文件管理 / 克隆到工作区」弹窗化（不再 newPane / switchView 跳页），
+// 终端断开返回仓库列表。表单与弹窗容器静态存在，现有 JS 绑定不受 DOM 搬移影响。
+note(html.includes('id="repo-clone-modal"') && html.includes('id="repo-files-modal"')
+  && html.includes('id="repo-clone-open-btn"')
+  && app.includes('function openRepoCloneModal') && app.includes('function openRepoFilesModal')
+  && app.includes('function closeRepoFilesModal')   && html.includes('id="repo-clone-modal-slot"')
+  && app.includes('loadRepoFs') && app.includes('data-repo-modal-close')
+  && !app.includes('openFilesTab(ctx.server'),
+'Git 仓库文件管理 / 克隆弹窗化，终端断开返回仓库列表');
+// v0.4.30：容器交互式终端 = xterm + Docker exec PTY 流式接口。
+// 后端：hijack 双向 socket / 远端 SSH pty / owner 归属 / SSE 广播 / resize；
+// 前端：shell(bash|sh) + root 选择 / SSE base64 → xterm / FitAddon / 断开清理。
+note(dockerApiSrc.includes('function execAttach(') && dockerApiSrc.includes("connection: 'Upgrade'")
+  && dockerApiSrc.includes('function execCreateInteractive(') && dockerApiSrc.includes('function execResize(')
+  && dockerExecTermSrc.includes('function openSession(') && dockerExecTermSrc.includes('function attachStream(')
+  && dockerExecTermSrc.includes('pty: {') && dockerExecTermSrc.includes('session.ownerId')
+  && dockerPanelSrc.includes('assertWritable,')
+  && serverSrc.includes("'/api/docker/containers/:id/terminal/open'")
+  && serverSrc.includes("'/api/docker/containers/:id/terminal/stream'")
+  && html.includes('id="dk-term-xterm"') && html.includes('id="dk-term-shell"')
+  && html.includes('id="dk-term-root"') && html.includes('id="dk-term-connect"')
+  && app.includes('function dkTermConnect(') && app.includes('function dkTermDisconnect(')
+  && app.includes('new Terminal(') && app.includes('terminal/stream?sid=')
+  && app.includes('closeDkModal()') ,
+'Docker exec PTY 流式接口 + xterm 交互式终端（shell / root / 自适应 / 断开清理）');
+// v0.4.30 修复：连接 / 断开按钮曾用 e.id（事件对象无此属性）导致点击无响应。
+// 护栏同时断言「正确写法存在」与「错误写法不存在」，防止回归。
+const termBtnBind = app.match(/if \(e\.target && ([^)]*?)=== 'dk-term-connect'\) \{ dkTermConnect\(\); return; \}/);
+note(Boolean(termBtnBind) && termBtnBind[1].includes('e.target.id')
+  && app.includes("e.target.id === 'dk-term-disconnect'")
+  && !app.includes("e.id === 'dk-term-connect'")
+  && !app.includes("e.id === 'dk-term-disconnect'"),
+'Docker 终端连接 / 断开按钮事件委托使用 e.target.id（修复 e.id 导致的点击无响应）');
+
 // 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
-const CACHE_STAMP = '20261124b';
+const CACHE_STAMP = '20261124q';
 const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
 note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
 
@@ -166,7 +274,7 @@ note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升
     missing.length ? `未覆盖：${missing.join(', ')}` : `覆盖 ${styledIds.length} 个`);
   note(app.includes('class="ui-select ui-select-sm" data-svc-cred-mode')
     && app.includes('class="ui-select ui-select-sm" data-role="ed-lang"')
-    && app.includes('class="ui-select ui-select-sm" data-collab-perm')
+    && app.includes('data-collab-perm')   // collab inline 改为 CSS 自定义样式，不再需要 ui-select class
     && app.includes('class="ui-select" name="${esc(f.key)}"'),
   '动态生成的凭据 / 编辑器 / 协作者 / 扩展安装下拉框同步套用美化样式');
 }
@@ -241,10 +349,12 @@ note(html.includes('id="ide-cred"') && html.includes('id="ide-cred-reveal"')
   && app.includes('revealIdePassword') && app.includes('loadHostInfo')
   && app.includes('openRepoGitModal') && app.includes('data-repo-files'),
 'IDE 登录凭据、总览运行主机卡片与仓库 Git 操作弹窗已接线');
+// v0.4.30：文件管理改为弹窗内嵌浏览器（不再 newPane），克隆表单也弹窗化；终端仍是标签页但断开返回仓库列表。
 note(app.includes("api('/repos/git'") && app.includes("api('/host-info")
-  && app.includes('openFilesTab(ctx.server') && app.includes('openTerminalTab(ctx.server')
-  && app.includes('initialCommand'),
-'工作区仓库可直接打开文件管理 / 终端，并经白名单接口执行 Git 命令');
+  && app.includes('openRepoFilesModal') && app.includes('repo-clone-modal')
+  && app.includes('openTerminalTab(ctx.server') && app.includes('initialCommand')
+  && app.includes("onClose: () => { switchView('repos'); }"),
+'工作区仓库文件管理 / 克隆弹窗化，终端断开返回仓库列表，并经白名单接口执行 Git 命令');
 
 // v0.3.11：布局修复、排序分组、文件编辑、Compose 富编辑器、服务器编辑、DbGate 账号、IDE 拆页。
 note(css.includes('.ws-body > .pathbar-slot') && css.includes('td.actions { display: table-cell; }')

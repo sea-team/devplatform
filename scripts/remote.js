@@ -100,8 +100,13 @@ async function cmdProbe(host) {
 
 const EXCLUDE_DIRS = new Set(['node_modules', 'data', '.git', 'workspace', 'dist', '.workbuddy']);
 const EXCLUDE_FILES = new Set(['.env', 'state.json', 'state.json.tmp']);
-// .env.bak.* 含明文凭据（环境配置页每次写入都会生成），绝不能进部署包。
-const isExcludedFile = (name) => EXCLUDE_FILES.has(name) || /^\.env\.bak\./.test(name);
+// .env.bak.* 含明文凭据（环境配置页每次写入都会生成），任何层级都绝不能进部署包。
+// .env / state.json 仅排除仓库根（含真实凭据）；platform/appstore/**/.env 是宝塔模板的
+// 公开变量默认值（无凭据），必须随包部署，否则线上 Docker 应用商店 prepare 生成空 .env。
+// v0.4.29：修复此前按纯文件名排除，导致 8 个模板 .env 全部丢失的真实缺陷。
+const isExcludedFile = (name, relDir) =>
+  /^\.env\.bak\./.test(name)
+  || (!relDir && EXCLUDE_FILES.has(name));
 // Linux 部署包用不到 Windows 随包二进制 / 离线补充包 / 原生服务运行时，
 // 这三个目录合计数百 MB，不排除会把每次部署的上传体积放大上千倍。
 const EXCLUDE_PATH = /^(?:windows\/(?:bin|bootstrap|runtime)|\.native-probe)(?:\/|$)/;
@@ -110,7 +115,7 @@ function collectFiles() {
   const files = [];
   const walk = (absDir, relDir) => {
     for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
-      if (EXCLUDE_DIRS.has(entry.name) || isExcludedFile(entry.name)) continue;
+      if (EXCLUDE_DIRS.has(entry.name) || isExcludedFile(entry.name, relDir)) continue;
       const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
       if (EXCLUDE_PATH.test(rel)) continue;
       const abs = path.join(absDir, entry.name);

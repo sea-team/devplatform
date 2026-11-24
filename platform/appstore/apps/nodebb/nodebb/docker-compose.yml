@@ -1,0 +1,39 @@
+services:
+  nodebb-web:
+    image: nodebb/docker
+    ports:
+      - "${HOST_IP}:${NODEBB_WEB_PORT}:4567"
+    volumes:
+      - ${APP_PATH}/data/uploads:/usr/src/app/public/uploads
+      - ${APP_PATH}/data/config:/opt/config
+      - ${APP_PATH}/data/setup.json:/usr/src/app/setup.json
+    depends_on:
+      - nodebb-db
+    deploy:
+      resources:
+        limits:
+          cpus: "${CPUS}"
+          memory: "${MEMORY_LIMIT}"
+    restart: always
+    labels:
+      createdBy: "bt_apps"
+    networks:
+      - baota_net
+
+  nodebb-db:
+    image: postgres:18.1-alpine
+    environment:
+      POSTGRES_DB: "nodebb"
+      POSTGRES_PASSWORD: "nodebb"
+      POSTGRES_USER: "nodebb"
+    restart: unless-stopped
+    volumes:
+      - ${APP_PATH}/data/db:/var/lib/postgresql
+    labels:
+      createdBy: "bt_apps"
+    networks:
+      - baota_net
+
+networks:
+  baota_net:
+    external: true

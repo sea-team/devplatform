@@ -2,6 +2,10 @@
 .env
 .env.*
 !.env.example
+# 宝塔官方应用商店模板里的 .env 是样例配置（端口 / 占位符 / 官方默认值），不是凭据，
+# 必须随模板一起入库，否则 clone 后应用商店全部缺配置文件。与 scripts/remote.js 的
+# 部署排除规则保持一致：只排除仓库根凭据，子目录模板放行。
+!platform/appstore/**/.env
 data/
 state.json
 state.json.tmp

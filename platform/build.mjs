@@ -16,6 +16,10 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(HERE, 'dist');
 const PUBLIC_SRC = path.join(HERE, 'public');
 const PUBLIC_DST = path.join(DIST, 'public');
+// v0.4.29：Docker 应用商店模板（宝塔 appstore 格式）必须随所有分发路径走。
+// 源码/246 部署读 platform/appstore；单文件 exe 与绿色包的 appRoot 指向 dist/。
+const APPSTORE_SRC = path.join(HERE, 'appstore');
+const APPSTORE_DST = path.join(DIST, 'appstore');
 const LAUNCHER = path.join(HERE, 'launcher', 'launcher.js');
 const BUNDLE = path.join(DIST, 'bundle.cjs');
 // 默认写到 dist/；设置 DP_EXE_OUT 可将 exe 输出到别处（例如本机服务正在运行、
@@ -73,15 +77,27 @@ async function buildBundle() {
   log(`bundle.cjs  ${(fs.statSync(BUNDLE).size / 1024).toFixed(0)} KB`);
 }
 
-function syncPublic() {
-  fs.mkdirSync(PUBLIC_DST, { recursive: true });
-  for (const rel of walk(PUBLIC_SRC)) {
-    const from = path.join(PUBLIC_SRC, rel);
-    const to = path.join(PUBLIC_DST, rel);
+function copyTree(src, dst) {
+  fs.mkdirSync(dst, { recursive: true });
+  for (const rel of walk(src)) {
+    const from = path.join(src, rel);
+    const to = path.join(dst, rel);
     fs.mkdirSync(path.dirname(to), { recursive: true });
     fs.copyFileSync(from, to);
   }
-  log(`public/     ${walk(PUBLIC_SRC).length} 个文件`);
+  return walk(src).length;
+}
+
+function syncPublic() {
+  log(`public/     ${copyTree(PUBLIC_SRC, PUBLIC_DST)} 个文件`);
+}
+
+// v0.4.29：把内置应用模板同步到 dist/，供 exe/绿色包的 appRoot 读取。
+function syncAppstore() {
+  if (!fs.existsSync(APPSTORE_SRC)) { log('appstore/  未找到源目录，跳过'); return 0; }
+  const n = copyTree(APPSTORE_SRC, APPSTORE_DST);
+  log(`appstore/   ${n} 个文件`);
+  return n;
 }
 
 // 极简 tar writer：只写普通文件与目录，供 SEA asset 首启释放使用。
@@ -102,18 +118,18 @@ function makeHeader(name, size, typeflag) {
   return b;
 }
 
-function tarGzPublic(outFile) {
+function tarGzDir(srcDir, outFile, label) {
   const chunks = [];
   const dirs = new Set();
-  for (const rel of walk(PUBLIC_SRC)) {
+  for (const rel of walk(srcDir)) {
     const parts = rel.split('/');
     for (let i = 1; i < parts.length; i += 1) dirs.add(parts.slice(0, i).join('/'));
   }
   for (const dir of [...dirs].sort()) {
     chunks.push(makeHeader(`${dir}/`, 0, '5'));
   }
-  for (const rel of walk(PUBLIC_SRC)) {
-    const body = fs.readFileSync(path.join(PUBLIC_SRC, rel));
+  for (const rel of walk(srcDir)) {
+    const body = fs.readFileSync(path.join(srcDir, rel));
     chunks.push(makeHeader(rel, body.length, '0'));
     chunks.push(body);
     const pad = (512 - (body.length % 512)) % 512;
@@ -121,7 +137,11 @@ function tarGzPublic(outFile) {
   }
   chunks.push(Buffer.alloc(1024));
   fs.writeFileSync(outFile, zlib.gzipSync(Buffer.concat(chunks)));
-  log(`public.tar.gz  ${(fs.statSync(outFile).size / 1024).toFixed(0)} KB（内嵌于 exe，首启释放）`);
+  log(`${label}.tar.gz  ${(fs.statSync(outFile).size / 1024).toFixed(0)} KB（内嵌于 exe，首启释放）`);
+}
+
+function tarGzPublic(outFile) {
+  tarGzDir(PUBLIC_SRC, outFile, 'public');
 }
 
 function writeRelease() {
@@ -136,6 +156,14 @@ function writeRelease() {
       sha256: sha256(path.join(PUBLIC_DST, rel)),
       size: fs.statSync(path.join(PUBLIC_DST, rel)).size,
     })),
+    // v0.4.29：应用商店模板也纳入清单，便于热更新/回滚时核对完整性。
+    appstore: fs.existsSync(APPSTORE_DST)
+      ? walk(APPSTORE_DST).map((rel) => ({
+        path: rel,
+        sha256: sha256(path.join(APPSTORE_DST, rel)),
+        size: fs.statSync(path.join(APPSTORE_DST, rel)).size,
+      }))
+      : [],
   };
   fs.writeFileSync(path.join(DIST, 'release.json'), JSON.stringify(release, null, 2));
   log(`release.json  v${release.version}`);
@@ -220,25 +248,29 @@ function injectAdminManifest(exe) {
   }
 }
 
-async function buildSea(tarFile) {
+async function buildSea(assets) {
   if (!fs.existsSync(LAUNCHER)) throw new Error(`缺少引导器：${LAUNCHER}`);
   const configPath = path.join(DIST, 'sea-config.json');
   const blobPath = path.join(DIST, 'sea.blob');
   const releasePath = path.join(DIST, 'release.json');
   // 把业务包与版本清单一并内嵌：从 GitHub Release 单独下载 devplatform.exe
   // 到任意空目录，双击即可自释放成完整可运行实例；已存在的同名文件永远不覆盖，
-  // 因此热更新（替换外置 bundle.cjs / public/）仍然生效。
+  // 因此热更新（替换外置 bundle.cjs / public/ / appstore/）仍然生效。
+  const seaAssets = {
+    'public.tar.gz': assets.publicTar,
+    'bundle.cjs': BUNDLE,
+    'release.json': releasePath,
+  };
+  if (assets.appstoreTar && fs.existsSync(assets.appstoreTar)) {
+    seaAssets['appstore.tar.gz'] = assets.appstoreTar;
+  }
   fs.writeFileSync(configPath, JSON.stringify({
     main: LAUNCHER,
     output: blobPath,
     disableExperimentalSEAWarning: true,
     useSnapshot: false,
     useCodeCache: true,
-    assets: {
-      'public.tar.gz': tarFile,
-      'bundle.cjs': BUNDLE,
-      'release.json': releasePath,
-    },
+    assets: seaAssets,
   }, null, 2));
 
   const gen = spawnSync(process.execPath, ['--experimental-sea-config', configPath], {
@@ -261,8 +293,8 @@ async function buildSea(tarFile) {
   log(`exe          ${path.basename(EXE)}  ${(fs.statSync(EXE).size / 1024 / 1024).toFixed(1)} MB`);
 
   // blob / 配置 / tar 只用于注入，不作为分发文件。
-  for (const f of [configPath, blobPath, tarFile]) {
-    try { fs.unlinkSync(f); } catch { /* noop */ }
+  for (const f of [configPath, blobPath, assets.publicTar, assets.appstoreTar]) {
+    try { if (f) fs.unlinkSync(f); } catch { /* noop */ }
   }
 }
 
@@ -299,13 +331,16 @@ async function main() {
   fs.mkdirSync(DIST, { recursive: true });
   ensureDotEnv();
   await buildBundle();
-  if (bundleOnly) { syncPublic(); log('完成（--bundle-only）'); return; }
+  if (bundleOnly) { syncPublic(); syncAppstore(); log('完成（--bundle-only）'); return; }
   syncPublic();
-  const tarFile = path.join(DIST, 'public.tar.gz');
-  tarGzPublic(tarFile);
+  syncAppstore();
+  const publicTar = path.join(DIST, 'public.tar.gz');
+  tarGzPublic(publicTar);
+  const appstoreTar = fs.existsSync(APPSTORE_SRC) ? path.join(DIST, 'appstore.tar.gz') : null;
+  if (appstoreTar) tarGzDir(APPSTORE_SRC, appstoreTar, 'appstore');
   const release = writeRelease();
   if (noSea) { log('完成（--no-sea）'); return; }
-  await buildSea(tarFile);
+  await buildSea({ publicTar, appstoreTar });
   log('产物目录：' + DIST);
   log(`版本 ${release.version}；分发时复制整个 dist/，双击 ${path.basename(EXE)} 即可运行`);
 }

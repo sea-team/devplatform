@@ -1,0 +1,21 @@
+services:
+  gatus:
+    image: twinproduction/gatus:${VERSION}
+    ports:
+      - "${HOST_IP}:${GATUS_WEB_PORT}:8080"
+    volumes:
+      - ${APP_PATH}/data/config:/config
+    deploy:
+      resources:
+        limits:
+          cpus: "${CPUS}"
+          memory: "${MEMORY_LIMIT}"
+    restart: always
+    labels:
+      createdBy: "bt_apps"
+    networks:
+      - baota_net
+
+networks:
+  baota_net:
+    external: true
