@@ -376,7 +376,7 @@ v0.4.28 · 2026-11-24 · rclone 存储层 + SMB 网关 + Windows 提权与 WinFs
 全程不需要 git、Node.js、Docker 或 bash；不再需要单独下载集成服务程序。
 校验：Get-FileHash <文件> -Algorithm SHA256，与 SHA256SUMS.txt 比对。
 
-v0.4.29 · 2026-11-24 · Docker 应用商店全量同步 + 镜像加速对齐宝塔
+v0.4.29 · 2026-11-24 · Docker 应用商店全量同步 + 镜像加速对齐宝塔（随 v0.4.30 一并发版）
   本版新增与修复：
   - Docker 应用商店全量同步：从官方 aaPanel/appstore 一次性拉取 320 个应用模板（314 个有效：含 app.json + compose + .env + 图标），覆盖 12 个官方分类（建站/数据库/存储/AI/工具/NAS/中间件/DevOps/多媒体/邮件/系统/MCP）。新增 scripts/sync-appstore.js（GitHub API git tree + raw 端点低并发重试，支持断点续传），以后可一条命令更新官方数据。前端改为分类 + 分页（每页 60）展示。
   - 官方格式适配：修正版本目录定位——官方真实版本目录名 = appname（如 apps/mysql/mysql/），appversion 是镜像 tag 而非目录名，改为按「含 docker-compose.yml 的子目录」发现；修正参数合并——官方 field.attr 小写（mysql_port）与 .env 大写键（MYSQL_PORT）建立大小写映射，占位符用默认值填充。
@@ -387,7 +387,8 @@ v0.4.29 · 2026-11-24 · Docker 应用商店全量同步 + 镜像加速对齐宝
   - 配置说明对齐宝塔：参数表单改为三列布局（左标签 / 中控件 / 右逐项说明），说明取官方 field.suffix（1364 处），尾部留空的动态上限补「取决于目标主机实际配置」；按 field.type 渲染 checkbox / textarea / number / password / text，default 为 0/false 时不再被吞。官方 allow_access 复选框不在 .env 中，prepare() 新增映射到 HOST_IP=0.0.0.0|127.0.0.1，外部访问开关真正生效。
   - 验证：所有功能 246 线上实测通过，缓存戳 20261124f，npm run check 全过、类型检查 78=基线、前端自检全过。
 
-v0.4.30 · 2026-11-24 · Git 仓库弹窗化 + Docker exec PTY 交互式终端（未提交 / 未发版）
+v0.4.30 · 2026-11-24 · Git 仓库弹窗化 + Docker exec PTY 交互式终端 + Docker 应用商店全量移植（已发版）
+  本版把 v0.4.29 与 v0.4.30 两阶段改动合并为一次发布：前者为 Docker 应用商店全量移植（见上一段），后者为 Git 弹窗化与容器交互式终端。仓库版本号统一升到 `0.4.30`，tag `v0.4.30`。
   本版新增与修复：
   - Git 仓库弹窗化：「文件管理」「克隆到工作区」不再新建标签页 / 跳页，改为弹窗。clone-form 静态搬入 #repo-clone-modal（现有 JS 绑定不受影响），从仓库列表或外部 Git 源列表点「克隆到工作区 / 填入克隆表单」自动带入地址并弹出；克隆成功 / 关闭 / Esc 都回到仓库列表。文件管理用 #repo-files-modal 内嵌轻量浏览器（复用 /servers/:id/files，路径条 + 目录进入 + 上一级 / 刷新），不依赖 tab 系统。「终端」断开时返回仓库列表页（onClose 回调）。
   - Docker exec PTY 流式接口：新增 platform/src/dockerExecTerm.js，与 SSH Web 终端同构（SSE 推送输出 base64 / POST 送输入 / resize / close），不引入 WebSocket。本机走 Docker Engine API 的 connection hijack（execCreateInteractive 建 Tty=true + AttachStdin 的 exec，execAttach 用 Connection: Upgrade 拿双向裸 socket，Tty=true 无复用帧头，字节直接喂 xterm；对未升级的 200 响应做降级处理）；远端 target=server:<id> 走 ssh2 pty 执行 docker exec -it [-u root] <id> <shell>。会话按 ownerId 归属、15 分钟空闲回收，订阅 / 注入 / 尺寸 / 关闭都校验归属；写接口命中 /^\/api\/docker\// 全局护栏仅管理员。新增 6 个路由：terminal/open|stream|input|resize|close|terminals。

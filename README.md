@@ -1,6 +1,6 @@
 # DevPlatform · 统一 Web 开发管理平台 使用说明
 
-> 适用版本：v0.4.30（2026-11-24；仓库版本号仍标记 0.4.28，本轮尚未发版）
+> 适用版本：v0.4.30（2026-11-24；仓库版本 `0.4.30`，tag `v0.4.30` 已发布 Release）
 > 当前线上环境：`http://10.0.0.246:9000`（部署目录 `/data/platform`，容器 `devplatform`）
 > 本地代码：`devplatform/`，Git 分支 `main`
 > 本文中的 `10.0.0.246` 为示例/测试机地址，换环境时请全局替换。
@@ -69,8 +69,9 @@
 
 ### 1.1.1 当前版本状态（v0.4.30）
 
-- 代码已部署 `10.0.0.246` 并实测：health `0.4.28/normal`、环境体检 `8 正常 / 0 提醒 / 0 异常`。
-- 仓库版本号仍标记 `0.4.28`（`platform/package.json`）；v0.4.29 / v0.4.30 的功能改动**尚未发版**，详见 `release-notes.md`。
+- 当前版本 **v0.4.30**（`platform/package.json` / `package-lock.json` 已升至 `0.4.30`，tag `v0.4.30`，GitHub Release 由 `.github/workflows/release.yml` 在推送 tag 时构建发布）。
+- 代码已部署 `10.0.0.246` 并实测：health `0.4.30/normal`、环境体检 `8 正常 / 0 提醒 / 0 异常`。
+- v0.4.29 / v0.4.30 两阶段改动已随本次一并发版，详见 `release-notes.md`。
 - 前端静态资源缓存戳 `20261124q`；`npm run check`、`npm run typecheck`（基线 78）、`node scripts/check-frontend.js` 全过。
 - 官方应用模板位于 `platform/appstore/`（319 个模板 `.env` 属样例配置，必须随仓库入库；`.gitignore` 已加白名单）。
 - **同步官方模板注意**：Dify 系列模板原本自带 `SECRET_KEY=sk-...` 官方示例串，会被 GitHub Push Protection 判为 OpenAI API Key 而拦截推送。已统一替换为 `REPLACE_WITH_YOUR_OWN_SECRET_KEY`（`.env` 与 `docker-compose.yml` 默认值共 8 处）。后续用 `scripts/sync-appstore.js` 重新同步官方数据后，须再次替换，否则 push 会被拦截。
@@ -3613,7 +3614,7 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 ### 68.5 当前状态
 
 - 全量 314 个官方应用 + 加速器双模式已落地本地仓库并**部署 246 实测通过**（count=314、13 分类、分页/搜索、compose/prepare、daemon.json、双模式切换全部正常）；中文缓存戳 `20261124d`。
-- **尚未提交推送 / 发版**，版本仍 0.4.28，预期随 v0.4.29 发布。原型独立项目留在 `C:/Users/n/WorkBuddy/2026-11-18-11-13-40/docker-appstore/`（分享任务工作区），平台内实现为 `platform/src/dockerApps.js` + `platform/appstore/apps/` + `scripts/sync-appstore.js`，二者互不依赖。
+- 该阶段改动与 v0.4.30 合并发布（tag `v0.4.30`），版本已升至 `0.4.30`。原型独立项目留在 `C:/Users/n/WorkBuddy/2026-11-18-11-13-40/docker-appstore/`（分享任务工作区），平台内实现为 `platform/src/dockerApps.js` + `platform/appstore/apps/` + `scripts/sync-appstore.js`，二者互不依赖。
 
 ## §69 Git 仓库弹窗化与容器交互式终端（v0.4.30）
 
@@ -3643,7 +3644,7 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 
 - **246 端到端实测**（平台自建容器 `nginxpulse-nginxpulse-1`）：`open → input("echo PTY_OK_12345\r") → SSE` 还原真实交互式 shell：`/app # ` root 提示符、命令回显与执行结果、ANSI 控制码 `\x1b[6n` / `\x1b[J`；bash / 非 root 模式、resize(120×30)、close 均正常。安全边界：非平台容器缺 `confirm` → 400、无效 sid 注入 → 403、无 token → 401、会话列表与回收正常，测试会话全部清理。
 - 缓存戳 `20261124p`；`npm run check`（已纳入 `dockerExecTerm.js`）全过、`npm run typecheck` 78 = 基线（未超）、`node scripts/check-frontend.js` 全过（新增两条护栏：Git 弹窗化 + PTY 全链路）。
-- health `0.4.28/normal`、体检 8/0/0。**本轮与 v0.4.29 一样：未提交 / 未推送 / 未发版**，版本仍 0.4.28。
+- health `0.4.30/normal`、体检 8/0/0（升版本后重部署 246 实测）。v0.4.29 / v0.4.30 两阶段改动已合并发版（tag `v0.4.30`），仓库版本 `0.4.30`。
 
 ### 69.5 修复：容器终端「连接」按钮点击无响应（用户截图反馈）
 
