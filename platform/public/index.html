@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261124q" />
+  <link rel="stylesheet" href="/style.css?v=20261125a" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -1987,27 +1987,49 @@
       </div>
     </div>
   </div>
-  <!-- 工作区仓库 · Git 命令操作面板 -->
+  <!-- 工作区仓库 · Git 命令操作面板（v0.4.31 · TortoiseGit 式多标签工作台） -->
   <div class="modal" id="repo-git-modal" hidden aria-modal="true" role="dialog" aria-labelledby="repo-git-title">
     <div class="modal-mask" data-repo-git-close></div>
-    <div class="modal-panel">
+    <div class="modal-panel git-workbench" id="repo-git-panel">
       <div class="modal-head">
         <div><h2 id="repo-git-title">Git 操作</h2><span class="muted" id="repo-git-sub">—</span></div>
-        <button class="btn btn-ghost btn-sm" type="button" data-repo-git-close>✕ 关闭</button>
+        <div class="row gap">
+          <button class="btn btn-ghost btn-sm" type="button" id="repo-git-refresh" title="刷新当前视图">↻ 刷新</button>
+          <button class="btn btn-ghost btn-sm" type="button" data-repo-git-close>✕ 关闭</button>
+        </div>
       </div>
-      <div class="modal-body">
-        <div class="notice warn">命令在平台容器或 SSH 宿主机上执行；子命令走白名单（含 commit / push / merge --abort / revert / reset 等写操作），参数禁止 shell 元字符。写操作需该仓库的所有者 / 可写协作者 / 管理员权限；<b>还原 / 重置 / 放弃改动等破坏性操作会二次确认</b>。</div>
-        <div class="row gap wrap" id="repo-git-presets" style="margin:12px 0"></div>
-        <form id="repo-git-form" class="form">
-          <label>提交说明（点「提交」预设时使用）<input id="repo-git-message" placeholder="例如 fix: 修复登录判断" autocomplete="off" /></label>
-          <label>提交号（点「还原提交」预设时使用；留空则还原最近一次 HEAD）<input id="repo-git-hash" placeholder="例如 a1b2c3d" autocomplete="off" /></label>
-          <label>自定义命令（不含开头的 git）<input id="repo-git-input" placeholder="例如 log --oneline -n 5" autocomplete="off" /></label>
-          <div class="row gap">
-            <button class="btn btn-primary" type="submit" id="repo-git-run">执行</button>
-            <button class="btn btn-ghost" type="button" id="repo-git-clear">清空输出</button>
+      <div class="modal-body git-wb-body">
+        <div class="notice warn git-wb-notice">命令在平台容器或 SSH 宿主机上执行；子命令走白名单，参数禁止 shell 元字符。写操作需该仓库的所有者 / 可写协作者 / 管理员权限；<b>切换 / 合并 / 还原 / 重置 / 清理 / 删除等破坏性动作会二次确认</b>。</div>
+        <!-- 标签导航：由 groups() 动态渲染，点击切换工作台分区 -->
+        <div class="subnav git-wb-tabs" id="repo-git-tabs"></div>
+        <div class="git-wb-toolbar" id="repo-git-toolbar"></div>
+        <!-- 各分区内容容器（始终存在，靠 hidden 切换，避免动态 DOM 反复重建） -->
+        <div class="git-wb-pane" id="git-wb-pane-status"></div>
+        <div class="git-wb-pane" id="git-wb-pane-log" hidden></div>
+        <div class="git-wb-pane" id="git-wb-pane-commit" hidden></div>
+        <div class="git-wb-pane" id="git-wb-pane-branch" hidden></div>
+        <div class="git-wb-pane" id="git-wb-pane-sync" hidden></div>
+        <div class="git-wb-pane" id="git-wb-pane-stash" hidden></div>
+        <div class="git-wb-pane" id="git-wb-pane-tag" hidden></div>
+        <div class="git-wb-pane" id="git-wb-pane-conflict" hidden></div>
+        <div class="git-wb-pane" id="git-wb-pane-clean" hidden></div>
+        <div class="git-wb-pane" id="git-wb-pane-custom" hidden></div>
+        <!-- 统一输出区：命令回显 / 结果 / 错误 -->
+        <div class="git-wb-output-wrap">
+          <div class="git-wb-output-head">
+            <span class="muted">命令输出</span>
+            <button class="btn btn-ghost btn-sm" type="button" id="repo-git-clear">清空输出</button>
           </div>
+          <pre class="log" id="repo-git-output" style="min-height:96px;max-height:220px;white-space:pre-wrap">选择一个标签开始操作。</pre>
+        </div>
+        <!-- 自定义命令表单：静态存在，打开「自定义命令」标签时搬入对应分区（保留 id 与绑定）。
+             v0.4.31 修复：移除 repo-git-message / repo-git-hash 两个从未被 app.js 读取的摆设输入框
+             （提交说明 / 还原提交号改由 promptDialog 弹窗即时填写）；清空输出按钮的重复 id 一并去掉，
+             输出区上方已有唯一的 #repo-git-clear。 -->
+        <form id="repo-git-form" class="form" hidden>
+          <label>命令（不含开头的 git，支持 "引号" 包裹含空格的参数）<input id="repo-git-input" placeholder='例如 log --oneline -n 5 或 commit -m "fix: 修复登录"' autocomplete="off" /></label>
+          <div class="row gap"><button class="btn btn-primary" type="submit" id="repo-git-run">执行</button></div>
         </form>
-        <pre class="log short" id="repo-git-output" style="margin-top:12px;min-height:120px;white-space:pre-wrap">选择上方快捷命令，或输入自定义命令后点「执行」。</pre>
       </div>
     </div>
   </div>
@@ -2292,6 +2314,6 @@
   <div id="card-modal-mask" hidden></div>
   <script src="/vendor/cm-addons.js"></script>
   <script src="/vendor/qrcode.js"></script>
-  <script src="/app.js?v=20261124q"></script>
+  <script src="/app.js?v=20261125a"></script>
 </body>
 </html>

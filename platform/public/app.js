@@ -1310,8 +1310,694 @@ async function openRepoTerminal(name) {
   } catch (e) { toast(e.message, true); }
 }
 
+/* ================= v0.4.31 · TortoiseGit 式 Git 工作台 ================= */
+/* 沿用仓库列表「Git 操作」按钮入口，弹窗内改为「状态 / 日志 / 提交 / 分支 / 同步 /
+   Stash / 标签 / 冲突 / 清理 / 自定义命令」多标签工作台。后端提供结构化只读视图
+   (/repos/git/view) 与语义动作 (/repos/git/action)，自定义命令仍走 /repos/git。 */
 let repoGitRepo = '';
 let repoGitPresets = [];
+let repoGitGroups = [];
+let repoGitTab = 'status';
+let repoGitBusy = false;
+const repoGitCache = {}; // 每个视图的结构化数据缓存
+
+function gitOut(text) {
+  const out = $('#repo-git-output');
+  if (out) out.textContent = String(text || '');
+}
+function gitOutAppend(text) {
+  const out = $('#repo-git-output');
+  if (out) out.textContent = `${out.textContent || ''}${text}`;
+}
+function gitBadge(text, tone) { return badge(text, tone || 'gray'); }
+function gitPane(id) { return $(`#git-wb-pane-${id}`); }
+function gitEmpty(msg) { return `<div class="git-wb-empty">${esc(msg)}</div>`; }
+function gitVal(id) { const el = $(`#${id}`); return el ? String(el.value || '').trim() : ''; }
+/**
+ * 自定义命令分词：支持单 / 双引号包裹含空格的参数（如 `commit -m "hello world"`），
+ * 引号本身不进入参数。以前用 split(/\s+/) 会把提交说明拆碎成多个参数。
+ * 不含引号的语法保持原样；引号未闭合时按普通字符收尾，避免静默吞掉输入。
+ */
+function splitGitCommand(text) {
+  const s = String(text || '').trim();
+  const out = [];
+  let cur = '';
+  let quote = '';
+  let token = false;
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (quote) {
+      if (ch === quote) { quote = ''; continue; }
+      if (ch === '\\' && i + 1 < s.length && (s[i + 1] === quote || s[i + 1] === '\\')) { cur += s[i + 1]; i += 1; continue; }
+      cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; token = true; continue; }
+    if (/\s/.test(ch)) {
+      if (token) { out.push(cur); cur = ''; token = false; }
+      continue;
+    }
+    cur += ch;
+    token = true;
+  }
+  if (token) out.push(cur);
+  return out;
+}
+function gitCheckedPaths() {
+  return [...document.querySelectorAll('#git-wb-pane-status [data-gf]:checked')]
+    .map((c) => c.getAttribute('data-gf'));
+}
+
+/** 读取一个结构化视图，失败时把错误写进输出区并返回 null。 */
+async function gitLoadView(view, args = {}, { refresh = false } = {}) {
+  if (!repoGitRepo) return null;
+  const key = `${view}:${JSON.stringify(args)}`;
+  if (!refresh && repoGitCache[key]) return repoGitCache[key];
+  try {
+    const r = await api('/repos/git/view', {
+      method: 'POST', body: { repo: repoGitRepo, view, args },
+    });
+    if (!r.ok) throw new Error(r.error || '视图读取失败');
+    repoGitCache[key] = r.data;
+    return r.data;
+  } catch (e) {
+    gitOut(`读取「${view}」失败：${e.message}`);
+    return null;
+  }
+}
+
+/** 渲染标签导航。 */
+function renderGitTabs() {
+  const box = $('#repo-git-tabs');
+  if (!box) return;
+  box.innerHTML = `<span class="subnav-label">Git 工作台</span>` + repoGitGroups.map((g) =>
+    `<button class="subnav-btn ${g.id === repoGitTab ? 'active' : ''}" type="button" data-gtab="${esc(g.id)}" title="${esc(g.desc)}"><span class="gico">${esc(g.ico)}</span>${esc(g.label)}</button>`
+  ).join('');
+  box.querySelectorAll('[data-gtab]').forEach((b) => b.addEventListener('click', () => {
+    repoGitTab = b.dataset.gtab;
+    renderGitTabs();
+    for (const g of repoGitGroups) {
+      const p = gitPane(g.id);
+      if (p) p.hidden = g.id !== repoGitTab;
+    }
+    void refreshGitTab(repoGitTab);
+  }));
+}
+
+/** 顶部工具条：当前分区的快捷动作（按 preset.group 过滤）。 */
+function renderGitToolbar() {
+  const box = $('#repo-git-toolbar');
+  if (!box) return;
+  const ps = repoGitPresets.filter((p) => p.group === repoGitTab);
+  if (repoGitTab === 'custom') {
+    box.innerHTML = `<span class="muted">直接输入白名单内的 Git 子命令与参数（不含开头的 git）</span>`;
+    return;
+  }
+  box.innerHTML = `<span class="muted" style="font-size:12px">${esc((repoGitGroups.find((g) => g.id === repoGitTab) || {}).desc || '')}</span><span class="grow"></span>`
+    + `<div class="git-wb-actions">` + ps.map((p) =>
+      `<button class="btn btn-sm ${p.destructive ? 'btn-danger' : (p.write ? 'btn-primary' : '')}" type="button" data-gpreset="${esc(p.key)}" title="${esc(p.hint || (p.write ? '会写入仓库 / 远端，需要仓库写权限' : '只读命令'))}">${esc(p.ico)} ${esc(p.label)}</button>`
+    ).join('') + `</div>`;
+  box.querySelectorAll('[data-gpreset]').forEach((b) => b.addEventListener('click', () => {
+    void runGitPreset(b.dataset.gpreset);
+  }));
+}
+
+/**
+ * 旧 /repos/git 入口里，后端会对这些命令强制 confirmed=true。
+ * 复刻 workspaceGit.classifyCommand(cmd,args).destructive 的判定（只取 destructive 一位），
+ * 让前端在同一处决定「先弹二次确认 + 带 confirmed」。clean -n/--dry-run 是只读预览，排除。
+ */
+function repoGitNeedsConfirm(command, args) {
+  const list = Array.isArray(args) ? args.map(String) : [];
+  if (command === 'clean') {
+    const dry = /^-n$|^--dry-run$/.test(list[0] || '');
+    const force = list.some((x) => /^-f$|^-ff$|^--force$/.test(x));
+    return !(dry && !force);
+  }
+  if (['branch', 'tag', 'stash', 'remote', 'config'].includes(command)) {
+    return /^-d$|^-D$|^--delete$/.test(list[0] || '');
+  }
+  return ['reset', 'revert', 'merge', 'checkout', 'restore', 'rm'].includes(command);
+}
+
+/** 纯执行：发 /repos/git 请求并回显输出，不管理 busy / 二次确认（供 runRepoGit / runGitPreset 复用）。 */
+async function execRepoGit(command, args, extra = {}) {
+  gitOut(`执行中：git ${command} ${(args || []).join(' ')} …`);
+  try {
+    const r = await api('/repos/git', {
+      method: 'POST', body: { repo: repoGitRepo, command, args: args || [], ...extra },
+    });
+    gitOut(`> ${r.commandText}\n[${r.channelLabel} · Git ${r.gitVersion || '—'} · exit ${r.code}]\n\n${r.output || '(无输出)'}`);
+    if (r.code !== 0) toast(`Git ${command} 返回 ${r.code}，请查看输出`, true);
+    return r;
+  } catch (e) {
+    gitOut(`执行失败：${e.message}`);
+    toast(e.message, true);
+    return null;
+  }
+}
+
+/** 执行快捷预设：needMessage / needHash / needText 走统一输入弹窗，破坏性动作二次确认。 */
+async function runGitPreset(key) {
+  const p = repoGitPresets.find((x) => x.key === key);
+  if (!p || repoGitBusy) return;
+  // 忙位覆盖 promptDialog / confirmDialog 全程：弹窗期间无法并发触发其它 Git 写操作。
+  repoGitBusy = true;
+  try {
+    let args = [...(p.args || [])];
+    if (p.needMessage) {
+      const msg = await promptDialog({ title: '提交说明', message: '填写本次提交的说明（commit -m）', placeholder: '例如 fix: 修复登录判断' });
+      if (!msg) return;
+      args = ['-m', msg];
+    }
+    if (p.needHash) {
+      const hash = await promptDialog({ title: '还原提交', message: '填写要还原的提交号；留空则还原最近一次 HEAD', allowEmpty: true, placeholder: '例如 a1b2c3d' });
+      // 修复：填写了非法 hash 要明确报错并中止，绝不静默沿用预设里的 HEAD。
+      if (hash) {
+        if (!/^[A-Za-z0-9._~^-]{1,64}$/.test(hash)) {
+          toast('提交号不合法：只允许字母、数字、. _ ~ ^ -', true);
+          return;
+        }
+        args = ['--no-edit', hash];
+      }
+    }
+    if (p.needText) {
+      const text = await promptDialog({ title: p.label, message: p.hint || '请输入参数', placeholder: p.hint || '' });
+      if (!text) return;
+      // 修复 P1-1：stash-save 预设的 needText 是「stash 说明」，必须用 -m 注入。
+      // 直接 append 会生成 `git stash push -u <说明>`，说明被当成路径，git 返回
+      // "No local changes to save" 且 stash 为空；正确写法是 `git stash push -u -m <说明>`。
+      // 其余 needText（分支名 / 标签名 / 检出目标）仍是位置参数，直接 append。
+      if (p.command === 'stash' && (p.args || []).includes('push')) {
+        args = [...args, '-m', text];
+      } else {
+        args = [...args, text];
+      }
+    }
+    if (p.destructive) {
+      const okRun = await confirmDialog({
+        title: '破坏性 Git 操作确认',
+        message: `确定执行「${p.label}」（git ${p.command} ${args.join(' ')}）？该操作会改变工作区 / 提交历史，通常不可撤销，请先确认本地改动已备份。`,
+        confirmText: '确定执行', cancelText: '取消',
+      });
+      if (!okRun) return;
+    }
+    // 后端对破坏性命令强制 confirmed；preset 已确认（或命令本身需确认）时带上。
+    const confirmed = p.destructive || repoGitNeedsConfirm(p.command, args);
+    await execRepoGit(p.command, args, confirmed ? { confirmed: true } : {});
+    for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+    await refreshGitTab(repoGitTab);
+  } finally {
+    repoGitBusy = false;
+  }
+}
+
+/** 通用命令执行（自定义命令走 /repos/git 白名单入口）：忙位覆盖二次确认弹窗全程。 */
+async function runRepoGit(command, args) {
+  if (!repoGitRepo) { toast('请先从仓库列表选择仓库', true); return null; }
+  if (repoGitBusy) return null;
+  repoGitBusy = true;
+  try {
+    let confirmed = false;
+    if (repoGitNeedsConfirm(command, args)) {
+      const okRun = await confirmDialog({
+        title: '破坏性 Git 操作确认',
+        message: `确定执行「git ${command} ${(args || []).join(' ')}」？该操作会改变工作区 / 提交历史，通常不可撤销，请先确认本地改动已备份。`,
+        confirmText: '确定执行', cancelText: '取消',
+      });
+      if (!okRun) return null;
+      confirmed = true;
+    }
+    return await execRepoGit(command, args, confirmed ? { confirmed: true } : {});
+  } finally {
+    repoGitBusy = false;
+  }
+}
+
+/** 执行语义动作：破坏性动作先二次确认，再带 confirmed=true 调 /repos/git/action。 */
+async function runGitAction(action, params = {}) {
+  if (!repoGitRepo) { toast('请先从仓库列表选择仓库', true); return null; }
+  if (repoGitBusy) return null;
+  // 忙位在 await confirmDialog() 之前就置位：弹窗期间无法并发触发其它 Git 写操作。
+  repoGitBusy = true;
+  const btn = $('#repo-git-run');
+  if (btn) { btn.disabled = true; btn.textContent = '执行中…'; }
+  try {
+    let confirmed = false;
+    const DESTRUCTIVE_ACTIONS = ['discard', 'checkout', 'switchBranch', 'deleteBranch', 'merge', 'mergeAbort', 'revert', 'reset', 'stashPop', 'stashDrop', 'tagDelete', 'clean'];
+    if (DESTRUCTIVE_ACTIONS.includes(action)) {
+      confirmed = await confirmDialog({
+        title: '破坏性 Git 操作确认',
+        message: `确定执行「${action}」？该操作会改变工作区 / 提交历史，通常不可撤销，请先确认本地改动已备份。`,
+        confirmText: '确定执行', cancelText: '取消',
+      });
+      if (!confirmed) return null;
+    }
+    gitOut(`执行中：${action} ${JSON.stringify(params)} …`);
+    const r = await api('/repos/git/action', {
+      method: 'POST', body: { repo: repoGitRepo, action, params, confirmed },
+    });
+    gitOut(`> ${r.commandText}\n[${r.channelLabel} · ${r.actionLabel || action} · exit ${r.code}]\n\n${r.output || '(无输出)'}`);
+    if (r.code !== 0) toast(`${r.actionLabel || action} 返回 ${r.code}，请查看输出`, true);
+    return r;
+  } catch (e) {
+    gitOut(`执行失败：${e.message}`);
+    toast(e.message, true);
+    return null;
+  } finally {
+    repoGitBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = '执行'; }
+  }
+}
+
+/* --------------------------- 各分区渲染 --------------------------- */
+function colorizeDiff(patch) {
+  const lines = String(patch || '').split('\n');
+  return lines.map((l) => {
+    const t = esc(l);
+    if (/^\+\+\+|^--- /.test(l)) return `<span class="meta">${t}</span>`;
+    if (/^@@/.test(l)) return `<span class="hunk">${t}</span>`;
+    if (l.startsWith('+')) return `<span class="add">${t}</span>`;
+    if (l.startsWith('-')) return `<span class="del">${t}</span>`;
+    return t;
+  }).join('\n');
+}
+
+/** Unicode 显示宽度：东亚全角 / 宽字符按 2 列，其余按 1 列，用于给 SVG 文本留足横向空间。 */
+function gitTextWidth(s) {
+  let w = 0;
+  for (const ch of String(s || '')) {
+    const cp = ch.codePointAt(0);
+    const wide = (cp >= 0x1100 && (cp <= 0x115f || cp === 0x2329 || cp === 0x232a
+      || (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f)
+      || (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff)
+      || (cp >= 0xfe10 && cp <= 0xfe19) || (cp >= 0xfe30 && cp <= 0xfe6f)
+      || (cp >= 0xff00 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6)
+      || (cp >= 0x1f300 && cp <= 0x1faff) || (cp >= 0x20000 && cp <= 0x3fffd)));
+    w += wide ? 2 : 1;
+  }
+  return w;
+}
+
+function graphSvg(text) {
+  // 把 git log --graph 的纯字符画转成等宽 SVG：按行画字符，保留 |/\\* 分支拓扑视觉。
+  // v0.4.31 修复：宽度按每行「显示列数」自适应（中文/宽字符算 2 列），不再用
+  // 固定上限（原 1100px）硬截断；长行由 .git-wb-branch-graph 的 overflow:auto 横向滚动查看。
+  const rows = String(text || '').split('\n');
+  const w = 8.2, h = 16, pad = 6;
+  const maxCols = Math.max(1, ...rows.map((r) => gitTextWidth(r)));
+  const width = Math.ceil(maxCols * w + pad * 2 + 24);
+  const height = Math.min(600, rows.length * h + pad * 2);
+  let out = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,Consolas,monospace" font-size="12">`;
+  for (let i = 0; i < rows.length; i++) {
+    const line = rows[i];
+    // graph 部分（首个字母/数字前的字符）着色，其余按普通文本
+    const m = line.match(/^([^\w]*)(.*)$/);
+    const glyph = m ? m[1] : '';
+    const rest = m ? m[2] : line;
+    let x = pad;
+    for (const ch of glyph) {
+      const color = /[|\\/_]/.test(ch) ? '#2563eb' : (/[*_]/.test(ch) ? '#dc2626' : '#7c3aed');
+      out += `<text x="${x.toFixed(1)}" y="${(pad + (i + 1) * h - 4).toFixed(1)}" fill="${color}">${esc(ch)}</text>`;
+      x += gitTextWidth(ch) * w;
+    }
+    if (rest) out += `<text x="${x.toFixed(1)}" y="${(pad + (i + 1) * h - 4).toFixed(1)}" fill="#334155">${esc(rest)}</text>`;
+  }
+  out += '</svg>';
+  return out;
+}
+
+async function renderGitStatus() {
+  const pane = gitPane('status');
+  if (!pane) return;
+  const d = await gitLoadView('status');
+  if (!d) { pane.innerHTML = gitEmpty('无法读取工作区状态'); return; }
+  const sum = `<div class="git-wb-summary">
+    ${gitBadge(`分支 ${d.branch}`)}
+    ${d.upstream ? gitBadge(`上游 ${d.upstream}`, 'blue') : ''}
+    ${d.ahead ? gitBadge(`领先 ${d.ahead}`, 'green') : ''}
+    ${d.behind ? gitBadge(`落后 ${d.behind}`, 'amber') : ''}
+    ${d.clean ? gitBadge('工作区干净', 'green') : gitBadge(`${d.files.length} 个改动`, 'amber')}
+    ${d.conflicts && d.conflicts.length ? gitBadge(`${d.conflicts.length} 个冲突`, 'red') : ''}
+  </div>`;
+  const rows = d.files.length ? d.files.map((f) => `<tr>
+    <td class="git-wb-check"><input type="checkbox" data-gf="${esc(f.path)}" /></td>
+    <td class="mono">${esc(f.x + f.y)}</td>
+    <td>${gitBadge(f.label, f.conflicted ? 'red' : (f.staged ? 'green' : 'gray'))}</td>
+    <td class="mono">${esc(f.path)}${f.origPath ? ` <span class="muted">← ${esc(f.origPath)}</span>` : ''}</td>
+    <td>${f.staged ? gitBadge('已暂存', 'green') : ''}${f.unstaged ? gitBadge('未暂存', 'amber') : ''}</td>
+  </tr>`).join('') : `<tr><td colspan="5" class="git-wb-empty">没有未提交的改动</td></tr>`;
+  pane.innerHTML = `<div class="git-wb-card">
+    <h4>工作区状态</h4>${sum}
+    <div class="table-wrap"><table class="git-wb-table"><thead><tr><th></th><th>状态</th><th>类型</th><th>文件</th><th>暂存区</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="git-wb-actions" style="margin-top:10px">
+      <button class="btn btn-sm btn-primary" type="button" data-gact="stageSel">暂存选中</button>
+      <button class="btn btn-sm" type="button" data-gact="stageAll">暂存全部</button>
+      <button class="btn btn-sm" type="button" data-gact="unstageSel">取消暂存</button>
+      <button class="btn btn-sm btn-danger" type="button" data-gact="discardSel">放弃选中改动</button>
+      <button class="btn btn-sm" type="button" data-gact="showDiff">查看差异</button>
+    </div>
+  </div><div id="git-wb-status-diff"></div>`;
+  pane.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', async () => {
+    const act = b.dataset.gact;
+    const paths = gitCheckedPaths();
+    if (act === 'stageSel') {
+      if (!paths.length) { toast('请先勾选要暂存的文件', true); return; }
+      await runGitAction('stage', { paths });
+    } else if (act === 'stageAll') {
+      await runRepoGit('add', ['-A']);
+    } else if (act === 'unstageSel') {
+      if (!paths.length) { toast('请先勾选要取消暂存的文件', true); return; }
+      await runGitAction('unstage', { paths });
+    } else if (act === 'discardSel') {
+      if (!paths.length) { toast('请先勾选要放弃改动的文件', true); return; }
+      await runGitAction('discard', { paths });
+    } else if (act === 'showDiff') {
+      const box = $('#git-wb-status-diff');
+      if (box) box.innerHTML = `<div class="git-wb-card"><h4>差异</h4><div class="git-wb-inline"><label><input type="checkbox" id="git-wb-diff-staged" /> 仅暂存区</label><button class="btn btn-sm" type="button" id="git-wb-diff-load">加载</button></div><div id="git-wb-diff-body"></div></div>`;
+      const load = async () => {
+        const staged = Boolean(($('#git-wb-diff-staged') || {}).checked);
+        const dd = await gitLoadView('diff', { staged, paths }, { refresh: true });
+        const body = $('#git-wb-diff-body');
+        if (body && dd) body.innerHTML = `<div class="git-wb-diff">${colorizeDiff(dd.patch)}</div>`;
+      };
+      const lb = $('#git-wb-diff-load');
+      if (lb) lb.addEventListener('click', () => void load());
+      await load();
+      return;
+    }
+    for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+    await refreshGitTab('status');
+  }));
+}
+
+async function renderGitLog() {
+  const pane = gitPane('log');
+  if (!pane) return;
+  const [d, g] = await Promise.all([gitLoadView('log', { count: 50 }), gitLoadView('graph', { count: 40 })]);
+  if (!d) { pane.innerHTML = gitEmpty('无法读取提交日志'); return; }
+  const rows = d.commits.map((c) => `<tr class="clickable" data-ghash="${esc(c.hash)}">
+    <td class="mono">${esc(c.short)}</td>
+    <td>${esc(c.subject)}</td>
+    <td class="mono">${esc(c.author)}</td>
+    <td class="mono">${esc((c.date || '').slice(0, 16).replace('T', ' '))}</td>
+    <td>${(c.refs || []).slice(0, 3).map((r) => gitBadge(r, 'blue')).join(' ')}</td>
+  </tr>`).join('');
+  pane.innerHTML = `<div class="git-wb-card"><h4>提交分支图</h4><div class="git-wb-branch-graph">${graphSvg((g || {}).lines ? g.lines.join('\n') : '')}</div></div>
+  <div class="git-wb-card"><h4>提交日志（点击行查看提交详情）</h4>
+    <div class="table-wrap"><table class="git-wb-table"><thead><tr><th>提交</th><th>说明</th><th>作者</th><th>时间</th><th>引用</th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="git-wb-empty">暂无提交</td></tr>`}</tbody></table></div>
+  </div><div id="git-wb-commit-detail"></div>`;
+  pane.querySelectorAll('[data-ghash]').forEach((tr) => tr.addEventListener('click', async () => {
+    const hash = tr.dataset.ghash;
+    const dd = await gitLoadView('show', { hash }, { refresh: true });
+    const box = $('#git-wb-commit-detail');
+    if (!box || !dd) return;
+    const c = dd.commit || {};
+    box.innerHTML = `<div class="git-wb-card git-wb-commit-detail"><h4>提交详情 · ${esc(c.short || hash)}</h4>
+      <div class="meta">${esc(c.hash || '')}<br/>作者：${esc(c.author || '')} &lt;${esc(c.email || '')}&gt; · ${esc(c.date || '')}<br/>${esc(c.subject || '')}${c.body ? `<br/><br/>${esc(c.body)}` : ''}</div>
+      <div class="git-wb-diff" style="margin-top:10px">${colorizeDiff(dd.patch)}</div>
+      <div class="git-wb-actions" style="margin-top:10px">
+        <button class="btn btn-sm btn-danger" type="button" data-gdetail="revert">还原此提交</button>
+        <button class="btn btn-sm btn-danger" type="button" data-gdetail="reset">重置到此提交</button>
+      </div></div>`;
+    box.querySelectorAll('[data-gdetail]').forEach((b) => b.addEventListener('click', async () => {
+      if (b.dataset.gdetail === 'revert') await runGitAction('revert', { hash });
+      else await runGitAction('reset', { mode: 'hard', ref: hash });
+      for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+      await refreshGitTab('log');
+    }));
+    box.scrollIntoView({ block: 'nearest' });
+  }));
+}
+
+async function renderGitCommit() {
+  const pane = gitPane('commit');
+  if (!pane) return;
+  const d = await gitLoadView('status');
+  if (!d) { pane.innerHTML = gitEmpty('无法读取工作区状态'); return; }
+  const staged = d.files.filter((f) => f.staged);
+  const unstaged = d.files.filter((f) => !f.staged);
+  pane.innerHTML = `<div class="git-wb-card"><h4>提交（逐文件暂存 → 填写说明 → 提交）</h4>
+    <div class="git-wb-inline"><b style="font-size:12px">待提交（${staged.length}）</b></div>
+    <div class="table-wrap"><table class="git-wb-table"><tbody>${staged.length ? staged.map((f) => `<tr><td class="mono">${esc(f.x + f.y)}</td><td class="mono">${esc(f.path)}</td></tr>`).join('') : `<tr><td class="git-wb-empty">暂存区为空</td></tr>`}</tbody></table></div>
+    <div class="git-wb-inline" style="margin-top:10px"><b style="font-size:12px">未暂存（${unstaged.length}）</b></div>
+    <div class="table-wrap"><table class="git-wb-table"><tbody>${unstaged.length ? unstaged.map((f) => `<tr><td class="mono">${esc(f.x + f.y)}</td><td class="mono">${esc(f.path)}</td><td><button class="btn btn-sm" type="button" data-gstage="${esc(f.path)}">暂存</button></td></tr>`).join('') : `<tr><td class="git-wb-empty">无未暂存改动</td></tr>`}</tbody></table></div>
+    <div class="form" style="margin-top:12px">
+      <label>提交说明<input id="git-wb-commit-msg" placeholder="例如 fix: 修复登录判断" autocomplete="off" /></label>
+      <div class="git-wb-actions"><button class="btn btn-sm" type="button" data-gact="stageAll">暂存全部改动</button><button class="btn btn-primary" type="button" data-gact="commit">提交</button><button class="btn btn-sm" type="button" data-gact="commitPush">提交并推送</button></div>
+    </div></div>`;
+  pane.querySelectorAll('[data-gstage]').forEach((b) => b.addEventListener('click', async () => {
+    await runGitAction('stage', { paths: [b.dataset.gstage] });
+    for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+    await refreshGitTab('commit');
+  }));
+  pane.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', async () => {
+    const act = b.dataset.gact;
+    if (act === 'stageAll') {
+      await runRepoGit('add', ['-A']);
+    } else if (act === 'commit' || act === 'commitPush') {
+      const msg = gitVal('git-wb-commit-msg');
+      if (!msg) { toast('请填写提交说明', true); return; }
+      const r = await runGitAction('commit', { message: msg });
+      if (act === 'commitPush' && r && r.code === 0) await runGitAction('push', {});
+    }
+    for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+    await refreshGitTab('commit');
+  }));
+}
+
+async function renderGitBranch() {
+  const pane = gitPane('branch');
+  if (!pane) return;
+  const d = await gitLoadView('branches');
+  if (!d) { pane.innerHTML = gitEmpty('无法读取分支列表'); return; }
+  const rows = d.branches.map((b) => {
+    // v0.4.31 修复：远程分支行（remotes/origin/x）点选时若把完整引用名填进输入框，
+    // 「删除分支 / 合并」必然失败（git 不接受远程引用作为本地分支名）。
+    // 这里点选填入去掉 remotes/<remote>/ 前缀的短名，仅供切换 / 检出；删除 / 合并
+    // 仍在点击动作时按 kind 拦截提示，避免误操作。
+    const shortName = b.kind === 'remote' ? String(b.name).replace(/^remotes\/[^/]+\//, '') : b.name;
+    return `<tr class="clickable" data-gbranch="${esc(b.name)}" data-gfill="${esc(shortName)}" data-gkind="${esc(b.kind || 'local')}">
+    <td>${b.current ? gitBadge('当前', 'green') : ''}</td>
+    <td class="mono">${esc(b.name)}</td>
+    <td class="mono">${esc(b.hash)}</td>
+    <td class="mono">${esc(b.upstream || '')}</td>
+    <td>${esc(b.track || '')}</td>
+    <td>${esc(b.subject || '')}</td>
+    <td>${b.kind === 'remote' ? gitBadge('远程', 'blue') : ''}</td>
+  </tr>`;
+  }).join('');
+  pane.innerHTML = `<div class="git-wb-card"><h4>分支列表（点击行切换）</h4>
+    <div class="table-wrap"><table class="git-wb-table"><thead><tr><th></th><th>分支</th><th>提交</th><th>上游</th><th>同步</th><th>说明</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="7" class="git-wb-empty">暂无分支</td></tr>`}</tbody></table></div></div>
+    <div class="git-wb-card"><h4>分支操作</h4>
+      <div class="git-wb-inline">
+        <input id="git-wb-branch-name" placeholder="分支名" autocomplete="off" />
+        <button class="btn btn-sm btn-primary" type="button" data-gact="create">新建分支</button>
+        <button class="btn btn-sm" type="button" data-gact="switch">切换 / 检出</button>
+        <button class="btn btn-sm btn-danger" type="button" data-gact="delete">删除分支</button>
+        <button class="btn btn-sm btn-danger" type="button" data-gact="merge">合并进当前分支</button>
+      </div></div>`;
+  pane.querySelectorAll('[data-gbranch]').forEach((tr) => tr.addEventListener('click', () => {
+    const el = $('#git-wb-branch-name');
+    // 远程分支填短名（去掉 remotes/origin/ 前缀），可用作切换目标；
+    // 删除 / 合并需要本地分支名，下面按 kind 校验。
+    if (el) el.value = tr.dataset.gfill || tr.dataset.gbranch;
+  }));
+  pane.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', async () => {
+    const name = gitVal('git-wb-branch-name');
+    if (!name) { toast('请填写或点选分支名', true); return; }
+    const act = b.dataset.gact;
+    // 拦截远程引用误用：点选 remotes/* 行或手工输入含 remotes/ 前缀时，
+    // 删除 / 合并 / 新建本地分支都会失败，直接给出明确提示。
+    if (/^remotes\//.test(name) && ['create', 'delete', 'merge'].includes(act)) {
+      toast('这是远程分支引用，删除 / 合并 / 新建请填本地分支名；远程分支只用于「切换 / 检出」', true);
+      return;
+    }
+    if (act === 'create') await runGitAction('createBranch', { name });
+    else if (act === 'switch') await runGitAction('switchBranch', { name });
+    else if (act === 'delete') await runGitAction('deleteBranch', { name });
+    else if (act === 'merge') await runGitAction('merge', { ref: name });
+    for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+    await refreshGitTab('branch');
+  }));
+}
+
+async function renderGitSync() {
+  const pane = gitPane('sync');
+  if (!pane) return;
+  const [st, rm] = await Promise.all([gitLoadView('status'), gitLoadView('remotes')]);
+  const s = st || {};
+  pane.innerHTML = `<div class="git-wb-card"><h4>同步状态</h4>
+    <div class="git-wb-summary">${gitBadge(`分支 ${s.branch || '—'}`)}${s.upstream ? gitBadge(`上游 ${s.upstream}`, 'blue') : ''}${s.ahead ? gitBadge(`领先 ${s.ahead} 待推送`, 'green') : ''}${s.behind ? gitBadge(`落后 ${s.behind} 待拉取`, 'amber') : ''}</div>
+    <div class="git-wb-inline"><label>远端 <input id="git-wb-sync-remote" placeholder="留空用默认远端" autocomplete="off" /></label><label>分支 <input id="git-wb-sync-branch" placeholder="留空用当前分支" autocomplete="off" /></label></div>
+    <div class="git-wb-actions" style="margin-top:10px">
+      <button class="btn btn-sm btn-primary" type="button" data-gact="fetch">Fetch 拉取元数据</button>
+      <button class="btn btn-sm btn-primary" type="button" data-gact="pull">Pull 拉取更新</button>
+      <button class="btn btn-sm btn-primary" type="button" data-gact="push">Push 推送</button>
+    </div></div>
+    <div class="git-wb-card"><h4>远程仓库</h4><div class="table-wrap"><table class="git-wb-table"><thead><tr><th>名称</th><th>fetch</th><th>push</th></tr></thead><tbody>${(rm && rm.remotes.length) ? rm.remotes.map((r) => `<tr><td class="mono">${esc(r.name)}</td><td class="mono">${esc(r.fetch)}</td><td class="mono">${esc(r.push)}</td></tr>`).join('') : `<tr><td colspan="3" class="git-wb-empty">未配置远程仓库</td></tr>`}</tbody></table></div></div>`;
+  pane.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', async () => {
+    const remote = gitVal('git-wb-sync-remote');
+    const branch = gitVal('git-wb-sync-branch');
+    const params = { ...(remote ? { remote } : {}), ...(branch ? { branch } : {}) };
+    const act = b.dataset.gact;
+    await runGitAction(act, params);
+    for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+    await refreshGitTab('sync');
+  }));
+}
+
+async function renderGitStash() {
+  const pane = gitPane('stash');
+  if (!pane) return;
+  const d = await gitLoadView('stash');
+  if (!d) { pane.innerHTML = gitEmpty('无法读取 Stash 列表'); return; }
+  const rows = d.stashes.map((s, i) => `<tr class="clickable" data-gstash="${esc(s.ref || `stash@{${i}}`)}">
+    <td class="mono">${esc(s.ref || `stash@{${i}}`)}</td><td>${esc(s.message)}</td><td class="mono">${esc((s.date || '').slice(0, 16).replace('T', ' '))}</td>
+  </tr>`).join('');
+  pane.innerHTML = `<div class="git-wb-card"><h4>Stash 储藏（点击行选中）</h4>
+    <div class="table-wrap"><table class="git-wb-table"><thead><tr><th>引用</th><th>说明</th><th>时间</th></tr></thead><tbody>${rows || `<tr><td colspan="3" class="git-wb-empty">暂无 Stash</td></tr>`}</tbody></table></div>
+    <div class="git-wb-inline" style="margin-top:10px"><input id="git-wb-stash-ref" placeholder="stash@{0}（留空用最近一条）" autocomplete="off" /><input id="git-wb-stash-msg" placeholder="Stash 说明（保存时可选）" autocomplete="off" /></div>
+    <div class="git-wb-actions" style="margin-top:8px">
+      <button class="btn btn-sm btn-primary" type="button" data-gact="save">保存 Stash</button>
+      <button class="btn btn-sm" type="button" data-gact="apply">应用 (apply)</button>
+      <button class="btn btn-sm btn-danger" type="button" data-gact="pop">弹出 (pop)</button>
+      <button class="btn btn-sm btn-danger" type="button" data-gact="drop">丢弃 (drop)</button>
+    </div></div>`;
+  pane.querySelectorAll('[data-gstash]').forEach((tr) => tr.addEventListener('click', () => {
+    const el = $('#git-wb-stash-ref');
+    if (el) el.value = tr.dataset.gstash;
+  }));
+  pane.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', async () => {
+    const ref = gitVal('git-wb-stash-ref');
+    const msg = gitVal('git-wb-stash-msg');
+    const act = b.dataset.gact;
+    const params = ref ? { ref } : {};
+    if (act === 'save') await runGitAction('stashSave', { includeUntracked: true, ...(msg ? { message: msg } : {}) });
+    else if (act === 'apply') await runGitAction('stashApply', params);
+    else if (act === 'pop') await runGitAction('stashPop', params);
+    else if (act === 'drop') await runGitAction('stashDrop', params);
+    for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+    await refreshGitTab('stash');
+  }));
+}
+
+async function renderGitTag() {
+  const pane = gitPane('tag');
+  if (!pane) return;
+  const d = await gitLoadView('tags');
+  if (!d) { pane.innerHTML = gitEmpty('无法读取标签列表'); return; }
+  const rows = d.tags.map((t) => `<tr class="clickable" data-gtag="${esc(t.name)}"><td class="mono">${esc(t.name)}</td><td>${esc(t.message || '')}</td></tr>`).join('');
+  pane.innerHTML = `<div class="git-wb-card"><h4>标签（点击行选中）</h4>
+    <div class="table-wrap"><table class="git-wb-table"><thead><tr><th>标签</th><th>附注</th></tr></thead><tbody>${rows || `<tr><td colspan="2" class="git-wb-empty">暂无标签</td></tr>`}</tbody></table></div>
+    <div class="git-wb-inline" style="margin-top:10px"><input id="git-wb-tag-name" placeholder="标签名" autocomplete="off" /><input id="git-wb-tag-msg" placeholder="附注信息（可选）" autocomplete="off" /></div>
+    <div class="git-wb-actions" style="margin-top:8px"><button class="btn btn-sm btn-primary" type="button" data-gact="create">新建标签</button><button class="btn btn-sm btn-danger" type="button" data-gact="delete">删除标签</button></div></div>`;
+  pane.querySelectorAll('[data-gtag]').forEach((tr) => tr.addEventListener('click', () => { const el = $('#git-wb-tag-name'); if (el) el.value = tr.dataset.gtag; }));
+  pane.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', async () => {
+    const name = gitVal('git-wb-tag-name');
+    if (!name) { toast('请填写或点选标签名', true); return; }
+    const msg = gitVal('git-wb-tag-msg');
+    if (b.dataset.gact === 'create') await runGitAction('tagCreate', { name, ...(msg ? { message: msg } : {}) });
+    else await runGitAction('tagDelete', { name });
+    for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+    await refreshGitTab('tag');
+  }));
+}
+
+async function renderGitConflict() {
+  const pane = gitPane('conflict');
+  if (!pane) return;
+  const [st, cf] = await Promise.all([gitLoadView('status'), gitLoadView('conflicts')]);
+  const conflicts = (cf && cf.files) || (st && st.conflicts) || [];
+  pane.innerHTML = `<div class="git-wb-card"><h4>冲突 / 还原 / 重置</h4>
+    <div class="git-wb-summary">${conflicts.length ? gitBadge(`${conflicts.length} 个冲突文件`, 'red') : gitBadge('无冲突', 'green')}</div>
+    ${conflicts.length ? `<div class="table-wrap"><table class="git-wb-table"><tbody>${conflicts.map((f) => `<tr><td class="mono">${esc(f)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    <div class="git-wb-inline" style="margin-top:10px"><input id="git-wb-conflict-ref" placeholder="提交号 / 分支（留空用 HEAD）" autocomplete="off" /></div>
+    <div class="git-wb-actions" style="margin-top:8px">
+      <button class="btn btn-sm" type="button" data-gact="abort">中止合并 (merge --abort)</button>
+      <button class="btn btn-sm btn-danger" type="button" data-gact="revert">还原提交</button>
+      <button class="btn btn-sm btn-danger" type="button" data-gact="resetSoft">重置 (soft)</button>
+      <button class="btn btn-sm btn-danger" type="button" data-gact="resetMixed">重置 (mixed)</button>
+      <button class="btn btn-sm btn-danger" type="button" data-gact="resetHard">重置 (hard)</button>
+      <button class="btn btn-sm btn-danger" type="button" data-gact="restore">放弃全部本地改动</button>
+    </div></div>`;
+  pane.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', async () => {
+    const ref = gitVal('git-wb-conflict-ref');
+    const act = b.dataset.gact;
+    if (act === 'abort') await runGitAction('mergeAbort', {});
+    else if (act === 'revert') await runGitAction('revert', ref ? { hash: ref } : {});
+    else if (act === 'resetSoft') await runGitAction('reset', { mode: 'soft', ref: ref || 'HEAD~1' });
+    else if (act === 'resetMixed') await runGitAction('reset', { mode: 'mixed', ref: ref || 'HEAD~1' });
+    else if (act === 'resetHard') await runGitAction('reset', { mode: 'hard', ref: ref || 'HEAD~1' });
+    // v0.4.31 修复：「放弃全部本地改动」走语义动作 discard（needConfirm=true），
+    // 前端 confirmDialog + 后端 /action 强制 confirmed 双保险，避免误删无提示。
+    else if (act === 'restore') await runGitAction('discard', {});
+    for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+    await refreshGitTab('conflict');
+  }));
+}
+
+async function renderGitClean() {
+  const pane = gitPane('clean');
+  if (!pane) return;
+  pane.innerHTML = `<div class="git-wb-card"><h4>Clean up · 清理未跟踪文件</h4>
+    <div class="notice warn">清理会永久删除未跟踪的文件 / 目录。建议先「预览」确认清单，再执行清理。</div>
+    <div class="git-wb-actions" style="margin-top:10px"><button class="btn btn-sm" type="button" data-gact="preview">预览将被清理的文件</button><button class="btn btn-sm btn-danger" type="button" data-gact="clean">执行清理</button></div>
+  </div><div id="git-wb-clean-result"></div>`;
+  pane.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', async () => {
+    if (b.dataset.gact === 'preview') {
+      const r = await runRepoGit('clean', ['-n', '-d']);
+      const box = $('#git-wb-clean-result');
+      if (box) box.innerHTML = `<div class="git-wb-card"><h4>清理预览结果</h4><pre class="git-wb-diff">${esc((r && r.output) || '（无未跟踪文件）')}</pre></div>`;
+    } else {
+      await runGitAction('clean', {});
+      for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+      await refreshGitTab('clean');
+    }
+  }));
+}
+
+function renderGitCustom() {
+  const pane = gitPane('custom');
+  if (!pane) return;
+  const presetsCard = `<div class="git-wb-card" style="margin-top:12px"><h4>全部快捷命令</h4><div class="git-wb-actions">${repoGitPresets.map((p) => `<button class="btn btn-sm ${p.destructive ? 'btn-danger' : (p.write ? 'btn-primary' : '')}" type="button" data-gpreset-all="${esc(p.key)}" title="${esc(p.hint || '')}">${esc(p.ico)} ${esc(p.label)}</button>`).join('')}</div></div>`;
+  if (!pane.dataset.built) {
+    pane.innerHTML = `<div class="git-wb-card"><h4>自定义 Git 命令</h4>
+      <div class="notice warn">只接受白名单内的 Git 子命令与参数，禁止 shell 元字符与 --git-dir / --work-tree 等越权选项。写操作需仓库写权限。</div>
+      <div id="git-wb-custom-form-slot"></div></div>${presetsCard}`;
+    // 把静态 form 搬进本分区（静态 id 保持不变，boot 期绑定不失效）。
+    const form = $('#repo-git-form');
+    const slot = $('#git-wb-custom-form-slot');
+    if (form && slot && slot.appendChild) { slot.appendChild(form); form.hidden = false; }
+    pane.dataset.built = '1';
+    pane.querySelectorAll('[data-gpreset-all]').forEach((b) => b.addEventListener('click', () => void runGitPreset(b.dataset.gpresetAll)));
+    if (form) form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const parts = splitGitCommand(gitVal('repo-git-input'));
+      if (!parts.length) { toast('请输入 Git 子命令，例如 status 或 log --oneline -n 5', true); return; }
+      void runRepoGit(parts[0], parts.slice(1));
+    });
+    const clear = $('#repo-git-clear');
+    if (clear) clear.addEventListener('click', () => gitOut('—'));
+  } else {
+    // 只刷新「全部快捷命令」卡片，form 已存在且不重建，避免重复绑定。
+    const card = pane.querySelector('.git-wb-card:last-child');
+    if (card) card.outerHTML = presetsCard.trim();
+    pane.querySelectorAll('[data-gpreset-all]').forEach((b) => b.addEventListener('click', () => void runGitPreset(b.dataset.gpresetAll)));
+  }
+}
+
+async function refreshGitTab(tab) {
+  renderGitToolbar();
+  const map = {
+    status: renderGitStatus, log: renderGitLog, commit: renderGitCommit,
+    branch: renderGitBranch, sync: renderGitSync, stash: renderGitStash,
+    tag: renderGitTag, conflict: renderGitConflict, clean: renderGitClean,
+    custom: renderGitCustom,
+  };
+  const fn = map[tab];
+  if (fn) await fn();
+}
 
 async function openRepoGitModal(repo) {
   repoGitRepo = String(repo || '');
@@ -1319,43 +2005,26 @@ async function openRepoGitModal(repo) {
   if (!modal) return;
   const title = $('#repo-git-title');
   if (title) title.textContent = `Git 操作 · ${repoGitRepo}`;
-  const out = $('#repo-git-output');
-  if (out) out.textContent = '选择上方快捷命令，或输入自定义命令后点「执行」。';
+  gitOut('选择一个标签开始操作。');
+  for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+  repoGitTab = 'status';
   try {
-    const [rt, presets] = await Promise.all([api('/git/runtime'), api('/repos/git/presets')]);
+    const [rt, presets, groups] = await Promise.all([
+      api('/git/runtime'), api('/repos/git/presets'), api('/repos/git/groups'),
+    ]);
     const eff = rt.effectiveGit || {};
     const sub = $('#repo-git-sub');
     if (sub) sub.textContent = `通道：${rt.effective === 'container' ? '平台容器 / 本机' : `SSH 宿主机 ${eff.host || ''}`}${eff.version ? ` · Git ${eff.version}` : ''} · 工作区仓库 ${repoGitRepo}`;
     repoGitPresets = presets.items || [];
-    const box = $('#repo-git-presets');
-    if (box) {
-      box.innerHTML = repoGitPresets.map((p) => `<button class="btn btn-sm ${p.destructive ? 'btn-danger' : (p.write ? 'btn-primary' : '')}" type="button" data-repo-git-preset="${esc(p.key)}" title="${esc(p.hint || (p.write ? '会写入仓库 / 远端，需要仓库写权限' : '只读命令'))}">${esc(p.label)}</button>`).join('');
-      box.querySelectorAll('[data-repo-git-preset]').forEach((b) => b.addEventListener('click', async () => {
-        const p = repoGitPresets.find((x) => x.key === b.dataset.repoGitPreset);
-        if (!p) return;
-        let args = [...(p.args || [])];
-        if (p.needMessage) {
-          const msg = String(($('#repo-git-message') || {}).value || '').trim();
-          if (!msg) { toast('请先在「提交说明」里填写内容', true); return; }
-          args = ['-m', msg];
-        }
-        if (p.needHash) {
-          const hash = String(($('#repo-git-hash') || {}).value || '').trim();
-          if (hash && /^[A-Za-z0-9._~^-]{1,64}$/.test(hash)) args = ['--no-edit', hash];
-        }
-        if (p.destructive) {
-          const okRun = await confirmDialog({
-            title: '破坏性 Git 操作确认',
-            message: `确定执行「${p.label}」（git ${p.command} ${args.join(' ')}）？该操作会改变工作区 / 提交历史，通常不可撤销，请先确认本地改动已备份。`,
-            confirmText: '确定执行', cancelText: '取消',
-          });
-          if (!okRun) return;
-        }
-        void runRepoGit(p.command, args);
-      }));
-    }
-  } catch (e) { toast(e.message, true); }
+    repoGitGroups = groups.items || [];
+  } catch (e) { toast(e.message, true); return; }
+  renderGitTabs();
+  for (const g of repoGitGroups) {
+    const p = gitPane(g.id);
+    if (p) p.hidden = g.id !== repoGitTab;
+  }
   modal.hidden = false;
+  await refreshGitTab(repoGitTab);
 }
 
 function closeRepoGitModal() {
@@ -1363,23 +2032,6 @@ function closeRepoGitModal() {
   if (modal) modal.hidden = true;
 }
 
-async function runRepoGit(command, args) {
-  const out = $('#repo-git-output');
-  const btn = $('#repo-git-run');
-  if (!repoGitRepo) { toast('请先从仓库列表选择仓库', true); return; }
-  if (btn) { btn.disabled = true; btn.textContent = '执行中…'; }
-  if (out) out.textContent = `执行中：git ${command} ${(args || []).join(' ')} …`;
-  try {
-    const r = await api('/repos/git', { method: 'POST', body: { repo: repoGitRepo, command, args: args || [] } });
-    if (out) out.textContent = `> ${r.commandText}\n[${r.channelLabel} · Git ${r.gitVersion || '—'} · exit ${r.code}]\n\n${r.output || '(无输出)'}`;
-    if (r.code !== 0) toast(`Git ${command} 返回 ${r.code}，请查看输出`, true);
-  } catch (e) {
-    if (out) out.textContent = `执行失败：${e.message}`;
-    toast(e.message, true);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '执行'; }
-  }
-}
 
 /* ------------------------- Git 运行时（v0.3.3） ------------------------- */
 // 点击「克隆」之前就能看到 Git 是否就绪；容器镜像缺 Git 时提示走 SSH 宿主机兜底。
@@ -7187,18 +7839,12 @@ if (ideCredEnvBtn) ideCredEnvBtn.addEventListener('click', () => {
 const hostInfoRefreshBtn = $('#host-info-refresh');
 if (hostInfoRefreshBtn) hostInfoRefreshBtn.addEventListener('click', () => { void loadHostInfo(true); });
 
-const repoGitForm = $('#repo-git-form');
-if (repoGitForm) repoGitForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const input = $('#repo-git-input');
-  const parts = String(input ? input.value : '').trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) { toast('请输入 Git 子命令，例如 status 或 log --oneline -n 5', true); return; }
-  void runRepoGit(parts[0], parts.slice(1));
-});
-const repoGitClearBtn = $('#repo-git-clear');
-if (repoGitClearBtn) repoGitClearBtn.addEventListener('click', () => {
-  const o = $('#repo-git-output');
-  if (o) o.textContent = '—';
+// v0.4.31：Git 操作弹窗改为 TortoiseGit 式多标签工作台。
+// 自定义命令表单由 renderGitCustom() 动态绑定（见工作台 JS），此处只保留关闭 / 刷新 / ESC。
+const repoGitRefreshBtn = $('#repo-git-refresh');
+if (repoGitRefreshBtn) repoGitRefreshBtn.addEventListener('click', () => {
+  for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+  void refreshGitTab(repoGitTab);
 });
 $$('[data-repo-git-close]').forEach((b) => b.addEventListener('click', closeRepoGitModal));
 document.addEventListener('keydown', (e) => {

@@ -1,3 +1,28 @@
+<!-- BEGIN PENDING-RELEASE-NOTES: 待发版元信息，CI 生成 Release notes 时整块剥离，勿删此对标记 -->
+【待发版 · v0.4.31 阶段】Git 工作台（TortoiseGit 式）—— 已完成实现与本地验证，尚未发版
+  状态：仓库版本仍 `0.4.30`；未升版本号、未打 tag、未发 GitHub Release、未部署 246。
+  246 线上仍运行 v0.4.30 代码。以下改动待用户明确发版指令后再执行提交 / 推送 / 打 tag / 发版 / 部署。
+  1) 交互升级（README §70）：沿用仓库列表「Git 操作」按钮，弹窗内改为 10 分区多标签工作台
+     —— 状态 / 提交日志 / 提交 / 分支·合并 / 同步 / Stash / 标签 / 冲突·还原 / 清理 / 自定义命令。
+     参考本机 TortoiseGit 真实菜单术语（Commit / Pull / Push / Merge / Switch / Create Branch /
+     Create Tag / Abort Merge / Stash / Clean up / Show log / Diff Two Commits）。
+  2) 后端：新增 `platform/src/gitView.js`（11 个结构化只读视图 + 23 个语义动作）；
+     `workspaceGit.js` 扩展命令白名单、新增 `classifyCommand()` 精确读写分类（混合命令按参数判定）、
+     `presets()` 分组与 `groups()`；`server.js` 新增 `/repos/git/view`、`/repos/git/action`、`/repos/git/groups`，
+     旧 `/repos/git` 保留兼容并改用精确分类做仓库级写权限收口。
+  3) 前端：结构化状态表（逐文件暂存/取消/放弃）、可点选提交日志 + SVG 分支图 + 着色 diff、
+     参数化分支 / 同步 / Stash / 标签 / 冲突 / 清理面板；破坏性动作统一二次确认；
+     `check-frontend.js` 护栏累计 202 条，缓存戳 `20261124q → 20261124r → 20261125a`。
+  3b) 复核修复（对照「分析未提交改动中的 bug 和不完善之处」逐条实测）：4 个 P1 功能 Bug
+     （放弃改动无二次确认 / stash 预设缺 -m / quoted-path 未反转义 / view 忽略退出码）、
+     6 项 P2 体验健壮性、文档数字与 release-notes 待发版段处理；详见 README §70.5。
+  4) 验证：`scripts/smoke-git-workbench.js`（`npm run smoke:gitwb`，真实 server）35 项全过；
+     新增 `scripts/smoke-git-workbench-frontend.js`（`npm run smoke:gitwb:fe`）16 项前端交互级
+     行为测试全过（vm 跑真实函数体，覆盖 4 个 P1，而非字符串护栏）；
+     `npm run check` / `npm run typecheck`（75 ≤ 基线 78）/ `check-frontend.js`（202 条）全过；
+     历史冒烟 smoke:git 31 / smoke:api 52 / smoke:security 49 / smoke:import 11 / smoke:hardening 12 全过。
+<!-- END PENDING-RELEASE-NOTES -->
+
 由 GitHub Actions 在 windows-latest 上构建，并把官方原版二进制内嵌进全量包。
 
 【重要】START.bat 与 INSTALL.bat 不是一回事：

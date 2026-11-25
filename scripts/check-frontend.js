@@ -33,6 +33,7 @@ const remoteSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src
 const openlistSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'openlist.js'), 'utf8');
 const integrationsSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'integrations.js'), 'utf8');
 const workspaceGitSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'workspaceGit.js'), 'utf8');
+const gitViewSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'gitView.js'), 'utf8');
 const gitSourcesSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'gitSources.js'), 'utf8');
 const rcloneSrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'rclone.js'), 'utf8');
 const gatewaySrc = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'src', 'storageGateway.js'), 'utf8');
@@ -62,8 +63,16 @@ const note = (ok, label, extra = '') => {
 /* --------------------------- 1. 静态一致性 --------------------------- */
 const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
 const refs = [...new Set([...app.matchAll(/\$\('#([A-Za-z0-9_-]+)'\)/g)].map((m) => m[1]))];
-// 这些 id 由 JS 运行时动态注入（附件预览 / 会话 pending 气泡 / 2FA 弹窗按钮 / 登录提示）。
-const RUNTIME_IDS = new Set(['ops-hint', 'ops-pending', 'ach-pending', 'security-disable', 'security-enable']);
+// 这些 id 由 JS 运行时动态注入（附件预览 / 会话 pending 气泡 / 2FA 弹窗按钮 / 登录提示 /
+// v0.4.31 Git 工作台各分区的输入框与结果容器：分区内容按需渲染，静态 HTML 里不落节点）。
+const RUNTIME_IDS = new Set([
+  'ops-hint', 'ops-pending', 'ach-pending', 'security-disable', 'security-enable',
+  'git-wb-status-diff', 'git-wb-diff-staged', 'git-wb-diff-body', 'git-wb-diff-load',
+  'git-wb-commit-detail', 'git-wb-commit-msg', 'git-wb-branch-name', 'git-wb-stash-ref',
+  'git-wb-stash-msg', 'git-wb-tag-name', 'git-wb-tag-msg', 'git-wb-clean-result',
+  'git-wb-sync-remote', 'git-wb-sync-branch', 'git-wb-conflict-ref',
+  'git-wb-custom-form-slot',
+]);
 const missing = refs.filter((id) => !ids.has(id) && !RUNTIME_IDS.has(id));
 note(missing.length === 0, 'app.js 引用的静态 id 均存在', missing.length ? `缺失：${missing.join(', ')}` : `${refs.length} 个引用`);
 
@@ -252,8 +261,111 @@ note(Boolean(termBtnBind) && termBtnBind[1].includes('e.target.id')
   && !app.includes("e.id === 'dk-term-disconnect'"),
 'Docker 终端连接 / 断开按钮事件委托使用 e.target.id（修复 e.id 导致的点击无响应）');
 
+// v0.4.31：Git 工作台（TortoiseGit 式）—— 后端结构化视图 + 语义动作 + 多标签前端 + 分支图/diff 着色。
+// 沿用仓库列表「Git 操作」按钮入口，不做右键菜单。护栏覆盖全链路，缺一段即判失败。
+note(serverSrc.includes("app.post('/api/repos/git/view'") && serverSrc.includes("app.post('/api/repos/git/action'")
+  && serverSrc.includes("app.get('/api/repos/git/groups'") && serverSrc.includes('gitView.view(')
+  && serverSrc.includes('gitView.resolveAction(') && serverSrc.includes('assertRepoGitWrite(')
+  && serverSrc.includes('act.needConfirm && b.confirmed !== true')
+  && serverSrc.includes("app.post('/api/repos/git', wrap"),
+'Git 工作台后端：/view 只读视图 + /action 语义动作 + /groups 分组 + 旧入口兼容 + 写权限收口');
+note(workspaceGitSrc.includes('function classifyCommand(') && workspaceGitSrc.includes('function isReadOnlyForm(')
+  && workspaceGitSrc.includes('function groups(') && workspaceGitSrc.includes('group: ')
+  && workspaceGitSrc.includes("'clean', 'rm', 'mv', 'blame', 'config', 'reflog'")
+  && workspaceGitSrc.includes('classifyCommand(cmd, list)')
+  && workspaceGitSrc.includes("'add', 'commit', 'push', 'merge', 'revert', 'reset', 'restore', 'stash', 'checkout'"),
+'workspaceGit：混合命令精确读写分类（branch/tag/stash/clean）+ 分组预设 + 命令白名单扩展');
+note(gitViewSrc.includes('const VIEWS =') && gitViewSrc.includes('const ACTIONS =')
+  && gitViewSrc.includes('function parseStatus(') && gitViewSrc.includes('function parseLog(')
+  && gitViewSrc.includes('function parseBranches(') && gitViewSrc.includes('function parseStash(')
+  && gitViewSrc.includes('function parseTags(') && gitViewSrc.includes('function parseNumstat(')
+  && ['status:', 'log:', 'graph:', 'branches:', 'remotes:', 'stash:', 'tags:', 'diff:', 'show:', 'conflicts:', 'reflog:']
+    .every((k) => gitViewSrc.includes(k)),
+'gitView：11 个只读视图定义与 status/log/branch/stash/tag/diff 解析器齐备');
+note(gitViewSrc.includes('VIEW_NAMES') && gitViewSrc.includes('ACTION_NAMES')
+  && gitViewSrc.includes('async function view(') && gitViewSrc.includes('function resolveAction(')
+  && gitViewSrc.includes('workspaceGit.classifyCommand')
+  && gitViewSrc.includes('parseStatus(o[0])') && gitViewSrc.includes('parseLog(o[0])')
+  && gitViewSrc.includes('parseNumstat(') && gitViewSrc.includes('function safeRef(')
+  && gitViewSrc.includes('function safePath(') && gitViewSrc.includes('workspaceGit.run(')
+  && gitViewSrc.includes('classifyCommand(r.command, r.args)')
+  && gitViewSrc.includes('视图 ${key} 内含写命令'),
+'gitView.js：11 个只读视图 + 23 个语义动作 + 只读防线 + 参数校验 + 复用 workspaceGit.run');
+note(html.includes('class="modal-panel git-workbench"') && html.includes('id="repo-git-tabs"')
+  && html.includes('id="git-wb-pane-status"') && html.includes('id="git-wb-pane-log"')
+  && html.includes('id="git-wb-pane-commit"') && html.includes('id="git-wb-pane-branch"')
+  && html.includes('id="git-wb-pane-sync"') && html.includes('id="git-wb-pane-stash"')
+  && html.includes('id="git-wb-pane-tag"') && html.includes('id="git-wb-pane-conflict"')
+  && html.includes('id="git-wb-pane-clean"') && html.includes('id="git-wb-pane-custom"')
+  && html.includes('id="repo-git-refresh"') && html.includes('id="repo-git-form"')
+  // v0.4.31 复核修复：repo-git-message / repo-git-hash 是从未被 app.js 读取的摆设输入框，
+  // 已移除；提交说明 / 还原提交号改由 promptDialog 弹窗即时填写。
+  && !html.includes('id="repo-git-message"') && !html.includes('id="repo-git-hash"')
+  && html.includes('id="repo-git-input"')
+  && (html.match(/id="repo-git-clear"/g) || []).length === 1,
+'Git 工作台 DOM：10 个标签分区 + 刷新按钮 + 静态自定义命令表单（保留历史 id）');
+note(app.includes('async function gitLoadView(') && app.includes("api('/repos/git/view'")
+  && app.includes("api('/repos/git/action'") && app.includes('async function runGitAction(')
+  && app.includes('function renderGitTabs(') && app.includes('function renderGitToolbar(')
+  && app.includes('async function renderGitStatus(') && app.includes('async function renderGitLog(')
+  && app.includes('async function renderGitCommit(') && app.includes('async function renderGitBranch(')
+  && app.includes('async function renderGitSync(') && app.includes('async function renderGitStash(')
+  && app.includes('async function renderGitTag(') && app.includes('async function renderGitConflict(')
+  && app.includes('async function renderGitClean(') && app.includes('function renderGitCustom(')
+  && app.includes('function graphSvg(') && app.includes('function colorizeDiff(')
+  && app.includes("api('/repos/git/groups'"),
+'Git 工作台前端：10 个分区渲染 + 结构化视图调用 + 语义动作 + SVG 分支图 + diff 着色');
+note(css.includes('.modal-panel.git-workbench') && css.includes('.git-wb-pane')
+  && css.includes('.git-wb-diff .add') && css.includes('.git-wb-diff .del')
+  && css.includes('.git-wb-branch-graph'),
+'Git 工作台样式：宽面板 / 分区 / diff 增删着色 / 分支图容器');
+
+// v0.4.31 复核修复护栏（对照「分析未提交改动中的 bug 和不完善之处」逐条实测结论）。
+note(app.includes('if (p.command === \'stash\' && (p.args || []).includes(\'push\'))')
+  && app.includes("args = [...args, '-m', text]")
+  && app.includes('提交号不合法'),
+'P1-1 修复：stash-save 预设 needText 用 -m 注入；非法 hash 明确报错中止，不静默沿用 HEAD');
+note(gitViewSrc.includes('function unquotePath(') && gitViewSrc.includes('function splitStatusPath(')
+  && gitViewSrc.includes('Buffer.from(bytes).toString(\'utf8\')')
+  && gitViewSrc.includes('combine: (o) => parseStatus(o[0])')
+  && gitViewSrc.includes('splitStatusPath(line.slice(3))'),
+'P1-2 修复：parseStatus 补 porcelain quoted-path 反转义（八进制字节 / 中文 / rename）');
+note(app.includes("await runGitAction('discard', {})")
+  && serverSrc.includes('cls.destructive && b.confirmed !== true')
+  && app.includes('function repoGitNeedsConfirm('),
+'P1-3 修复：放弃全部改动走 discard 语义动作 + 旧 /repos/git 入口强制 confirmed');
+note(gitViewSrc.includes('if (Number(r.code) !== 0)')
+  && gitViewSrc.includes('Git 视图 ${key} 执行失败'),
+'P1-4 修复：view() 遇 git code≠0 抛 HttpError(400)，不再返回 ok:true 夹带 fatal 文本');
+note(app.includes('function splitGitCommand(') && app.includes('function gitTextWidth(')
+  && !app.includes('Math.min(1100,') && app.includes('data-gfill')
+  && app.includes('repoGitBusy = true;'),
+'P2 修复：自定义命令引号分词 / SVG 宽度自适应 / 远程分支短名 / 确认期忙碌锁');
+note(releaseYml.includes('BEGIN PENDING-RELEASE-NOTES')
+  && releaseYml.includes('-replace') && releaseYml.includes('END PENDING-RELEASE-NOTES'),
+'文档修复：CI 生成 Release notes 前剥离「待发版」元信息块，避免污染正式发布说明');
+{
+  const smokePath = path.resolve(__dirname, 'smoke-git-workbench.js');
+  const feSmokePath = path.resolve(__dirname, 'smoke-git-workbench-frontend.js');
+  const pkg = fs.readFileSync(path.resolve(__dirname, '..', 'platform', 'package.json'), 'utf8');
+  const be = fs.existsSync(smokePath) ? fs.readFileSync(smokePath, 'utf8') : '';
+  const fe = fs.existsSync(feSmokePath) ? fs.readFileSync(feSmokePath, 'utf8') : '';
+  note(fs.existsSync(smokePath)
+    && pkg.includes('"smoke:gitwb"') && pkg.includes('node --check ../scripts/smoke-git-workbench.js')
+    && be.includes("'/repos/git/view'") && be.includes("'/repos/git/action'")
+    && be.includes('需要二次确认') ,
+  'Git 工作台后端冒烟脚本存在并接入 npm scripts / check 链（view + action + 破坏性确认）');
+  // v0.4.31 复核修复：新增前端交互级行为测试，用 vm 跑真实函数体而非字符串护栏，
+  // 覆盖 4 个 P1 + P2 交互（后端 smoke 只测后端，一个 P1 都抓不到）。
+  note(fs.existsSync(feSmokePath)
+    && pkg.includes('"smoke:gitwb:fe"') && pkg.includes('node --check ../scripts/smoke-git-workbench-frontend.js')
+    && fe.includes('P1-1 stash-save') && fe.includes('P1-2 parseStatus')
+    && fe.includes('P1-4') && fe.includes('确认弹窗期间'),
+  'Git 工作台前端交互级行为测试接入 npm scripts / check 链（真函数体断言，覆盖 4 个 P1）');
+}
+
 // 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
-const CACHE_STAMP = '20261124q';
+const CACHE_STAMP = '20261125a';
 const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
 note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
 
@@ -698,19 +810,22 @@ note(coreSrc.includes("'repoAcl', 'directories'") && coreSrc.includes('repoAcl: 
 '仓库级协作者 + 目录对象：repoAcl/directories 归属集合、懒建归属、仓库 read 放宽、列表协作者按钮');
 
 // v0.4.16 B 批①：Git 写操作白名单 + 破坏性命令 + 仓库级写权限校验。
+// v0.4.31：写判定从 WRITE_COMMANDS.has(cmd) 升级为 classifyCommand(cmd,args)（覆盖混合命令），
+// 权限校验抽成 assertRepoGitWrite(req, repo, needWrite)，安全语义不变且更严。
 note(workspaceGitSrc.includes("'add', 'commit', 'push', 'merge', 'revert', 'reset', 'restore', 'stash', 'checkout'")
   && workspaceGitSrc.includes('DESTRUCTIVE_COMMANDS') && workspaceGitSrc.includes('needMessage: true')
-  && serverSrc.includes('workspaceGit.WRITE_COMMANDS.has(cmd)') && serverSrc.includes("permissions.assertCan(req.user, acl, 'write')")
+  && serverSrc.includes('classifyCommand(cmd, args)') && serverSrc.includes('assertRepoGitWrite(req, b.repo, cls.write)')
+  && serverSrc.includes("permissions.assertCan(req.user, acl, 'write')")
   && app.includes('破坏性 Git 操作确认') && app.includes('needMessage') && app.includes('needHash'),
-'Git 写操作：commit/push/merge-abort/revert/reset 等白名单 + 破坏性二次确认 + 仓库级写权限校验');
+'Git 写操作：commit/push/merge-abort/revert/reset 等白名单 + 破坏性二次确认 + 仓库级写权限校验（v0.4.31 精确分类）');
 
 // v0.4.16 B 批②：新建仓库内联凭据/代理/TLS + 自动克隆工作区；列表去代理按钮、IDE 直达。
 note(gitSourcesSrc.includes('function effectiveSource') && gitSourcesSrc.includes('autoWorkspace')
   && gitSourcesSrc.includes('repo.workspace = await cloneRepo') && gitSourcesSrc.includes('repo.workspaceError')
   && app.includes('function openRepoIdeDirect') && app.includes('data-ide-direct')
   && app.includes('syncRepoAuthFields') && !app.includes('data-proxy-repo')
-  && html.includes('name="autoWorkspace"') && html.includes('id="repo-git-message"'),
-'新建仓库内联凭据/代理/TLS + 自动克隆工作区；列表去代理按钮、IDE 直达、Git 提交/还原输入');
+  && html.includes('name="autoWorkspace"') && html.includes('id="repo-git-input"'),
+'新建仓库内联凭据/代理/TLS + 自动克隆工作区；列表去代理按钮、IDE 直达、Git 自定义命令输入');
 
 // v0.4.17①：IDE 直达免密 —— 服务端代登录 code-server 并透传会话 Cookie。
 note(serverSrc.includes('async function ideAutoLoginCookie') && serverSrc.includes('code-server-session=')

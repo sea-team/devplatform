@@ -32,6 +32,7 @@ const serviceSetup = require('./serviceSetup');
 const serviceCredentials = require('./serviceCredentials');
 const hostInfo = require('./hostInfo');
 const workspaceGit = require('./workspaceGit');
+const gitView = require('./gitView');
 const fileTypes = require('./fileTypes');
 const auth = require('./auth');
 const permissions = require('./permissions');
@@ -518,23 +519,62 @@ app.post('/api/repos/import', wrap(async (req, res) => {
   ok(res, await repoImporter.importRepo({ name: repoName, buffer: buf, filename, format, user: req.user }));
 }), { raw: true, bodyLimit: 100 * 1024 * 1024 });
 
-/* -------------------- 工作区仓库 Git 命令（v0.3.10） -------------------- */
+/* -------------------- 工作区仓库 Git 命令（v0.3.10 / v0.4.31） -------------------- */
+/**
+ * 仓库级写权限校验：有配置 owner / 协作者的仓库仅所有者 + 可写协作者 + 管理员可写；
+ * 未配置归属的仓库沿用共享语义（任何登录用户可写），避免锁定既有工作流。
+ * v0.4.31 起写判定走 classifyCommand(cmd,args)，覆盖 branch/tag/stash/clean 等混合命令。
+ */
+function assertRepoGitWrite(req, repoName, needWrite) {
+  if (!needWrite) return;
+  const name = String(repoName || '').trim();
+  if (!/^[A-Za-z0-9_.-]+$/.test(name) || name === '.' || name === '..') {
+    throw badRequest('仓库名不合法');
+  }
+  const aclId = `workspace:${name}`;
+  const acl = (state().repoAcl || []).find((x) => x && x.id === aclId);
+  if (acl) permissions.assertCan(req.user, acl, 'write');
+}
+
+// 工作台元数据：分组定义 + 快捷命令（含 group / ico / hint）。
+app.get('/api/repos/git/groups', (req, res) => ok(res, { items: workspaceGit.groups() }));
 app.get('/api/repos/git/presets', (req, res) => ok(res, { items: workspaceGit.presets() }));
+
+// v0.4.31：结构化只读视图（状态 / 日志 / 分支图 / 分支 / 远程 / Stash / 标签 / diff / 提交详情）。
+// 只读接口，视图层内部逐条断言不含写命令，无需仓库写权限。
+app.post('/api/repos/git/view', wrap(async (req, res) => {
+  const b = req.body || {};
+  ok(res, await gitView.view({ repo: b.repo, view: b.view, args: b.args || {} }));
+}));
+
+// v0.4.31：语义动作。前端只传 action + 参数，不直接拼 command/args；
+// 服务端把意图翻译成受控 git 命令，再复用 run() 的双通道与安全边界。
+// 破坏性动作必须带 confirmed=true（前端 confirmDialog 二次确认后才置位）。
+app.post('/api/repos/git/action', wrap(async (req, res) => {
+  const b = req.body || {};
+  const act = gitView.resolveAction(b.action, b.params || {});
+  assertRepoGitWrite(req, b.repo, act.write);
+  if (act.needConfirm && b.confirmed !== true) {
+    throw badRequest(`「${act.label}」需要二次确认（confirmed=true）`);
+  }
+  const r = await workspaceGit.run({ repo: b.repo, command: act.command, args: act.args });
+  ok(res, { ...r, action: act.action, actionLabel: act.label, argsText: act.argsText });
+}));
+
+// 兼容旧入口：通用白名单 Git 命令（工作台「自定义命令」标签也走这里）。
+// 写判定改用 classifyCommand，避免把 branch -a -vv 这种查看命令误要求写权限，
+// 也避免 remote add / config set 这类写用法绕过仓库级权限校验。
+// v0.4.31 修复：破坏性命令统一强制 confirmed=true（与 /action 语义动作、README §70.3
+// 「破坏性统一二次确认」对齐），防止自定义命令 / 快捷预设绕过前端确认误删本地改动。
+// 只读预览（clean -n -d 等）分类为 write:false / destructive:false，不受影响。
 app.post('/api/repos/git', wrap(async (req, res) => {
   const b = req.body || {};
   const cmd = String(b.command || '').trim();
-  // v0.4.16 B 批：写操作按仓库级权限收紧。
-  // 「有配置协作者 / owner 的仓库」→ 仅所有者 + 可写协作者 + 管理员可写；
-  // 未配置任何归属的仓库沿用共享语义（任何登录用户可写），避免锁定既有工作流。
-  // 还原 / 重置等破坏性命令的二次确认在前端完成。
-  if (workspaceGit.WRITE_COMMANDS.has(cmd)) {
-    const repoName = String(b.repo || '').trim();
-    if (!/^[A-Za-z0-9_.-]+$/.test(repoName) || repoName === '.' || repoName === '..') {
-      throw badRequest('仓库名不合法');
-    }
-    const aclId = `workspace:${repoName}`;
-    const acl = (state().repoAcl || []).find((x) => x && x.id === aclId);
-    if (acl) permissions.assertCan(req.user, acl, 'write');
+  const args = Array.isArray(b.args) ? b.args : [];
+  const cls = workspaceGit.classifyCommand(cmd, args);
+  assertRepoGitWrite(req, b.repo, cls.write);
+  if (cls.destructive && b.confirmed !== true) {
+    throw badRequest(`「git ${cmd}」属于破坏性命令，需要二次确认（confirmed=true）`);
   }
   ok(res, await workspaceGit.run(b));
 }));

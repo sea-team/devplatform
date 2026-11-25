@@ -90,6 +90,8 @@ jobs:
             ''
           )
           $body = Get-Content -Path release-notes.md -Raw -Encoding utf8
+          # 剥离「待发版」元信息块（含标记），避免把「尚未发版 / 等发版指令」写进正式 Release notes。
+          $body = $body -replace '(?s)<!-- BEGIN PENDING-RELEASE-NOTES:.*?<!-- END PENDING-RELEASE-NOTES -->\r?\n?', ''
           $notes = ($header -join "`n") + "`n" + $body
           $notes | Out-File -FilePath final-notes.md -Encoding utf8
           $assets = @('devplatform-dist.zip', 'devplatform-windows.zip',

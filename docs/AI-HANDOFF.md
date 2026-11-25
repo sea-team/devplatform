@@ -2,7 +2,8 @@
 
 > **用法**：把本文件 `【开始粘贴】` 到 `【结束粘贴】` 之间的内容整篇复制，作为新 AI 会话的第一条消息。它假设接手者刚拿到 `sea-team/devplatform` 仓库、还没读过任何代码。
 > 本文 = 启动简报（动作 / 红线 / 命令）+ 详细手册（架构 / 踩坑 / 速查）合一，**不依赖其它文档**；功能清单另见仓库 `README.md`，版本演进见 `release-notes.md`。
-> 基线：v0.4.30 / 2026-11-24 / 缓存戳 `20261124q` / typecheck 基线 `78`。**升版本或改缓存戳时只需同步维护这一个文件。**
+> 基线：v0.4.30 / 2026-11-24 / 缓存戳 `20261125a` / typecheck 基线 `78`（实测 75）/ 前端护栏 202 条 / 后端路由 282 条。**升版本或改缓存戳时只需同步维护这一个文件。**
+> **工作区待发版改动**：v0.4.31 阶段「Git 工作台（TortoiseGit 式）」已完成实现与本地验证（README §70），并按复核结论修复了 4 个 P1 功能 Bug / 6 项 P2（README §70.5）；版本号仍 `0.4.30`、未打 tag、未发 Release、未部署 246。接手时先 `git status` 确认这批未提交改动存在；**不要擅自 commit / push / 打 tag / 升版本号 / 部署**，须等用户明确指令。新增关键文件：`platform/src/gitView.js`、`scripts/smoke-git-workbench.js`（后端全链路）、`scripts/smoke-git-workbench-frontend.js`（前端交互级行为测试）。
 
 ---
 
@@ -23,7 +24,7 @@
 - 状态只有**一个 `data/state.json`**；
 - 流式输出（SSH 终端 / AI 会话 / 容器终端）统一用 **SSE**，不用 WebSocket。
 
-当前规模：41 个后端模块 / 17372 行 / **279 条路由**（全在 `server.js`）/ 前端 8831 行 / 159 条自检护栏。运行环境：线上 `10.0.0.246:9000`（Debian 9 宿主机、无 Node、Docker Hub 不可达；平台跑在 `node:20-alpine` 容器里）。
+当前规模（工作区当前代码实测，非 HEAD 提交态）：42 个后端模块 / 17991 行 / **282 条路由**（全在 `server.js`）/ 前端 `app.js` 9477 行 / 202 条自检护栏。行数口径：后端 = `platform/src/*.js` 全部 `wc -l` 之和，前端 = `public/app.js` 行数，护栏 = `scripts/check-frontend.js` 的 `note()` 数（可用 `wc -l platform/src/*.js | tail -1`、`grep -c 'note(' scripts/check-frontend.js` 复核）。运行环境：线上 `10.0.0.246:9000`（Debian 9 宿主机、无 Node、Docker Hub 不可达；平台跑在 `node:20-alpine` 容器里）。
 
 #### 2. 动手前必须先做的 4 件事
 
@@ -32,7 +33,7 @@ cd devplatform
 git status                                   # 确认工作区是否干净
 git log -5 --oneline                         # 看最近改了什么
 node -p "require('./platform/package.json').version"   # 当前版本（本简报基线 0.4.30）
-grep "const CACHE_STAMP" scripts/check-frontend.js     # 当前缓存戳（基线 20261124q）
+grep "const CACHE_STAMP" scripts/check-frontend.js     # 当前缓存戳（基线 20261125a）
 ```
 
 然后读两处（**不要一上来通读全部源码**）：本文第 4 节（红线）、第 6 节（验证链），以及 `scripts/check-frontend.js` 中与你任务相关的护栏——别和护栏对着干，护栏记录了历史 bug。需要架构细节时再查本文第二部分。
@@ -77,7 +78,7 @@ git push origin v0.4.31
 cd devplatform
 npm run check --prefix platform              # 语法检查（新增 src 模块记得进 check 清单）
 npm run typecheck --prefix platform          # 必须显示「✔ 未超过基线」（78）
-node scripts/check-frontend.js               # 必须「✔ 前端自检全部通过」（159 护栏 + VM boot）
+node scripts/check-frontend.js               # 必须「✔ 前端自检全部通过」（202 护栏 + VM boot）
 ```
 
 然后**部署到 246 实测**：
@@ -112,7 +113,7 @@ curl -s http://10.0.0.246:9000/index.html | grep -o 'app.js?v=[0-9a-z]*'   # 缓
 ```
 devplatform/
 ├─ platform/
-│  ├─ src/                  # 后端，41 个模块，1.7 万行；server.js 是唯一入口 + 279 条路由
+│  ├─ src/                  # 后端，42 个模块，1.7 万行；server.js 是唯一入口 + 282 条路由
 │  ├─ public/               # 前端：index.html / app.js / style.css / vendor/
 │  │  └─ vendor/            # xterm.min.js、addon-fit.min.js、codemirror*、qrcode.js（顺序不可乱）
 │  ├─ appstore/             # 宝塔官方应用模板（320 应用目录 / 314 有效模板 / 1272 文件 / 319 个模板 .env）
@@ -122,7 +123,7 @@ devplatform/
 │  └─ package-lock.json     # ★ 版本号也要同步改（2 处）
 ├─ scripts/
 │  ├─ remote.js             # 部署 / 远程执行 / 状态（deploy|exec|script|stop|status|probe）
-│  ├─ check-frontend.js     # ★ 前端静态自检 + VM boot + 159 条护栏
+│  ├─ check-frontend.js     # ★ 前端静态自检 + VM boot + 202 条护栏
 │  ├─ typecheck.js / typecheck-baseline.json   # ★ checkJs 棘轮
 │  ├─ sync-appstore.js      # 从 aaPanel/appstore 同步官方应用模板
 │  └─ smoke-*.js / api-sweep.js / verify.js / api-audit.js   # 各类巡检脚本
@@ -132,7 +133,7 @@ devplatform/
 ├─ data/state.json          # ★ 运行时状态与凭据（不入库，600 权限）
 ├─ workspace/               # 克隆的仓库 / 构建产物（不入库）
 ├─ docs/                    # 本文（AI 接入说明）
-├─ README.md                # 功能说明（§1–§69，按版本演进）
+├─ README.md                # 功能说明（§1–§70，按版本演进）
 └─ release-notes.md         # 发布说明（CI 会把它整篇写进 Release notes）
 ```
 
@@ -209,7 +210,7 @@ app.post('/api/xxx/:id/do', wrap(async (req, res) => {
 | `proxy.js` / `environment.js` / `envConfig.js` / `aiNetworkPolicy.js` | 四级代理覆盖、环境档案推导与体检、`.env` 白名单读写、SSRF 属地分级 |
 | `extensions.js` / `extRuntime.js` / `extLifecycle.js` / `backup.js` / `dbgateSync.js` / `serviceSetup.js` / `serviceCredentials.js` / `hostInfo.js` / `buildBackends.js` / `catalog.js` / `archive.js` / `fileTypes.js` | 扩展安装/备份/rebuild、集成服务凭据、编译环境降级、模板字典、压缩包、文件类型 |
 | `aiSessions.js` / `aiChat.js` / `dshTerminal.js` | AI 会话两页并存：会话落库 owner 隔离、AI 运维、DeepSeek Harness 终端 |
-| `server.js` | **唯一路由注册处**：279 条，按前缀分组（docker 42 / openlist 37 / ai 34 / rclone 25 / extensions 23 / servers 21 / proxy 14 / auth 10 / repos 9 / …） |
+| `server.js` | **唯一路由注册处**：282 条，按前缀分组（docker 42 / openlist 37 / ai 34 / rclone 25 / extensions 23 / servers 21 / proxy 14 / auth 10 / repos 9 / …） |
 
 **9.5 流式输出：统一 SSE，不用 WebSocket**
 
@@ -236,7 +237,7 @@ GET  /xxx/terminals → 列出当前用户会话
 - `api(path, options)`：自动加 `Authorization: Bearer <localStorage.dp_token>`；`body` 是对象时自动 `JSON.stringify` 并设 `content-type: application/json`（**不要自己 stringify**）；按 400/404/409/502/500 分类错误并保留 `hint`；401 且非 `/auth/` 触发 `invalidateSession()`。
 - `streamToken()` 给 SSE / 下载 URL 拼 `&token=...`（EventSource 不能带 header）。
 - `xterm` 相关 vendor **加载顺序固定**：`xterm.min.js` → `addon-fit.min.js` → `codemirror.js` → `cm-modes.js` → `cm-addons.js` → `qrcode.js` → 最后 `app.js`。`check-frontend.js` 有护栏锁死。
-- **缓存戳机制**：`index.html` 里 `style.css?v=20261124q` 与 `app.js?v=20261124q` 两个戳必须相同，且等于 `scripts/check-frontend.js` 的 `const CACHE_STAMP`。`mini.js` 的 `sendFile` 发 `cache-control: no-cache`，但版本号仍是必要防线。
+- **缓存戳机制**：`index.html` 里 `style.css?v=20261125a` 与 `app.js?v=20261125a` 两个戳必须相同，且等于 `scripts/check-frontend.js` 的 `const CACHE_STAMP`。`mini.js` 的 `sendFile` 发 `cache-control: no-cache`，但版本号仍是必要防线。
 
 #### 11. 数据与外部依赖
 
@@ -272,7 +273,7 @@ apps/<appname>/
 
 **12.1 类型检查棘轮**：`npm run typecheck` 用 `tsconfig.typecheck.json`（`allowJs` + `checkJs` + `noEmit`）全量检查 `src/**/*.js`，错误数不得超过 `scripts/typecheck-baseline.json` 的 `maxErrors: 78`。新增代码报错用 **JSDoc `@param` / `@returns`** 消掉（v0.4.30 的 `dockerExecTerm.js openSession()` 就是这么修的），**不要改基线**。
 
-**12.2 前端自检即「测试」**：`node scripts/check-frontend.js` 做两件事——① 159 条静态断言（DOM id 引用完整性、section/page 数量、脚本加载顺序、缓存戳唯一性、各功能接线、历史 bug 回归护栏）；② 用轻量 DOM stub 在 `vm` 里执行 `app.js` 跑一遍 boot，捕获顶层异常与未处理 Promise 异常，并模拟多标签创建/切换/关闭。**加新功能请顺手加一条 `note()` 护栏**。
+**12.2 前端自检即「测试」**：`node scripts/check-frontend.js` 做两件事——① 202 条静态断言（DOM id 引用完整性、section/page 数量、脚本加载顺序、缓存戳唯一性、各功能接线、历史 bug 回归护栏）；② 用轻量 DOM stub 在 `vm` 里执行 `app.js` 跑一遍 boot，捕获顶层异常与未处理 Promise 异常，并模拟多标签创建/切换/关闭。**加新功能请顺手加一条 `note()` 护栏**。
 
 **12.3 二次确认与归属**：破坏性操作要求 `body.confirm === true` 或 query `confirm=true`；非平台自建容器（`isOwned()` 判定 `createdBy === 'bt_apps'` / `dp-(ext|build)-` 前缀）默认只读。Docker 全部写接口命中 `/^\/api\/docker\//` 全局护栏，**仅管理员**；GET（logs/inspect/stats）读权限可放行。新增写接口复用 `dockerPanel.assertWritable()` / `permissions.guard()` 并写 `dockerPanel.audit(...)`。
 
@@ -351,5 +352,5 @@ apps/<appname>/
 ### 附：给交付方（人类）的备注
 
 - 本文件是**唯一**需要投喂给新 AI 的文档：第一部分（§1–§7）是启动简报，第二部分（§8–§16）是架构细节与速查表。两者编号连续、无互相跳转。
-- 若未来升版本、改缓存戳或调整基线，**只需同步维护这一个文件**中的对应数字（当前：0.4.30 / 20261124q / 78 / 279 路由 / 159 护栏 / 41 模块 / 35 view / 8 正常体检）。
+- 若未来升版本、改缓存戳或调整基线，**只需同步维护这一个文件**中的对应数字（当前：0.4.30 / 20261125a / 78 / 282 路由 / 202 护栏 / 42 模块 / 35 view / 8 正常体检）。
 - 旧的两份文档 `AI-DEVELOPMENT-GUIDE.md` / `AI-ONBOARDING-BRIEF.md` 已由本文件取代，可保留作历史归档，但不要再作为投喂入口，以免两份数字不一致。
