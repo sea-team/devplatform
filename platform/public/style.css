@@ -1286,6 +1286,11 @@ select.ui-select-sm { min-height: 28px; padding: 4px 26px 4px 9px; font-size: 11
 /* ---------------- v0.4.31 · Git 工作台（TortoiseGit 式） ---------------- */
 .modal-panel.git-workbench { width: min(1180px, 97vw); max-height: 94vh; }
 .git-wb-body { display: flex; flex-direction: column; gap: 0; }
+/* v0.4.31 显示修复：.git-wb-body 是 flex 列容器，弹窗高度受限时子项默认会被 flex-shrink
+   压到 .git-wb-pane 的 min-height:210px，超出内容（日志表 / 分支卡片）则以 overflow:visible
+   溢出，直接盖住下方「命令输出」标签与输出框。让所有直接子项按内容自然撑开，
+   滚动统一由弹窗主体 .modal-body 承担。 */
+.git-wb-body > * { flex: 0 0 auto; }
 .git-wb-notice { margin-bottom: 12px; }
 .git-wb-tabs { margin-bottom: 12px; }
 .git-wb-tabs .subnav-btn { display: inline-flex; align-items: center; gap: 5px; }

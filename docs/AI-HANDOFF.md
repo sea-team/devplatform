@@ -2,9 +2,9 @@
 
 > **用法**：把本文件 `【开始粘贴】` 到 `【结束粘贴】` 之间的内容整篇复制，作为新 AI 会话的第一条消息。它假设接手者刚拿到 `sea-team/devplatform` 仓库、还没读过任何代码。
 > 本文 = 启动简报（动作 / 红线 / 命令）+ 详细手册（架构 / 踩坑 / 速查）合一，**不依赖其它文档**；功能清单另见仓库 `README.md`，版本演进见 `release-notes.md`。
-> 基线：v0.4.30 / 2026-11-24 / 缓存戳 `20261125c` / typecheck 基线 `78`（实测 75）/ 前端护栏 202 条 / 后端路由 282 条。**升版本或改缓存戳时只需同步维护这一个文件。**
-> **版本 / 部署状态**：v0.4.31 阶段「Git 工作台（TortoiseGit 式）」+ 4 个 P1 / 6 项 P2 复核修复（README §70 / §70.5，`abe434b`）+ 常用操作收敛 6 标签（`ad3ff44`）均已提交、push 并部署 246，线上运行缓存戳 `20261125b`（已实测验收）。仓库版本仍 `0.4.30`、未打 tag、未发 Release。
-> **当前工作区未提交改动**：日志页 UI 调整（README §70.6，按用户本地 TortoiseGit 习惯）：① 去掉提交分支图；② 提交日志新增「分支」列（`gitCommitBranches(c.refs)` 从 decorations 提取）；③ 点击日志行详情改走独立弹窗 `#git-commit-modal`（`showGitCommitDetail()`）；④ 详情字段用两列网格 + 带边框圆角只读 input（`.git-detail-form` / `.git-detail-field`）；⑤ `.git-wb-pane` 去局部滚动条，滚动交给弹窗 `.modal-body`。均为前端改动，后端 `graph`/`show` 视图保留不动；缓存戳升至 `20261125c`。**这批改动尚未 commit / push / 部署**，须等用户明确指令（不要擅自 commit / push / 打 tag / 升版本号 / 部署）。接手时先 `git status` 确认。新增关键文件：`platform/src/gitView.js`、`scripts/smoke-git-workbench.js`（后端全链路）、`scripts/smoke-git-workbench-frontend.js`（前端交互级行为测试，现 23 项）。
+> 基线：v0.4.30 / 2026-11-25 / 缓存戳 `20261125d` / typecheck 基线 `78`（实测 75）/ 前端护栏 203 条 / 后端路由 282 条。**升版本或改缓存戳时只需同步维护这一个文件。**
+> **版本 / 部署状态**：v0.4.31 阶段「Git 工作台（TortoiseGit 式）」+ 4 个 P1 / 6 项 P2 复核修复（README §70 / §70.5，`abe434b`）+ 常用操作收敛 6 标签（`ad3ff44`）+ 日志页 UI 调整（`e1f0f28`）均已提交、push 并部署 246，线上运行缓存戳 `20261125c`（已实测验收）。仓库版本仍 `0.4.30`、未打 tag、未发 Release。
+> **当前工作区未提交改动**：工作台内容溢出显示修复（README §70.7）：弹窗高度受限时 flex 列容器把各分区压到 `min-height:210px`，日志表 / 分支卡片溢出盖住「命令输出」区；给 `.git-wb-body > *` 加 `flex: 0 0 auto` 让内容自然撑开、滚动仍由 `.modal-body` 统一承担；缓存戳升至 `20261125d`。**这批改动尚未 commit / push / 部署**，须等用户明确指令（不要擅自 commit / push / 打 tag / 升版本号 / 部署）。接手时先 `git status` 确认。新增关键文件：`platform/src/gitView.js`、`scripts/smoke-git-workbench.js`（后端全链路）、`scripts/smoke-git-workbench-frontend.js`（前端交互级行为测试，现 23 项）。
 
 ---
 
@@ -25,7 +25,7 @@
 - 状态只有**一个 `data/state.json`**；
 - 流式输出（SSH 终端 / AI 会话 / 容器终端）统一用 **SSE**，不用 WebSocket。
 
-当前规模（工作区当前代码实测，非 HEAD 提交态）：42 个后端模块 / 17991 行 / **282 条路由**（全在 `server.js`）/ 前端 `app.js` 9477 行 / 202 条自检护栏。行数口径：后端 = `platform/src/*.js` 全部 `wc -l` 之和，前端 = `public/app.js` 行数，护栏 = `scripts/check-frontend.js` 的 `note()` 数（可用 `wc -l platform/src/*.js | tail -1`、`grep -c 'note(' scripts/check-frontend.js` 复核）。运行环境：线上 `10.0.0.246:9000`（Debian 9 宿主机、无 Node、Docker Hub 不可达；平台跑在 `node:20-alpine` 容器里）。
+当前规模（工作区当前代码实测，非 HEAD 提交态）：42 个后端模块 / 17991 行 / **282 条路由**（全在 `server.js`）/ 前端 `app.js` 9477 行 / 203 条自检护栏。行数口径：后端 = `platform/src/*.js` 全部 `wc -l` 之和，前端 = `public/app.js` 行数，护栏 = `scripts/check-frontend.js` 的 `note()` 数（可用 `wc -l platform/src/*.js | tail -1`、`grep -c 'note(' scripts/check-frontend.js` 复核）。运行环境：线上 `10.0.0.246:9000`（Debian 9 宿主机、无 Node、Docker Hub 不可达；平台跑在 `node:20-alpine` 容器里）。
 
 #### 2. 动手前必须先做的 4 件事
 
@@ -34,7 +34,7 @@ cd devplatform
 git status                                   # 确认工作区是否干净
 git log -5 --oneline                         # 看最近改了什么
 node -p "require('./platform/package.json').version"   # 当前版本（本简报基线 0.4.30）
-grep "const CACHE_STAMP" scripts/check-frontend.js     # 当前缓存戳（基线 20261125c）
+grep "const CACHE_STAMP" scripts/check-frontend.js     # 当前缓存戳（基线 20261125d）
 ```
 
 然后读两处（**不要一上来通读全部源码**）：本文第 4 节（红线）、第 6 节（验证链），以及 `scripts/check-frontend.js` 中与你任务相关的护栏——别和护栏对着干，护栏记录了历史 bug。需要架构细节时再查本文第二部分。
@@ -238,7 +238,7 @@ GET  /xxx/terminals → 列出当前用户会话
 - `api(path, options)`：自动加 `Authorization: Bearer <localStorage.dp_token>`；`body` 是对象时自动 `JSON.stringify` 并设 `content-type: application/json`（**不要自己 stringify**）；按 400/404/409/502/500 分类错误并保留 `hint`；401 且非 `/auth/` 触发 `invalidateSession()`。
 - `streamToken()` 给 SSE / 下载 URL 拼 `&token=...`（EventSource 不能带 header）。
 - `xterm` 相关 vendor **加载顺序固定**：`xterm.min.js` → `addon-fit.min.js` → `codemirror.js` → `cm-modes.js` → `cm-addons.js` → `qrcode.js` → 最后 `app.js`。`check-frontend.js` 有护栏锁死。
-- **缓存戳机制**：`index.html` 里 `style.css?v=20261125c` 与 `app.js?v=20261125c` 两个戳必须相同，且等于 `scripts/check-frontend.js` 的 `const CACHE_STAMP`。`mini.js` 的 `sendFile` 发 `cache-control: no-cache`，但版本号仍是必要防线。
+- **缓存戳机制**：`index.html` 里 `style.css?v=20261125d` 与 `app.js?v=20261125d` 两个戳必须相同，且等于 `scripts/check-frontend.js` 的 `const CACHE_STAMP`。`mini.js` 的 `sendFile` 发 `cache-control: no-cache`，但版本号仍是必要防线。
 
 #### 11. 数据与外部依赖
 
@@ -353,5 +353,5 @@ apps/<appname>/
 ### 附：给交付方（人类）的备注
 
 - 本文件是**唯一**需要投喂给新 AI 的文档：第一部分（§1–§7）是启动简报，第二部分（§8–§16）是架构细节与速查表。两者编号连续、无互相跳转。
-- 若未来升版本、改缓存戳或调整基线，**只需同步维护这一个文件**中的对应数字（当前：0.4.30 / 20261125c / 78 / 282 路由 / 202 护栏 / 42 模块 / 35 view / 8 正常体检）。
+- 若未来升版本、改缓存戳或调整基线，**只需同步维护这一个文件**中的对应数字（当前：0.4.30 / 20261125d / 78 / 282 路由 / 203 护栏 / 42 模块 / 35 view / 8 正常体检）。
 - 旧的两份文档 `AI-DEVELOPMENT-GUIDE.md` / `AI-ONBOARDING-BRIEF.md` 已由本文件取代，可保留作历史归档，但不要再作为投喂入口，以免两份数字不一致。

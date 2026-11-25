@@ -76,7 +76,7 @@
 - 当前版本 **v0.4.30**（`platform/package.json` / `package-lock.json` 已升至 `0.4.30`，tag `v0.4.30`，GitHub Release 由 `.github/workflows/release.yml` 在推送 tag 时构建发布）。
 - 代码已部署 `10.0.0.246` 并实测：health `0.4.30/normal`、环境体检 `8 正常 / 0 提醒 / 0 异常`。
 - v0.4.29 / v0.4.30 两阶段改动已随本次一并发版，详见 `release-notes.md`。
-- 前端静态资源缓存戳 `20261125c`（v0.4.31 阶段 Git 工作台改动 + 复核修复 + 常用操作收敛 + 日志页 UI 调整）；`npm run check`、`npm run typecheck`（基线 78，实测 75）、`node scripts/check-frontend.js`、`npm run smoke:gitwb` / `npm run smoke:gitwb:fe` 全过。
+- 前端静态资源缓存戳 `20261125d`（v0.4.31 阶段 Git 工作台改动 + 复核修复 + 常用操作收敛 + 日志页 UI 调整 + 内容溢出显示修复）；`npm run check`、`npm run typecheck`（基线 78，实测 75）、`node scripts/check-frontend.js`、`npm run smoke:gitwb` / `npm run smoke:gitwb:fe` 全过。
 - **工作区待发版改动**（v0.4.31 阶段）：Git 工作台（TortoiseGit 式）已完成，见 §70。版本号仍 `0.4.30`、未打 tag、未发 Release、未部署 246；246 线上仍运行 v0.4.30 代码。发版需用户明确指令。
 - 官方应用模板位于 `platform/appstore/`（319 个模板 `.env` 属样例配置，必须随仓库入库；`.gitignore` 已加白名单）。
 - **同步官方模板注意**：Dify 系列模板原本自带 `SECRET_KEY=sk-...` 官方示例串，会被 GitHub Push Protection 判为 OpenAI API Key 而拦截推送。已统一替换为 `REPLACE_WITH_YOUR_OWN_SECRET_KEY`（`.env` 与 `docker-compose.yml` 默认值共 8 处）。后续用 `scripts/sync-appstore.js` 重新同步官方数据后，须再次替换，否则 push 会被拦截。
@@ -3695,7 +3695,7 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 
 - **新增** `scripts/smoke-git-workbench.js`（`npm run smoke:gitwb`）：临时工作区真实 Git 仓库 + 真实 `server.js`，35 项全过——11 个视图、元数据、只读防线、破坏性二次确认、非法引用/越界路径拒绝、脱敏、语义动作真实建/删分支、旧入口兼容、混合命令分类、参数黑名单，以及复核修复的 P1-3 / P1-4 后端行为断言。
 - **新增** `scripts/smoke-git-workbench-frontend.js`（`npm run smoke:gitwb:fe`）：23 项**前端交互级**行为测试——用 vm 加载 `app.js` / `gitView.js` 真实函数体、注入可控弹窗与 fetch stub，直接断言请求体 / 解析结果 / 并发忙碌锁 / 抛错行为，覆盖 4 个 P1、P2 交互、工作台收敛过滤（6 标签 / 隐藏低频命令 / 纯函数不改后端原数组）与日志分支列提取（后端 smoke 只测后端，一个 P1 都抓不到）。
-- `npm run check` 全过（`gitView.js` 与两个 smoke 脚本纳入 `node --check` 链）；`npm run typecheck` **75 ≤ 基线 78**；`node scripts/check-frontend.js` 全过（Git 工作台护栏 + 复核修复护栏 + 收敛护栏 + UI 调整护栏 + 缓存戳 `20261125c`）。
+- `npm run check` 全过（`gitView.js` 与两个 smoke 脚本纳入 `node --check` 链）；`npm run typecheck` **75 ≤ 基线 78**；`node scripts/check-frontend.js` 全过（Git 工作台护栏 + 复核修复护栏 + 收敛护栏 + UI 调整护栏 + 显示修复护栏 + 缓存戳 `20261125d`）。
 - 历史冒烟无回归：`smoke:git` 31 项、`smoke:api` 52 项、`smoke:security` 49 项、`smoke:import` 11 项、`smoke:hardening` 12 项全过。
 
 ### 70.5 复核修复（对照「分析未提交改动中的 bug 和不完善之处」结论逐条实测）
@@ -3724,4 +3724,10 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 | 4 | 文本框美化 | 详情弹窗字段用两列网格 `.git-detail-form` + 带边框圆角的只读 input `.git-detail-field`（对齐同步页 label + input 视觉，便于选中复制） |
 | 5 | 去分区局部滚动条 | `.git-wb-pane` 去掉 `max-height:52vh/overflow:auto`，内容自然撑开；滚动统一交给弹窗 `.modal-body`（红框所示的分区内滚动条消失） |
 
-验证：`check-frontend.js` 新增 3 条 UI 护栏；`smoke:gitwb:fe` 19→23 项（分支提取去前缀 / 排除 tag / 去重 / 纯标签空）；缓存戳 `20261125b → 20261125c`。本阶段改动在工作区，未 push / 部署，等用户指令。
+验证：`check-frontend.js` 新增 3 条 UI 护栏；`smoke:gitwb:fe` 19→23 项（分支提取去前缀 / 排除 tag / 去重 / 纯标签空）；缓存戳 `20261125b → 20261125c`。本阶段已随 `e1f0f28` push 并部署 246。
+
+### 70.7 工作台内容溢出显示修复
+
+**现象**（用户 246 实测截图）：弹窗高度受限时 `.git-wb-body`（flex 列容器）把各分区子项 `flex-shrink` 压到 `.git-wb-pane` 的 `min-height:210px`，超出的日志表 / 分支卡片以 `overflow:visible` 溢出，直接盖住下方「命令输出」标签与输出框（日志行穿过标签、分支卡片压住标签）。
+
+**修复**：新增 `.git-wb-body > * { flex: 0 0 auto; }`，子项按内容自然撑开，滚动仍统一由弹窗 `.modal-body` 承担；`check-frontend.js` 护栏 202→203，缓存戳 `20261125c → 20261125d`。

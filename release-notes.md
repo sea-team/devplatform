@@ -1,7 +1,7 @@
 <!-- BEGIN PENDING-RELEASE-NOTES: 待发版元信息，CI 生成 Release notes 时整块剥离，勿删此对标记 -->
 【待发版 · v0.4.31 阶段】Git 工作台（TortoiseGit 式）—— 已完成实现与本地验证，尚未发版
-  状态：仓库版本仍 `0.4.30`；未升版本号、未打 tag、未发 GitHub Release、未部署 246。
-  246 线上仍运行 v0.4.30 代码。以下改动待用户明确发版指令后再执行提交 / 推送 / 打 tag / 发版 / 部署。
+  状态：仓库版本仍 `0.4.30`；未升版本号、未打 tag、未发 GitHub Release。
+  代码已 push 到 origin/main（最新 e1f0f28）并部署 246 测试环境验证通过；正式发版（升版本 / tag / Release）待用户明确指令。
   1) 交互升级（README §70）：沿用仓库列表「Git 操作」按钮，弹窗内改为 10 分区多标签工作台
      —— 状态 / 提交日志 / 提交 / 分支·合并 / 同步 / Stash / 标签 / 冲突·还原 / 清理 / 自定义命令。
      参考本机 TortoiseGit 真实菜单术语（Commit / Pull / Push / Merge / Switch / Create Branch /
@@ -12,7 +12,7 @@
      旧 `/repos/git` 保留兼容并改用精确分类做仓库级写权限收口。
   3) 前端：结构化状态表（逐文件暂存/取消/放弃）、可点选提交日志 + SVG 分支图 + 着色 diff、
      参数化分支 / 同步 / Stash / 标签 / 冲突 / 清理面板；破坏性动作统一二次确认；
-     `check-frontend.js` 护栏累计 202 条，缓存戳 `20261124q → 20261124r → 20261125a → 20261125c`。
+     `check-frontend.js` 护栏累计 203 条，缓存戳 `20261124q → 20261124r → 20261125a → 20261125c → 20261125d`。
   3b) 复核修复（对照「分析未提交改动中的 bug 和不完善之处」逐条实测）：4 个 P1 功能 Bug
      （放弃改动无二次确认 / stash 预设缺 -m / quoted-path 未反转义 / view 忽略退出码）、
      6 项 P2 体验健壮性、文档数字与 release-notes 待发版段处理；详见 README §70.5。
@@ -24,6 +24,8 @@
      （从 git decorations 提取，去 HEAD -> 前缀 / 排除 tag / 去重）；点击日志详情改走独立弹窗，
      字段用两列网格 + 带边框圆角只读文本框美化；去掉分区内局部滚动条，滚动改由弹窗统一承担。
      详见 README §70.6。
+  3e) 显示修复：弹窗内工作台各分区默认被 flex 压缩到 min-height，超出的日志表 / 分支卡片溢出盖住「命令输出」区；
+     给 `.git-wb-body > *` 加 `flex: 0 0 auto` 让内容自然撑开、滚动统一由弹窗承担；缓存戳 `20261125c → 20261125d`。详见 README §70.7。
   4) 验证：`scripts/smoke-git-workbench.js`（`npm run smoke:gitwb`，真实 server）35 项全过；
      新增 `scripts/smoke-git-workbench-frontend.js`（`npm run smoke:gitwb:fe`）23 项前端交互级
      行为测试全过（vm 跑真实函数体，覆盖 4 个 P1 + 收敛过滤 + 日志分支列提取，而非字符串护栏）；

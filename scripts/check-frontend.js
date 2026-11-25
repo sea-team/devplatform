@@ -373,6 +373,8 @@ note(css.includes('.git-wb-pane { min-height: 210px; overflow: visible; }')
   && !css.includes('.git-wb-pane { min-height: 210px; max-height')
   && !css.includes('.git-wb-pane { max-height: 44vh; }'),
 'UI 调整：分区去掉局部滚动条（红框），内容自然撑开由弹窗 .modal-body 统一滚动');
+note(css.includes('.git-wb-body > * { flex: 0 0 auto; }'),
+'UI 显示修复：工作台子项不被 flex 压缩，内容自然撑开，避免日志表/分支卡片溢出盖住「命令输出」区');
 note(releaseYml.includes('BEGIN PENDING-RELEASE-NOTES')
   && releaseYml.includes('-replace') && releaseYml.includes('END PENDING-RELEASE-NOTES'),
 '文档修复：CI 生成 Release notes 前剥离「待发版」元信息块，避免污染正式发布说明');
@@ -397,7 +399,7 @@ note(releaseYml.includes('BEGIN PENDING-RELEASE-NOTES')
 }
 
 // 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
-const CACHE_STAMP = '20261125c';
+const CACHE_STAMP = '20261125d';
 const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
 note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
 
