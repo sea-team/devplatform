@@ -330,10 +330,11 @@ note(gitViewSrc.includes('function unquotePath(') && gitViewSrc.includes('functi
   && gitViewSrc.includes('combine: (o) => parseStatus(o[0])')
   && gitViewSrc.includes('splitStatusPath(line.slice(3))'),
 'P1-2 修复：parseStatus 补 porcelain quoted-path 反转义（八进制字节 / 中文 / rename）');
-note(app.includes("await runGitAction('discard', {})")
-  && serverSrc.includes('cls.destructive && b.confirmed !== true')
-  && app.includes('function repoGitNeedsConfirm('),
-'P1-3 修复：放弃全部改动走 discard 语义动作 + 旧 /repos/git 入口强制 confirmed');
+note(serverSrc.includes('cls.destructive && b.confirmed !== true')
+  && app.includes('function repoGitNeedsConfirm(')
+  && app.includes('function filterGitWorkbench(')
+  && app.includes("REPO_GIT_HIDDEN_PRESETS = ['remote', 'restore']"),
+'P1-3 修复保留 + 收敛：旧 /repos/git 入口仍强制 confirmed；discard/remote 低频入口前端隐藏（后端不动）');
 note(gitViewSrc.includes('if (Number(r.code) !== 0)')
   && gitViewSrc.includes('Git 视图 ${key} 执行失败'),
 'P1-4 修复：view() 遇 git code≠0 抛 HttpError(400)，不再返回 ok:true 夹带 fatal 文本');
@@ -341,6 +342,22 @@ note(app.includes('function splitGitCommand(') && app.includes('function gitText
   && !app.includes('Math.min(1100,') && app.includes('data-gfill')
   && app.includes('repoGitBusy = true;'),
 'P2 修复：自定义命令引号分词 / SVG 宽度自适应 / 远程分支短名 / 确认期忙碌锁');
+
+// v0.4.31 工作台收敛：对标 TortoiseGit 保留常用操作，低频入口仅前端隐藏（后端全保留，可回退）。
+note(app.includes("REPO_GIT_VISIBLE_TABS = ['status', 'log', 'commit', 'branch', 'sync', 'conflict']")
+  && app.includes('function filterGitWorkbench(')
+  && app.includes('const filtered = filterGitWorkbench(groups.items || [], presets.items || [])')
+  && app.includes('repoGitGroups = filtered.groups') && app.includes('repoGitPresets = filtered.presets'),
+'工作台收敛：6 个常用标签白名单 + 过滤纯函数接入 openRepoGitModal（Stash/标签/清理/自定义命令入口隐藏）');
+note(app.includes("REPO_GIT_HIDDEN_PRESETS = ['remote', 'restore']")
+  && !app.includes('data-gact="discardSel"') && !app.includes('data-gact="restore"')
+  && !app.includes('<h4>远程仓库</h4>')
+  && app.includes("clearOut.dataset.bound = '1'"),
+'工作台收敛：远程地址 / 放弃改动按钮移除，清空输出绑定上移到 modal（入口下架不误伤公共按钮）');
+note(serverSrc.includes("app.get('/api/repos/git/presets'") && serverSrc.includes('gitView.view(')
+  && gitViewSrc.includes('stashSave:') && gitViewSrc.includes('mergeAbort:')
+  && workspaceGitSrc.includes("key: 'stash-save'") && workspaceGitSrc.includes("key: 'clean-do'"),
+'工作台收敛：后端 presets / 视图 / 语义动作全部保留不动（仅前端过滤，随时可回退）');
 note(releaseYml.includes('BEGIN PENDING-RELEASE-NOTES')
   && releaseYml.includes('-replace') && releaseYml.includes('END PENDING-RELEASE-NOTES'),
 '文档修复：CI 生成 Release notes 前剥离「待发版」元信息块，避免污染正式发布说明');
@@ -365,7 +382,7 @@ note(releaseYml.includes('BEGIN PENDING-RELEASE-NOTES')
 }
 
 // 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
-const CACHE_STAMP = '20261125a';
+const CACHE_STAMP = '20261125b';
 const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
 note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
 

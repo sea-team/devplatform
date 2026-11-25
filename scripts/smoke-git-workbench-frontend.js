@@ -86,7 +86,7 @@ vm.createContext(sandbox);
 // 顶层 function 声明会成为 context 的全局属性；用 runInContext 追加导出探针。
 vm.runInContext(appSrc + `
 ;globalThis.__t = {
-  splitGitCommand, gitTextWidth, graphSvg, repoGitNeedsConfirm,
+  splitGitCommand, gitTextWidth, graphSvg, repoGitNeedsConfirm, filterGitWorkbench,
   runGitPreset, runRepoGit, runGitAction, gitLoadView,
   get busy() { return repoGitBusy; },
   set repo(v) { repoGitRepo = v; },
@@ -272,6 +272,31 @@ async function main() {
   note(!htmlSrc.includes('id="repo-git-message"') && !htmlSrc.includes('id="repo-git-hash"')
     && htmlSrc.includes('id="repo-git-input"'),
     'P2 静态摆设输入框已移除，仅保留 repo-git-input');
+
+  /* --- 工作台收敛：对标 TortoiseGit 的 6 标签过滤（行为级，非字符串护栏） --- */
+  const fullGroups = [
+    { id: 'status' }, { id: 'log' }, { id: 'commit' }, { id: 'branch' }, { id: 'sync' },
+    { id: 'stash' }, { id: 'tag' }, { id: 'conflict' }, { id: 'clean' }, { id: 'custom' },
+  ];
+  const fullPresets = [
+    { key: 'status', group: 'status' }, { key: 'log', group: 'log' },
+    { key: 'fetch', group: 'sync' }, { key: 'pull', group: 'sync' }, { key: 'push', group: 'sync' },
+    { key: 'remote', group: 'sync' }, { key: 'add', group: 'commit' }, { key: 'commit', group: 'commit' },
+    { key: 'merge-abort', group: 'conflict' }, { key: 'revert', group: 'conflict' }, { key: 'reset', group: 'conflict' },
+    { key: 'restore', group: 'conflict' },
+    { key: 'stash-save', group: 'stash' }, { key: 'tag-new', group: 'tag' },
+    { key: 'clean-do', group: 'clean' },
+  ];
+  const filtered = T.filterGitWorkbench(fullGroups, fullPresets);
+  note(eq(filtered.groups.map((g) => g.id), ['status', 'log', 'commit', 'branch', 'sync', 'conflict']),
+    '收敛：过滤后只剩 6 个常用标签', filtered.groups.map((g) => g.id).join(','));
+  note(!filtered.presets.some((p) => ['remote', 'restore', 'stash-save', 'tag-new', 'clean-do'].includes(p.key))
+    && filtered.presets.some((p) => p.key === 'push') && filtered.presets.some((p) => p.key === 'merge-abort'),
+    '收敛：remote/restore/stash/tag/clean 快捷命令被过滤，push/中止合并/还原保留',
+    filtered.presets.map((p) => p.key).join(','));
+  // 后端数据仍在（未被过滤函数改动）—— 入参对象未被 mutate，可回退。
+  note(fullGroups.length === 10 && fullPresets.some((p) => p.key === 'stash-save'),
+    '收敛：过滤纯函数不改动后端原始数组（后端全保留，随时可回退）');
 
   console.log(`\n${errors.length ? `✖ ${errors.length} 项未通过` : `✔ 全部 ${passed} 项通过`}`);
   if (errors.length) process.exitCode = 1;

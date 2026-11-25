@@ -12,14 +12,18 @@
      旧 `/repos/git` 保留兼容并改用精确分类做仓库级写权限收口。
   3) 前端：结构化状态表（逐文件暂存/取消/放弃）、可点选提交日志 + SVG 分支图 + 着色 diff、
      参数化分支 / 同步 / Stash / 标签 / 冲突 / 清理面板；破坏性动作统一二次确认；
-     `check-frontend.js` 护栏累计 202 条，缓存戳 `20261124q → 20261124r → 20261125a`。
+     `check-frontend.js` 护栏累计 202 条，缓存戳 `20261124q → 20261124r → 20261125a → 20261125b`。
   3b) 复核修复（对照「分析未提交改动中的 bug 和不完善之处」逐条实测）：4 个 P1 功能 Bug
      （放弃改动无二次确认 / stash 预设缺 -m / quoted-path 未反转义 / view 忽略退出码）、
      6 项 P2 体验健壮性、文档数字与 release-notes 待发版段处理；详见 README §70.5。
+  3c) 常用操作收敛（对标 TortoiseGit）：工作台只展示 6 个标签（状态/日志/提交/分支/同步/冲突还原），
+     覆盖日志、分支、提交、推送、拉取(含 fetch)、中止合并、还原、重置 + 状态/暂存/差异/合并配套；
+     Stash/标签/清理/自定义命令入口前端隐藏，远程地址表与「放弃改动」按钮移除。仅前端过滤
+     （filterGitWorkbench 纯函数），后端 presets/视图/动作/测试全部保留不动，可回退。
   4) 验证：`scripts/smoke-git-workbench.js`（`npm run smoke:gitwb`，真实 server）35 项全过；
-     新增 `scripts/smoke-git-workbench-frontend.js`（`npm run smoke:gitwb:fe`）16 项前端交互级
-     行为测试全过（vm 跑真实函数体，覆盖 4 个 P1，而非字符串护栏）；
-     `npm run check` / `npm run typecheck`（75 ≤ 基线 78）/ `check-frontend.js`（202 条）全过；
+     新增 `scripts/smoke-git-workbench-frontend.js`（`npm run smoke:gitwb:fe`）19 项前端交互级
+     行为测试全过（vm 跑真实函数体，覆盖 4 个 P1 + 收敛过滤，而非字符串护栏）；
+     `npm run check` / `npm run typecheck`（75 ≤ 基线 78）/ `check-frontend.js` 全过；
      历史冒烟 smoke:git 31 / smoke:api 52 / smoke:security 49 / smoke:import 11 / smoke:hardening 12 全过。
 <!-- END PENDING-RELEASE-NOTES -->
 

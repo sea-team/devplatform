@@ -1311,15 +1311,31 @@ async function openRepoTerminal(name) {
 }
 
 /* ================= v0.4.31 · TortoiseGit 式 Git 工作台 ================= */
-/* 沿用仓库列表「Git 操作」按钮入口，弹窗内改为「状态 / 日志 / 提交 / 分支 / 同步 /
-   Stash / 标签 / 冲突 / 清理 / 自定义命令」多标签工作台。后端提供结构化只读视图
-   (/repos/git/view) 与语义动作 (/repos/git/action)，自定义命令仍走 /repos/git。 */
+/* 沿用仓库列表「Git 操作」按钮入口，收敛为 TortoiseGit 常用操作：
+   「状态 / 日志 / 提交 / 分支 / 同步 / 冲突还原」六个标签，覆盖日志、分支、提交、
+   推送、拉取(含 fetch)、中止合并、还原、重置；工作区状态 / 暂存 / 差异 / 合并作为
+   配套项一并保留。Stash / 标签 / 清理 / 自定义命令等低频入口在前端隐藏。
+   后端视图 / 语义动作 / 预设 / 测试一律保留不动，仅前端过滤，随时可回退。 */
 let repoGitRepo = '';
 let repoGitPresets = [];
 let repoGitGroups = [];
 let repoGitTab = 'status';
 let repoGitBusy = false;
 const repoGitCache = {}; // 每个视图的结构化数据缓存
+
+/** 工作台保留的标签（TortoiseGit 常用操作 + 配套项），其余标签前端不展示。 */
+const REPO_GIT_VISIBLE_TABS = ['status', 'log', 'commit', 'branch', 'sync', 'conflict'];
+/** 隐藏的低频快捷命令：远程地址（同步页已展示上游）、放弃改动（易误删，冲突页已移除按钮）。 */
+const REPO_GIT_HIDDEN_PRESETS = ['remote', 'restore'];
+/** 对后端返回的 groups / presets 做前端收敛过滤（纯函数，便于行为测试）。 */
+function filterGitWorkbench(groups, presets) {
+  const gs = Array.isArray(groups) ? groups : [];
+  const ps = Array.isArray(presets) ? presets : [];
+  return {
+    groups: gs.filter((g) => REPO_GIT_VISIBLE_TABS.includes(g.id)),
+    presets: ps.filter((p) => REPO_GIT_VISIBLE_TABS.includes(p.group) && !REPO_GIT_HIDDEN_PRESETS.includes(p.key)),
+  };
+}
 
 function gitOut(text) {
   const out = $('#repo-git-output');
@@ -1654,7 +1670,6 @@ async function renderGitStatus() {
       <button class="btn btn-sm btn-primary" type="button" data-gact="stageSel">暂存选中</button>
       <button class="btn btn-sm" type="button" data-gact="stageAll">暂存全部</button>
       <button class="btn btn-sm" type="button" data-gact="unstageSel">取消暂存</button>
-      <button class="btn btn-sm btn-danger" type="button" data-gact="discardSel">放弃选中改动</button>
       <button class="btn btn-sm" type="button" data-gact="showDiff">查看差异</button>
     </div>
   </div><div id="git-wb-status-diff"></div>`;
@@ -1669,9 +1684,6 @@ async function renderGitStatus() {
     } else if (act === 'unstageSel') {
       if (!paths.length) { toast('请先勾选要取消暂存的文件', true); return; }
       await runGitAction('unstage', { paths });
-    } else if (act === 'discardSel') {
-      if (!paths.length) { toast('请先勾选要放弃改动的文件', true); return; }
-      await runGitAction('discard', { paths });
     } else if (act === 'showDiff') {
       const box = $('#git-wb-status-diff');
       if (box) box.innerHTML = `<div class="git-wb-card"><h4>差异</h4><div class="git-wb-inline"><label><input type="checkbox" id="git-wb-diff-staged" /> 仅暂存区</label><button class="btn btn-sm" type="button" id="git-wb-diff-load">加载</button></div><div id="git-wb-diff-body"></div></div>`;
@@ -1825,7 +1837,7 @@ async function renderGitBranch() {
 async function renderGitSync() {
   const pane = gitPane('sync');
   if (!pane) return;
-  const [st, rm] = await Promise.all([gitLoadView('status'), gitLoadView('remotes')]);
+  const st = await gitLoadView('status');
   const s = st || {};
   pane.innerHTML = `<div class="git-wb-card"><h4>同步状态</h4>
     <div class="git-wb-summary">${gitBadge(`分支 ${s.branch || '—'}`)}${s.upstream ? gitBadge(`上游 ${s.upstream}`, 'blue') : ''}${s.ahead ? gitBadge(`领先 ${s.ahead} 待推送`, 'green') : ''}${s.behind ? gitBadge(`落后 ${s.behind} 待拉取`, 'amber') : ''}</div>
@@ -1834,8 +1846,7 @@ async function renderGitSync() {
       <button class="btn btn-sm btn-primary" type="button" data-gact="fetch">Fetch 拉取元数据</button>
       <button class="btn btn-sm btn-primary" type="button" data-gact="pull">Pull 拉取更新</button>
       <button class="btn btn-sm btn-primary" type="button" data-gact="push">Push 推送</button>
-    </div></div>
-    <div class="git-wb-card"><h4>远程仓库</h4><div class="table-wrap"><table class="git-wb-table"><thead><tr><th>名称</th><th>fetch</th><th>push</th></tr></thead><tbody>${(rm && rm.remotes.length) ? rm.remotes.map((r) => `<tr><td class="mono">${esc(r.name)}</td><td class="mono">${esc(r.fetch)}</td><td class="mono">${esc(r.push)}</td></tr>`).join('') : `<tr><td colspan="3" class="git-wb-empty">未配置远程仓库</td></tr>`}</tbody></table></div></div>`;
+    </div></div>`;
   pane.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', async () => {
     const remote = gitVal('git-wb-sync-remote');
     const branch = gitVal('git-wb-sync-branch');
@@ -1919,7 +1930,6 @@ async function renderGitConflict() {
       <button class="btn btn-sm btn-danger" type="button" data-gact="resetSoft">重置 (soft)</button>
       <button class="btn btn-sm btn-danger" type="button" data-gact="resetMixed">重置 (mixed)</button>
       <button class="btn btn-sm btn-danger" type="button" data-gact="resetHard">重置 (hard)</button>
-      <button class="btn btn-sm btn-danger" type="button" data-gact="restore">放弃全部本地改动</button>
     </div></div>`;
   pane.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', async () => {
     const ref = gitVal('git-wb-conflict-ref');
@@ -1929,9 +1939,7 @@ async function renderGitConflict() {
     else if (act === 'resetSoft') await runGitAction('reset', { mode: 'soft', ref: ref || 'HEAD~1' });
     else if (act === 'resetMixed') await runGitAction('reset', { mode: 'mixed', ref: ref || 'HEAD~1' });
     else if (act === 'resetHard') await runGitAction('reset', { mode: 'hard', ref: ref || 'HEAD~1' });
-    // v0.4.31 修复：「放弃全部本地改动」走语义动作 discard（needConfirm=true），
-    // 前端 confirmDialog + 后端 /action 强制 confirmed 双保险，避免误删无提示。
-    else if (act === 'restore') await runGitAction('discard', {});
+    // v0.4.31 收敛：「放弃全部本地改动」低频且易误删，前端入口已移除（后端 discard 动作保留不动，可回退）。
     for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
     await refreshGitTab('conflict');
   }));
@@ -2015,13 +2023,22 @@ async function openRepoGitModal(repo) {
     const eff = rt.effectiveGit || {};
     const sub = $('#repo-git-sub');
     if (sub) sub.textContent = `通道：${rt.effective === 'container' ? '平台容器 / 本机' : `SSH 宿主机 ${eff.host || ''}`}${eff.version ? ` · Git ${eff.version}` : ''} · 工作区仓库 ${repoGitRepo}`;
-    repoGitPresets = presets.items || [];
-    repoGitGroups = groups.items || [];
+    // v0.4.31 收敛：只展示 TortoiseGit 常用操作标签与配套命令，低频入口前端隐藏（后端不动）。
+    const filtered = filterGitWorkbench(groups.items || [], presets.items || []);
+    repoGitGroups = filtered.groups;
+    repoGitPresets = filtered.presets;
   } catch (e) { toast(e.message, true); return; }
   renderGitTabs();
   for (const g of repoGitGroups) {
     const p = gitPane(g.id);
     if (p) p.hidden = g.id !== repoGitTab;
+  }
+  // v0.4.31 收敛：自定义命令标签隐藏后，原本在 renderGitCustom 里绑定的「清空输出」
+  // 按钮改在这里一次性绑定（dataset 标记防重复），保证输出区清空功能不随入口下架而失效。
+  const clearOut = $('#repo-git-clear');
+  if (clearOut && !clearOut.dataset.bound) {
+    clearOut.addEventListener('click', () => gitOut('—'));
+    clearOut.dataset.bound = '1';
   }
   modal.hidden = false;
   await refreshGitTab(repoGitTab);

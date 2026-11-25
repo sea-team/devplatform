@@ -76,7 +76,7 @@
 - 当前版本 **v0.4.30**（`platform/package.json` / `package-lock.json` 已升至 `0.4.30`，tag `v0.4.30`，GitHub Release 由 `.github/workflows/release.yml` 在推送 tag 时构建发布）。
 - 代码已部署 `10.0.0.246` 并实测：health `0.4.30/normal`、环境体检 `8 正常 / 0 提醒 / 0 异常`。
 - v0.4.29 / v0.4.30 两阶段改动已随本次一并发版，详见 `release-notes.md`。
-- 前端静态资源缓存戳 `20261125a`（v0.4.31 阶段 Git 工作台改动 + 复核修复）；`npm run check`、`npm run typecheck`（基线 78，实测 75）、`node scripts/check-frontend.js`、`npm run smoke:gitwb` / `npm run smoke:gitwb:fe` 全过。
+- 前端静态资源缓存戳 `20261125b`（v0.4.31 阶段 Git 工作台改动 + 复核修复 + 常用操作收敛）；`npm run check`、`npm run typecheck`（基线 78，实测 75）、`node scripts/check-frontend.js`、`npm run smoke:gitwb` / `npm run smoke:gitwb:fe` 全过。
 - **工作区待发版改动**（v0.4.31 阶段）：Git 工作台（TortoiseGit 式）已完成，见 §70。版本号仍 `0.4.30`、未打 tag、未发 Release、未部署 246；246 线上仍运行 v0.4.30 代码。发版需用户明确指令。
 - 官方应用模板位于 `platform/appstore/`（319 个模板 `.env` 属样例配置，必须随仓库入库；`.gitignore` 已加白名单）。
 - **同步官方模板注意**：Dify 系列模板原本自带 `SECRET_KEY=sk-...` 官方示例串，会被 GitHub Push Protection 判为 OpenAI API Key 而拦截推送。已统一替换为 `REPLACE_WITH_YOUR_OWN_SECRET_KEY`（`.env` 与 `docker-compose.yml` 默认值共 8 处）。后续用 `scripts/sync-appstore.js` 重新同步官方数据后，须再次替换，否则 push 会被拦截。
@@ -3660,7 +3660,7 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 
 ## §70 Git 工作台（TortoiseGit 式）（v0.4.31 阶段 · 待发版）
 
-> **状态说明**：本阶段功能已完成实现与本地验证，但按协作约定**未升版本号、未打 tag、未发 Release、未部署 246**，等待用户明确发版指令。仓库版本仍 `0.4.30`，246 线上仍运行含复核前 bug 的 `20261124r` 代码（复核修复仅在工作区，未重新部署）。前端缓存戳 `20261124q → 20261124r → 20261125a`。
+> **状态说明**：按协作约定**未升版本号、未打 tag、未发 Release**。仓库版本仍 `0.4.30`。246 线上当前运行 `20261125a`（含 4 个 P1 + 6 项 P2 复核修复，已部署实测验收）；本节的「常用操作收敛」（6 标签 + 隐藏低频入口）改动在工作区，**尚未 push / 部署**，等待用户明确指令。前端缓存戳演进 `20261124q → 20261124r → 20261125a → 20261125b`。
 
 ### 70.1 需求与定位
 
@@ -3686,15 +3686,16 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 - **状态**：结构化文件表（状态位、类型、暂存 / 未暂存、冲突高亮），逐文件勾选 → 暂存 / 取消暂存 / 放弃改动 / 查看差异（diff 增删行着色）。
 - **提交日志**：`git log --graph` 字符画转 **SVG 分支图**（按 `|/\` 拓扑着色），提交行可点选 → `show` 视图显示作者 / 时间 / body / numstat / 着色 diff，并可「还原此提交 / 重置到此提交」。
 - **提交**：待提交 / 未暂存两栏、逐文件「暂存」、提交说明、提交 / 提交并推送。
-- **分支**：列表点选填入名称，新建 / 切换 / 删除 / 合并；**同步**：ahead/behind 徽章 + 可选远端/分支 + Fetch/Pull/Push + 远程地址表（凭据脱敏）；**Stash**：列表、保存 / 应用 / 弹出 / 丢弃；**标签**：列表、新建（附注）/ 删除；**冲突**：冲突文件 + 中止合并 / 还原 / soft·mixed·hard 重置 / 放弃全部改动；**清理**：先 `-n -d` 预览再 `-f -d` 执行。
-- **自定义命令**：保留白名单入口与唯一静态 input `repo-git-input`（v0.4.31 复核修复：移除从未被 `app.js` 读取的 `repo-git-message` / `repo-git-hash` 两个摆设输入框，提交说明 / 还原提交号改由 `promptDialog()` 即时填写）；支持 `"双引号"` / `'单引号'` 包裹含空格参数（`commit -m "hello world"` 不再被拆碎）；远程分支行点选填入去掉 `remotes/<remote>/` 前缀的短名，删除 / 合并误填远程引用时明确拦截提示。
+- **分支**：列表点选填入名称，新建 / 切换 / 删除 / 合并；**同步**：ahead/behind 徽章 + 可选远端/分支 + Fetch/Pull/Push；**冲突**：冲突文件 + 中止合并 / 还原 / soft·mixed·hard 重置。
+- **工作台收敛（v0.4.31 常用操作版）**：对标 TortoiseGit 只展示「状态 / 日志 / 提交 / 分支 / 同步 / 冲突还原」6 个标签，覆盖日志、分支、提交、推送、拉取(含 fetch)、中止合并、还原、重置；工作区状态 / 暂存 / 差异 / 合并作为配套项保留。Stash / 标签 / 清理 / 自定义命令等低频入口**仅前端隐藏**，远程地址表与「放弃改动」按钮一并移除。**后端 presets / 只读视图 / 语义动作 / 测试全部保留不动**，过滤只在 `filterGitWorkbench()`（纯函数）里做，随时可回退。
+- **自定义命令（入口已隐藏，代码保留）**：白名单入口与静态 input `repo-git-input` 仍在 DOM 与 `splitGitCommand()` 逻辑中，但「自定义命令」标签已从前端收敛中移除（`filterGitWorkbench()` 过滤），如需恢复只需改 `REPO_GIT_VISIBLE_TABS` 白名单。曾经移除的 `repo-git-message` / `repo-git-hash` 两个摆设输入框不再恢复，提交说明 / 还原提交号仍由 `promptDialog()` 即时填写；远程分支行点选填短名、删除 / 合并误填远程引用拦截的逻辑保留。
 - 所有破坏性动作统一走 `confirmDialog()`（全站禁用原生 `confirm/prompt/alert`）；`promptDialog()` 用于提交说明、分支名、标签名、stash 说明等输入。执行入口（`runGitPreset` / `runRepoGit` / `runGitAction`）的 `repoGitBusy` 忙位在二次确认弹窗**之前**置位、`finally` 复位，弹窗期间无法并发触发其它 Git 写操作。
 
 ### 70.4 验证与状态
 
 - **新增** `scripts/smoke-git-workbench.js`（`npm run smoke:gitwb`）：临时工作区真实 Git 仓库 + 真实 `server.js`，35 项全过——11 个视图、元数据、只读防线、破坏性二次确认、非法引用/越界路径拒绝、脱敏、语义动作真实建/删分支、旧入口兼容、混合命令分类、参数黑名单，以及复核修复的 P1-3 / P1-4 后端行为断言。
-- **新增** `scripts/smoke-git-workbench-frontend.js`（`npm run smoke:gitwb:fe`）：16 项**前端交互级**行为测试——用 vm 加载 `app.js` / `gitView.js` 真实函数体、注入可控弹窗与 fetch stub，直接断言请求体 / 解析结果 / 并发忙碌锁 / 抛错行为，覆盖 4 个 P1 与 P2 交互（后端 smoke 只测后端，一个 P1 都抓不到）。
-- `npm run check` 全过（`gitView.js` 与两个 smoke 脚本纳入 `node --check` 链）；`npm run typecheck` **75 ≤ 基线 78**；`node scripts/check-frontend.js` 全过（Git 工作台护栏累计 202 条 + 复核修复护栏 7 条 + 缓存戳 `20261125a`）。
+- **新增** `scripts/smoke-git-workbench-frontend.js`（`npm run smoke:gitwb:fe`）：19 项**前端交互级**行为测试——用 vm 加载 `app.js` / `gitView.js` 真实函数体、注入可控弹窗与 fetch stub，直接断言请求体 / 解析结果 / 并发忙碌锁 / 抛错行为，覆盖 4 个 P1、P2 交互与工作台收敛过滤（6 标签 / 隐藏低频命令 / 纯函数不改后端原数组）（后端 smoke 只测后端，一个 P1 都抓不到）。
+- `npm run check` 全过（`gitView.js` 与两个 smoke 脚本纳入 `node --check` 链）；`npm run typecheck` **75 ≤ 基线 78**；`node scripts/check-frontend.js` 全过（Git 工作台护栏 + 复核修复护栏 + 收敛护栏 + 缓存戳 `20261125b`）。
 - 历史冒烟无回归：`smoke:git` 31 项、`smoke:api` 52 项、`smoke:security` 49 项、`smoke:import` 11 项、`smoke:hardening` 12 项全过。
 
 ### 70.5 复核修复（对照「分析未提交改动中的 bug 和不完善之处」结论逐条实测）
