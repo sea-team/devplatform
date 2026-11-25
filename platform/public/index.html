@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DevPlatform · 统一 Web 开发管理平台</title>
-  <link rel="stylesheet" href="/style.css?v=20261125b" />
+  <link rel="stylesheet" href="/style.css?v=20261125c" />
   <link rel="stylesheet" href="/vendor/xterm.min.css" />
   <link rel="stylesheet" href="/vendor/codemirror.css" />
   <link rel="stylesheet" href="/cm-theme.css" />
@@ -2033,6 +2033,17 @@
       </div>
     </div>
   </div>
+  <!-- v0.4.31 UI · Git 提交详情弹窗：点击提交日志行后在独立弹窗展示，字段用带边框只读文本框 -->
+  <div class="modal" id="git-commit-modal" hidden aria-modal="true" role="dialog" aria-labelledby="git-commit-title">
+    <div class="modal-mask" data-git-commit-close></div>
+    <div class="modal-panel modal-narrow">
+      <div class="modal-head">
+        <div><h2 id="git-commit-title">提交详情</h2><span class="muted">提交元信息与改动内容</span></div>
+        <button class="btn btn-ghost btn-sm" type="button" data-git-commit-close>✕ 关闭</button>
+      </div>
+      <div class="modal-body" id="git-commit-body"></div>
+    </div>
+  </div>
   <!-- v0.3.11 · OpenList 文件编辑器：与远程文件编辑器一样的编码 / 换行 / 语法高亮 -->
   <div class="modal" id="ol-editor-modal" hidden aria-modal="true" role="dialog" aria-labelledby="ol-editor-title">
     <div class="modal-mask" data-ol-ed-close></div>
@@ -2314,6 +2325,6 @@
   <div id="card-modal-mask" hidden></div>
   <script src="/vendor/cm-addons.js"></script>
   <script src="/vendor/qrcode.js"></script>
-  <script src="/app.js?v=20261125b"></script>
+  <script src="/app.js?v=20261125c"></script>
 </body>
 </html>

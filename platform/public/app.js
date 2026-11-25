@@ -1703,43 +1703,76 @@ async function renderGitStatus() {
   }));
 }
 
+/**
+ * 从 git log 的 decorations（refs）里提取分支名，供日志「分支」列展示。
+ * refs 形如 ['HEAD -> master', 'origin/master', 'tag: v1.2']：
+ *  - 去掉 'HEAD -> ' 前缀；排除 tag: 标签引用；保留本地 / 远程分支短名。
+ */
+function gitCommitBranches(refs) {
+  const out = [];
+  for (const raw of Array.isArray(refs) ? refs : []) {
+    let s = String(raw || '').trim();
+    if (!s || /^tag:/i.test(s)) continue;
+    s = s.replace(/^HEAD\s*->\s*/i, '');
+    if (!s || out.includes(s)) continue;
+    out.push(s);
+  }
+  return out;
+}
+
+/** 点击提交日志行：用弹窗展示提交详情（不再在页内内嵌展开）。 */
+async function showGitCommitDetail(hash) {
+  const dd = await gitLoadView('show', { hash }, { refresh: true });
+  if (!dd) return;
+  const c = dd.commit || {};
+  const modal = $('#git-commit-modal');
+  const body = $('#git-commit-body');
+  if (!modal || !body) return;
+  const title = $('#git-commit-title');
+  if (title) title.textContent = `提交详情 · ${c.short || hash}`;
+  // 字段用带边框的只读文本框展示（与同步页 label + input 同款视觉，便于选中复制）。
+  const field = (label, value, full) => `<label class="git-detail-field${full ? ' full' : ''}">${label}<input type="text" readonly value="${esc(value || '')}" /></label>`;
+  body.innerHTML = `<div class="form git-detail-form">
+    ${field('提交号', c.hash || hash, true)}
+    ${field('作者', c.author || '', false)}
+    ${field('邮箱', c.email || '', false)}
+    ${field('日期', c.date || '', true)}
+    ${field('说明', c.subject || '', true)}
+    ${c.body ? field('正文', c.body, true) : ''}
+    ${gitCommitBranches(c.refs).length ? field('分支', gitCommitBranches(c.refs).join(', '), true) : ''}
+  </div>
+  <div class="git-wb-card" style="margin-top:12px"><h4>改动内容</h4><div class="git-wb-diff">${colorizeDiff(dd.patch)}</div></div>
+  <div class="git-wb-actions" style="margin-top:12px">
+    <button class="btn btn-sm btn-danger" type="button" data-gdetail="revert">还原此提交</button>
+    <button class="btn btn-sm btn-danger" type="button" data-gdetail="reset">重置到此提交</button>
+  </div>`;
+  body.querySelectorAll('[data-gdetail]').forEach((b) => b.addEventListener('click', async () => {
+    closeGitCommitModal();
+    if (b.dataset.gdetail === 'revert') await runGitAction('revert', { hash });
+    else await runGitAction('reset', { mode: 'hard', ref: hash });
+    for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
+    await refreshGitTab('log');
+  }));
+  modal.hidden = false;
+}
+
 async function renderGitLog() {
   const pane = gitPane('log');
   if (!pane) return;
-  const [d, g] = await Promise.all([gitLoadView('log', { count: 50 }), gitLoadView('graph', { count: 40 })]);
+  // v0.4.31 UI：按用户要求去掉「提交分支图」，日志表增加「分支」列（来自 decorations）。
+  const d = await gitLoadView('log', { count: 50 });
   if (!d) { pane.innerHTML = gitEmpty('无法读取提交日志'); return; }
   const rows = d.commits.map((c) => `<tr class="clickable" data-ghash="${esc(c.hash)}">
     <td class="mono">${esc(c.short)}</td>
     <td>${esc(c.subject)}</td>
+    <td>${gitCommitBranches(c.refs).map((r) => gitBadge(r, 'blue')).join(' ') || '—'}</td>
     <td class="mono">${esc(c.author)}</td>
     <td class="mono">${esc((c.date || '').slice(0, 16).replace('T', ' '))}</td>
-    <td>${(c.refs || []).slice(0, 3).map((r) => gitBadge(r, 'blue')).join(' ')}</td>
   </tr>`).join('');
-  pane.innerHTML = `<div class="git-wb-card"><h4>提交分支图</h4><div class="git-wb-branch-graph">${graphSvg((g || {}).lines ? g.lines.join('\n') : '')}</div></div>
-  <div class="git-wb-card"><h4>提交日志（点击行查看提交详情）</h4>
-    <div class="table-wrap"><table class="git-wb-table"><thead><tr><th>提交</th><th>说明</th><th>作者</th><th>时间</th><th>引用</th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="git-wb-empty">暂无提交</td></tr>`}</tbody></table></div>
-  </div><div id="git-wb-commit-detail"></div>`;
-  pane.querySelectorAll('[data-ghash]').forEach((tr) => tr.addEventListener('click', async () => {
-    const hash = tr.dataset.ghash;
-    const dd = await gitLoadView('show', { hash }, { refresh: true });
-    const box = $('#git-wb-commit-detail');
-    if (!box || !dd) return;
-    const c = dd.commit || {};
-    box.innerHTML = `<div class="git-wb-card git-wb-commit-detail"><h4>提交详情 · ${esc(c.short || hash)}</h4>
-      <div class="meta">${esc(c.hash || '')}<br/>作者：${esc(c.author || '')} &lt;${esc(c.email || '')}&gt; · ${esc(c.date || '')}<br/>${esc(c.subject || '')}${c.body ? `<br/><br/>${esc(c.body)}` : ''}</div>
-      <div class="git-wb-diff" style="margin-top:10px">${colorizeDiff(dd.patch)}</div>
-      <div class="git-wb-actions" style="margin-top:10px">
-        <button class="btn btn-sm btn-danger" type="button" data-gdetail="revert">还原此提交</button>
-        <button class="btn btn-sm btn-danger" type="button" data-gdetail="reset">重置到此提交</button>
-      </div></div>`;
-    box.querySelectorAll('[data-gdetail]').forEach((b) => b.addEventListener('click', async () => {
-      if (b.dataset.gdetail === 'revert') await runGitAction('revert', { hash });
-      else await runGitAction('reset', { mode: 'hard', ref: hash });
-      for (const k of Object.keys(repoGitCache)) delete repoGitCache[k];
-      await refreshGitTab('log');
-    }));
-    box.scrollIntoView({ block: 'nearest' });
-  }));
+  pane.innerHTML = `<div class="git-wb-card"><h4>提交日志（点击行在弹窗查看提交详情）</h4>
+    <div class="table-wrap"><table class="git-wb-table"><thead><tr><th>提交</th><th>说明</th><th>分支</th><th>作者</th><th>时间</th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="git-wb-empty">暂无提交</td></tr>`}</tbody></table></div>
+  </div>`;
+  pane.querySelectorAll('[data-ghash]').forEach((tr) => tr.addEventListener('click', () => void showGitCommitDetail(tr.dataset.ghash)));
 }
 
 async function renderGitCommit() {
@@ -2040,12 +2073,27 @@ async function openRepoGitModal(repo) {
     clearOut.addEventListener('click', () => gitOut('—'));
     clearOut.dataset.bound = '1';
   }
+  // 提交详情弹窗：一次性绑定关闭按钮 / 遮罩 / Esc（dataset 防重复）。
+  const commitModal = $('#git-commit-modal');
+  if (commitModal && !commitModal.dataset.bound) {
+    commitModal.querySelectorAll('[data-git-commit-close]').forEach((el) =>
+      el.addEventListener('click', closeGitCommitModal));
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !commitModal.hidden) closeGitCommitModal();
+    });
+    commitModal.dataset.bound = '1';
+  }
   modal.hidden = false;
   await refreshGitTab(repoGitTab);
 }
 
 function closeRepoGitModal() {
   const modal = $('#repo-git-modal');
+  if (modal) modal.hidden = true;
+}
+
+function closeGitCommitModal() {
+  const modal = $('#git-commit-modal');
   if (modal) modal.hidden = true;
 }
 

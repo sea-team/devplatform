@@ -87,6 +87,7 @@ vm.createContext(sandbox);
 vm.runInContext(appSrc + `
 ;globalThis.__t = {
   splitGitCommand, gitTextWidth, graphSvg, repoGitNeedsConfirm, filterGitWorkbench,
+  gitCommitBranches, showGitCommitDetail,
   runGitPreset, runRepoGit, runGitAction, gitLoadView,
   get busy() { return repoGitBusy; },
   set repo(v) { repoGitRepo = v; },
@@ -297,6 +298,17 @@ async function main() {
   // 后端数据仍在（未被过滤函数改动）—— 入参对象未被 mutate，可回退。
   note(fullGroups.length === 10 && fullPresets.some((p) => p.key === 'stash-save'),
     '收敛：过滤纯函数不改动后端原始数组（后端全保留，随时可回退）');
+
+  /* --- UI 调整：日志分支列提取（来自 decorations）--- */
+  note(eq(T.gitCommitBranches(['HEAD -> master', 'origin/master', 'tag: v1.2']), ['master', 'origin/master']),
+    'UI：分支列从 refs 提取，去 HEAD -> 前缀、排除 tag',
+    JSON.stringify(T.gitCommitBranches(['HEAD -> master', 'origin/master', 'tag: v1.2'])));
+  note(eq(T.gitCommitBranches(['HEAD -> feature/x', 'origin/feature/x', 'HEAD -> feature/x']), ['feature/x', 'origin/feature/x']),
+    'UI：分支列去重', JSON.stringify(T.gitCommitBranches(['HEAD -> feature/x', 'origin/feature/x', 'HEAD -> feature/x'])));
+  note(eq(T.gitCommitBranches(['tag: v1.0', 'tag: v2.0']) , []),
+    'UI：纯标签提交分支列为空', JSON.stringify(T.gitCommitBranches(['tag: v1.0', 'tag: v2.0'])));
+  note(typeof T.showGitCommitDetail === 'function' && typeof T.gitCommitBranches === 'function',
+    'UI：提交详情弹窗与分支提取函数已定义');
 
   console.log(`\n${errors.length ? `✖ ${errors.length} 项未通过` : `✔ 全部 ${passed} 项通过`}`);
   if (errors.length) process.exitCode = 1;

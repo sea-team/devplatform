@@ -358,6 +358,21 @@ note(serverSrc.includes("app.get('/api/repos/git/presets'") && serverSrc.include
   && gitViewSrc.includes('stashSave:') && gitViewSrc.includes('mergeAbort:')
   && workspaceGitSrc.includes("key: 'stash-save'") && workspaceGitSrc.includes("key: 'clean-do'"),
 '工作台收敛：后端 presets / 视图 / 语义动作全部保留不动（仅前端过滤，随时可回退）');
+// v0.4.31 UI 调整：日志去分支图 + 加分支列 + 详情弹窗；分区去局部滚动条改弹窗整体滚动。
+note(app.includes('function gitCommitBranches(') && app.includes('function showGitCommitDetail(')
+  && app.includes("gitCommitBranches(c.refs)") && app.includes('<th>分支</th>')
+  && app.includes('id="git-commit-modal"') === false && html.includes('id="git-commit-modal"')
+  && !app.includes("gitLoadView('graph'"),
+'UI 调整：日志去分支图、新增分支列（来自 refs）、点击详情走独立弹窗（后端 graph 视图保留不动）');
+note(html.includes('id="git-commit-body"') && app.includes("$('#git-commit-body')")
+  && app.includes('git-detail-field')
+  && css.includes('.git-detail-form') && css.includes('.git-detail-field input')
+  && app.includes('function closeGitCommitModal('),
+'UI 调整：提交详情弹窗字段用带边框圆角只读文本框（两列网格，对齐同步页视觉）');
+note(css.includes('.git-wb-pane { min-height: 210px; overflow: visible; }')
+  && !css.includes('.git-wb-pane { min-height: 210px; max-height')
+  && !css.includes('.git-wb-pane { max-height: 44vh; }'),
+'UI 调整：分区去掉局部滚动条（红框），内容自然撑开由弹窗 .modal-body 统一滚动');
 note(releaseYml.includes('BEGIN PENDING-RELEASE-NOTES')
   && releaseYml.includes('-replace') && releaseYml.includes('END PENDING-RELEASE-NOTES'),
 '文档修复：CI 生成 Release notes 前剥离「待发版」元信息块，避免污染正式发布说明');
@@ -382,7 +397,7 @@ note(releaseYml.includes('BEGIN PENDING-RELEASE-NOTES')
 }
 
 // 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
-const CACHE_STAMP = '20261125b';
+const CACHE_STAMP = '20261125c';
 const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
 note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
 

@@ -76,7 +76,7 @@
 - 当前版本 **v0.4.30**（`platform/package.json` / `package-lock.json` 已升至 `0.4.30`，tag `v0.4.30`，GitHub Release 由 `.github/workflows/release.yml` 在推送 tag 时构建发布）。
 - 代码已部署 `10.0.0.246` 并实测：health `0.4.30/normal`、环境体检 `8 正常 / 0 提醒 / 0 异常`。
 - v0.4.29 / v0.4.30 两阶段改动已随本次一并发版，详见 `release-notes.md`。
-- 前端静态资源缓存戳 `20261125b`（v0.4.31 阶段 Git 工作台改动 + 复核修复 + 常用操作收敛）；`npm run check`、`npm run typecheck`（基线 78，实测 75）、`node scripts/check-frontend.js`、`npm run smoke:gitwb` / `npm run smoke:gitwb:fe` 全过。
+- 前端静态资源缓存戳 `20261125c`（v0.4.31 阶段 Git 工作台改动 + 复核修复 + 常用操作收敛 + 日志页 UI 调整）；`npm run check`、`npm run typecheck`（基线 78，实测 75）、`node scripts/check-frontend.js`、`npm run smoke:gitwb` / `npm run smoke:gitwb:fe` 全过。
 - **工作区待发版改动**（v0.4.31 阶段）：Git 工作台（TortoiseGit 式）已完成，见 §70。版本号仍 `0.4.30`、未打 tag、未发 Release、未部署 246；246 线上仍运行 v0.4.30 代码。发版需用户明确指令。
 - 官方应用模板位于 `platform/appstore/`（319 个模板 `.env` 属样例配置，必须随仓库入库；`.gitignore` 已加白名单）。
 - **同步官方模板注意**：Dify 系列模板原本自带 `SECRET_KEY=sk-...` 官方示例串，会被 GitHub Push Protection 判为 OpenAI API Key 而拦截推送。已统一替换为 `REPLACE_WITH_YOUR_OWN_SECRET_KEY`（`.env` 与 `docker-compose.yml` 默认值共 8 处）。后续用 `scripts/sync-appstore.js` 重新同步官方数据后，须再次替换，否则 push 会被拦截。
@@ -3660,7 +3660,7 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 
 ## §70 Git 工作台（TortoiseGit 式）（v0.4.31 阶段 · 待发版）
 
-> **状态说明**：按协作约定**未升版本号、未打 tag、未发 Release**。仓库版本仍 `0.4.30`。246 线上当前运行 `20261125a`（含 4 个 P1 + 6 项 P2 复核修复，已部署实测验收）；本节的「常用操作收敛」（6 标签 + 隐藏低频入口）改动在工作区，**尚未 push / 部署**，等待用户明确指令。前端缓存戳演进 `20261124q → 20261124r → 20261125a → 20261125b`。
+> **状态说明**：按协作约定**未升版本号、未打 tag、未发 Release**。仓库版本仍 `0.4.30`。246 线上当前运行 `20261125b`（含 4 个 P1 + 6 项 P2 复核修复 + 常用操作收敛 6 标签，已部署实测验收）；本节的「日志页 UI 调整」（去分支图 / 加分支列 / 详情弹窗 / 去分区局部滚动条）改动在工作区，**尚未 push / 部署**，等待用户明确指令。前端缓存戳演进 `20261124q → 20261124r → 20261125a → 20261125b → 20261125c`。
 
 ### 70.1 需求与定位
 
@@ -3694,8 +3694,8 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 ### 70.4 验证与状态
 
 - **新增** `scripts/smoke-git-workbench.js`（`npm run smoke:gitwb`）：临时工作区真实 Git 仓库 + 真实 `server.js`，35 项全过——11 个视图、元数据、只读防线、破坏性二次确认、非法引用/越界路径拒绝、脱敏、语义动作真实建/删分支、旧入口兼容、混合命令分类、参数黑名单，以及复核修复的 P1-3 / P1-4 后端行为断言。
-- **新增** `scripts/smoke-git-workbench-frontend.js`（`npm run smoke:gitwb:fe`）：19 项**前端交互级**行为测试——用 vm 加载 `app.js` / `gitView.js` 真实函数体、注入可控弹窗与 fetch stub，直接断言请求体 / 解析结果 / 并发忙碌锁 / 抛错行为，覆盖 4 个 P1、P2 交互与工作台收敛过滤（6 标签 / 隐藏低频命令 / 纯函数不改后端原数组）（后端 smoke 只测后端，一个 P1 都抓不到）。
-- `npm run check` 全过（`gitView.js` 与两个 smoke 脚本纳入 `node --check` 链）；`npm run typecheck` **75 ≤ 基线 78**；`node scripts/check-frontend.js` 全过（Git 工作台护栏 + 复核修复护栏 + 收敛护栏 + 缓存戳 `20261125b`）。
+- **新增** `scripts/smoke-git-workbench-frontend.js`（`npm run smoke:gitwb:fe`）：23 项**前端交互级**行为测试——用 vm 加载 `app.js` / `gitView.js` 真实函数体、注入可控弹窗与 fetch stub，直接断言请求体 / 解析结果 / 并发忙碌锁 / 抛错行为，覆盖 4 个 P1、P2 交互、工作台收敛过滤（6 标签 / 隐藏低频命令 / 纯函数不改后端原数组）与日志分支列提取（后端 smoke 只测后端，一个 P1 都抓不到）。
+- `npm run check` 全过（`gitView.js` 与两个 smoke 脚本纳入 `node --check` 链）；`npm run typecheck` **75 ≤ 基线 78**；`node scripts/check-frontend.js` 全过（Git 工作台护栏 + 复核修复护栏 + 收敛护栏 + UI 调整护栏 + 缓存戳 `20261125c`）。
 - 历史冒烟无回归：`smoke:git` 31 项、`smoke:api` 52 项、`smoke:security` 49 项、`smoke:import` 11 项、`smoke:hardening` 12 项全过。
 
 ### 70.5 复核修复（对照「分析未提交改动中的 bug 和不完善之处」结论逐条实测）
@@ -3711,3 +3711,17 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 | P2 | 静态输入框成摆设 / SVG 分支图 `Math.min(1100,…)` 截断 / 确认期无忙碌锁 / 自定义命令不支持引号 / 远程分支误操作 | 删摆设输入框 + 去重 `repo-git-clear` id；`gitTextWidth()` 按显示列数（中文算 2 列）自适应宽度；三执行入口忙位覆盖确认弹窗全程；`splitGitCommand()` 支持单双引号；远程分支填短名 + 删除/合并拦截 |
 | 文档 | `AI-HANDOFF.md` 行数过期、`release-notes.md` 待发版段会被 CI 写进 Release notes | 行数同步为最终实测值；`release-notes.md` 待发版块加 `BEGIN/END PENDING-RELEASE-NOTES` 标记，`.github/workflows/release.yml` 用正则剥离后再拼 notes |
 - **未执行**：commit / push / tag / Release / 部署 246 / 升版本号——按协作约定等待用户明确指令。
+
+### 70.6 日志页 UI 调整（对标用户本地 TortoiseGit 使用习惯）
+
+按用户截图反馈的 5 处调整（均为前端改动，后端 `graph` / `show` 视图保留不动）：
+
+| # | 调整 | 实现 |
+| --- | --- | --- |
+| 1 | 提交分支图去掉 | `renderGitLog()` 不再加载 `graph` 视图、不再渲染 SVG 分支图卡片（`graphSvg()` 函数与后端 `graph` 视图保留，随时可恢复） |
+| 2 | 提交日志增加分支列 | 表格新增「分支」列，由 `gitCommitBranches(c.refs)` 从 `git log --decorate`  decorations 提取（去 `HEAD -> ` 前缀、排除 `tag:`、去重） |
+| 3 | 点击日志详情走弹窗 | 新增 `#git-commit-modal`：点击日志行 → `showGitCommitDetail(hash)` 调 `show` 视图 → 在独立弹窗展示，不再页内内嵌展开 |
+| 4 | 文本框美化 | 详情弹窗字段用两列网格 `.git-detail-form` + 带边框圆角的只读 input `.git-detail-field`（对齐同步页 label + input 视觉，便于选中复制） |
+| 5 | 去分区局部滚动条 | `.git-wb-pane` 去掉 `max-height:52vh/overflow:auto`，内容自然撑开；滚动统一交给弹窗 `.modal-body`（红框所示的分区内滚动条消失） |
+
+验证：`check-frontend.js` 新增 3 条 UI 护栏；`smoke:gitwb:fe` 19→23 项（分支提取去前缀 / 排除 tag / 去重 / 纯标签空）；缓存戳 `20261125b → 20261125c`。本阶段改动在工作区，未 push / 部署，等用户指令。
