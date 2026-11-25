@@ -2,9 +2,9 @@
 
 > **用法**：把本文件 `【开始粘贴】` 到 `【结束粘贴】` 之间的内容整篇复制，作为新 AI 会话的第一条消息。它假设接手者刚拿到 `sea-team/devplatform` 仓库、还没读过任何代码。
 > 本文 = 启动简报（动作 / 红线 / 命令）+ 详细手册（架构 / 踩坑 / 速查）合一，**不依赖其它文档**；功能清单另见仓库 `README.md`，版本演进见 `release-notes.md`。
-> 基线：v0.4.30 / 2026-11-25 / 缓存戳 `20261125e` / typecheck 基线 `78`（实测 75）/ 前端护栏 211 条 / 后端路由 282 条。**升版本或改缓存戳时只需同步维护这一个文件。**
-> **版本 / 部署状态**：v0.4.31 阶段「Git 工作台（TortoiseGit 式）」+ 4 个 P1 / 6 项 P2 复核修复（README §70 / §70.5，`abe434b`）+ 常用操作收敛 6 标签（`ad3ff44`）+ 日志页 UI 调整（`e1f0f28`）均已提交、push 并部署 246，线上运行缓存戳 `20261125c`（已实测验收）。仓库版本仍 `0.4.30`、未打 tag、未发 Release。
-> **当前工作区未提交改动**：① 工作台内容溢出显示修复（README §70.7）：弹窗高度受限时 flex 列容器把各分区压到 `min-height:210px`，日志表 / 分支卡片溢出盖住「命令输出」区；给 `.git-wb-body > *` 加 `flex: 0 0 auto` 让内容自然撑开、滚动仍由 `.modal-body` 统一承担。② input 文本框统一样式（README §70.8）：Git 工作台 8 个动态输入框 + 安全设置 / prompt 弹窗 3 个静态框挂 `ui-input`；提交详情只读框与 prompt 框补齐边框 / 圆角 / 焦点反馈；已被父容器样式覆盖的不动。缓存戳升至 `20261125e`。**这批改动尚未 commit / push / 部署**，须等用户明确指令（不要擅自 commit / push / 打 tag / 升版本号 / 部署）。接手时先 `git status` 确认。新增关键文件：`platform/src/gitView.js`、`scripts/smoke-git-workbench.js`（后端全链路）、`scripts/smoke-git-workbench-frontend.js`（前端交互级行为测试，现 23 项）。
+> 基线：v0.4.31 / 2026-11-25 / 缓存戳 `20261125e` / typecheck 基线 `78`（实测 75）/ 前端护栏 211 条 / 后端路由 282 条。**升版本或改缓存戳时只需同步维护这一个文件。**
+> **版本 / 部署状态**：v0.4.31 已发版（tag `v0.4.31`）：Git 工作台（TortoiseGit 式）+ 4 个 P1 / 6 项 P2 复核修复（`abe434b`）+ 常用操作收敛 6 标签（`ad3ff44`）+ 日志页 UI（`e1f0f28`）+ 显示修复（`ede8035`）+ input 美化（`629e882`）全部已提交、push 并部署 246，线上缓存戳 `20261125e`（已实测验收）。仓库版本 `0.4.31`，GitHub Release 由 `.github/workflows/release.yml` 在推送 tag 时构建发布。
+> **工作区状态**：干净（发版提交后无未提交改动）。新增关键文件：`platform/src/gitView.js`、`scripts/smoke-git-workbench.js`（后端全链路）、`scripts/smoke-git-workbench-frontend.js`（前端交互级行为测试，现 23 项）。
 
 ---
 
@@ -33,7 +33,7 @@
 cd devplatform
 git status                                   # 确认工作区是否干净
 git log -5 --oneline                         # 看最近改了什么
-node -p "require('./platform/package.json').version"   # 当前版本（本简报基线 0.4.30）
+node -p "require('./platform/package.json').version"   # 当前版本（本简报基线 0.4.31）
 grep "const CACHE_STAMP" scripts/check-frontend.js     # 当前缓存戳（基线 20261125e）
 ```
 
@@ -353,5 +353,5 @@ apps/<appname>/
 ### 附：给交付方（人类）的备注
 
 - 本文件是**唯一**需要投喂给新 AI 的文档：第一部分（§1–§7）是启动简报，第二部分（§8–§16）是架构细节与速查表。两者编号连续、无互相跳转。
-- 若未来升版本、改缓存戳或调整基线，**只需同步维护这一个文件**中的对应数字（当前：0.4.30 / 20261125e / 78 / 282 路由 / 211 护栏 / 42 模块 / 35 view / 8 正常体检）。
+- 若未来升版本、改缓存戳或调整基线，**只需同步维护这一个文件**中的对应数字（当前：0.4.31 / 20261125e / 78 / 282 路由 / 211 护栏 / 42 模块 / 35 view / 8 正常体检）。
 - 旧的两份文档 `AI-DEVELOPMENT-GUIDE.md` / `AI-ONBOARDING-BRIEF.md` 已由本文件取代，可保留作历史归档，但不要再作为投喂入口，以免两份数字不一致。

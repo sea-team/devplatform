@@ -1,8 +1,7 @@
 # DevPlatform · 统一 Web 开发管理平台 使用说明
 
-> 适用版本：v0.4.30（2026-11-24；仓库版本 `0.4.30`，tag `v0.4.30` 已发布 Release）
-> **工作区待发版改动**：v0.4.31 阶段「Git 工作台（TortoiseGit 式）」已完成实现与本地验证，版本号仍保持 `0.4.30`、未打 tag、未发 Release、未部署 246，等待明确发版指令（详见 §70 与 `release-notes.md` 顶部「待发版」段）。
-> 当前线上环境：`http://10.0.0.246:9000`（部署目录 `/data/platform`，容器 `devplatform`，线上仍运行 v0.4.30 代码）
+> 适用版本：v0.4.31（2026-11-25；仓库版本 `0.4.31`，tag `v0.4.31` 已发布 Release）
+> 当前线上环境：`http://10.0.0.246:9000`（部署目录 `/data/platform`，容器 `devplatform`，线上运行 v0.4.31 代码）
 > 本地代码：`devplatform/`，Git 分支 `main`
 > 本文中的 `10.0.0.246` 为示例/测试机地址，换环境时请全局替换。
 >
@@ -39,7 +38,7 @@
 | 65–67 | OpenList 根目录映射、rclone 存储层 + SMB 网关、Windows exe 提权 + WinFsp 自动安装（v0.4.28） |
 | 68 | Docker 应用商店（移植宝塔 aaPanel/appstore，320 应用 / 314 有效模板、双模式镜像加速、一键部署） |
 | 69 | Git 仓库弹窗化、Docker exec PTY 交互式终端（xterm + bash/sh + root）、「连接」按钮点击无响应修复（v0.4.30） |
-| 70 | Git 工作台（TortoiseGit 式）：10 分区多标签、结构化只读视图、语义动作、分支图 SVG / diff 着色（v0.4.31 阶段，待发版） |
+| 70 | Git 工作台（TortoiseGit 式）：多标签操作台、结构化只读视图、语义动作、日志分支列 / 详情弹窗 / diff 着色（v0.4.31） |
 
 ---
 
@@ -71,13 +70,12 @@
 | 代理治理 | 四级优先级（全局 / 分组 / 规则 / 单项覆盖）、SSRF 属地分级、socks5 示例 | 代理 |
 | Windows 分发 | 单文件 exe（SEA）、组件包 / 绿色包、管理员提权、WinFsp 静默安装、离线安装集成服务 | 见 §17–18、§67 |
 
-### 1.1.1 当前版本状态（v0.4.30）
+### 1.1.1 当前版本状态（v0.4.31）
 
-- 当前版本 **v0.4.30**（`platform/package.json` / `package-lock.json` 已升至 `0.4.30`，tag `v0.4.30`，GitHub Release 由 `.github/workflows/release.yml` 在推送 tag 时构建发布）。
-- 代码已部署 `10.0.0.246` 并实测：health `0.4.30/normal`、环境体检 `8 正常 / 0 提醒 / 0 异常`。
-- v0.4.29 / v0.4.30 两阶段改动已随本次一并发版，详见 `release-notes.md`。
-- 前端静态资源缓存戳 `20261125e`（v0.4.31 阶段 Git 工作台改动 + 复核修复 + 常用操作收敛 + 日志页 UI 调整 + 内容溢出显示修复）；`npm run check`、`npm run typecheck`（基线 78，实测 75）、`node scripts/check-frontend.js`、`npm run smoke:gitwb` / `npm run smoke:gitwb:fe` 全过。
-- **工作区待发版改动**（v0.4.31 阶段）：Git 工作台（TortoiseGit 式）已完成，见 §70。版本号仍 `0.4.30`、未打 tag、未发 Release、未部署 246；246 线上仍运行 v0.4.30 代码。发版需用户明确指令。
+- 当前版本 **v0.4.31**（`platform/package.json` / `package-lock.json` 已升至 `0.4.31`，tag `v0.4.31`，GitHub Release 由 `.github/workflows/release.yml` 在推送 tag 时构建发布）。
+- 代码已部署 `10.0.0.246` 并实测：health `0.4.31/normal`、环境体检 `8 正常 / 0 提醒 / 0 异常`。
+- v0.4.31 阶段五批改动（Git 工作台 / 复核修复 / 常用操作收敛 / UI 精修 / input 美化）已随本次一并发版，详见 `release-notes.md` 与 §70。
+- 前端静态资源缓存戳 `20261125e`；`npm run check`、`npm run typecheck`（基线 78，实测 75）、`node scripts/check-frontend.js`（211 条）、`npm run smoke:gitwb`（35）/ `npm run smoke:gitwb:fe`（23）全过。
 - 官方应用模板位于 `platform/appstore/`（319 个模板 `.env` 属样例配置，必须随仓库入库；`.gitignore` 已加白名单）。
 - **同步官方模板注意**：Dify 系列模板原本自带 `SECRET_KEY=sk-...` 官方示例串，会被 GitHub Push Protection 判为 OpenAI API Key 而拦截推送。已统一替换为 `REPLACE_WITH_YOUR_OWN_SECRET_KEY`（`.env` 与 `docker-compose.yml` 默认值共 8 处）。后续用 `scripts/sync-appstore.js` 重新同步官方数据后，须再次替换，否则 push 会被拦截。
 
@@ -3658,9 +3656,9 @@ v0.4.21 审计时因「需产品决策」而保留的三项问题，本轮按确
 - **修复**：两行统一改为 `e.target.id === ...`；`scripts/check-frontend.js` 新增回归护栏（同时断言正确写法存在、错误写法 `e.id` 不存在）；缓存戳 `20261124p → 20261124q` 强制刷新浏览器缓存。
 - **复验**：246 重新部署后，`grep` 确认线上 `app.js` 已含 `e.target.id === 'dk-term-connect'` 且无残留 `e.id === 'dk-term-connect'`，`index.html` 缓存戳 `20261124q`；PTY 端到端复测还原真实 shell（`echo TERM_BTN_FIX_OK` 回显成功）、resize / close 正常，测试会话已清理。`npm run check`、`npm run typecheck`（78 = 基线）、`node scripts/check-frontend.js` 全过。
 
-## §70 Git 工作台（TortoiseGit 式）（v0.4.31 阶段 · 待发版）
+## §70 Git 工作台（TortoiseGit 式）（v0.4.31 · 已发版）
 
-> **状态说明**：按协作约定**未升版本号、未打 tag、未发 Release**。仓库版本仍 `0.4.30`。246 线上当前运行 `20261125b`（含 4 个 P1 + 6 项 P2 复核修复 + 常用操作收敛 6 标签，已部署实测验收）；本节的「日志页 UI 调整」（去分支图 / 加分支列 / 详情弹窗 / 去分区局部滚动条）改动在工作区，**尚未 push / 部署**，等待用户明确指令。前端缓存戳演进 `20261124q → 20261124r → 20261125a → 20261125b → 20261125c`。
+> **状态说明**：仓库版本 `0.4.31`，tag `v0.4.31` 已发布 Release。本节全部改动（工作台 / 复核修复 / 常用操作收敛 / 日志页 UI / 显示修复 / input 美化，见 §70.1–70.8）均已 push 到 `origin/main` 并部署 246 实测验收。前端缓存戳演进 `20261124q → 20261125a → 20261125b → 20261125c → 20261125d → 20261125e`。
 
 ### 70.1 需求与定位
 

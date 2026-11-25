@@ -1,40 +1,3 @@
-<!-- BEGIN PENDING-RELEASE-NOTES: 待发版元信息，CI 生成 Release notes 时整块剥离，勿删此对标记 -->
-【待发版 · v0.4.31 阶段】Git 工作台（TortoiseGit 式）—— 已完成实现与本地验证，尚未发版
-  状态：仓库版本仍 `0.4.30`；未升版本号、未打 tag、未发 GitHub Release。
-  代码已 push 到 origin/main（最新 e1f0f28）并部署 246 测试环境验证通过；正式发版（升版本 / tag / Release）待用户明确指令。
-  1) 交互升级（README §70）：沿用仓库列表「Git 操作」按钮，弹窗内改为 10 分区多标签工作台
-     —— 状态 / 提交日志 / 提交 / 分支·合并 / 同步 / Stash / 标签 / 冲突·还原 / 清理 / 自定义命令。
-     参考本机 TortoiseGit 真实菜单术语（Commit / Pull / Push / Merge / Switch / Create Branch /
-     Create Tag / Abort Merge / Stash / Clean up / Show log / Diff Two Commits）。
-  2) 后端：新增 `platform/src/gitView.js`（11 个结构化只读视图 + 23 个语义动作）；
-     `workspaceGit.js` 扩展命令白名单、新增 `classifyCommand()` 精确读写分类（混合命令按参数判定）、
-     `presets()` 分组与 `groups()`；`server.js` 新增 `/repos/git/view`、`/repos/git/action`、`/repos/git/groups`，
-     旧 `/repos/git` 保留兼容并改用精确分类做仓库级写权限收口。
-  3) 前端：结构化状态表（逐文件暂存/取消/放弃）、可点选提交日志 + SVG 分支图 + 着色 diff、
-     参数化分支 / 同步 / Stash / 标签 / 冲突 / 清理面板；破坏性动作统一二次确认；
-     `check-frontend.js` 护栏累计 211 条，缓存戳 `20261124q → 20261124r → 20261125a → 20261125c → 20261125e`。
-  3b) 复核修复（对照「分析未提交改动中的 bug 和不完善之处」逐条实测）：4 个 P1 功能 Bug
-     （放弃改动无二次确认 / stash 预设缺 -m / quoted-path 未反转义 / view 忽略退出码）、
-     6 项 P2 体验健壮性、文档数字与 release-notes 待发版段处理；详见 README §70.5。
-  3c) 常用操作收敛（对标 TortoiseGit）：工作台只展示 6 个标签（状态/日志/提交/分支/同步/冲突还原），
-     覆盖日志、分支、提交、推送、拉取(含 fetch)、中止合并、还原、重置 + 状态/暂存/差异/合并配套；
-     Stash/标签/清理/自定义命令入口前端隐藏，远程地址表与「放弃改动」按钮移除。仅前端过滤
-     （filterGitWorkbench 纯函数），后端 presets/视图/动作/测试全部保留不动，可回退。
-  3d) 日志页 UI 调整（按用户本地 TortoiseGit 习惯）：去掉提交分支图；提交日志新增「分支」列
-     （从 git decorations 提取，去 HEAD -> 前缀 / 排除 tag / 去重）；点击日志详情改走独立弹窗，
-     字段用两列网格 + 带边框圆角只读文本框美化；去掉分区内局部滚动条，滚动改由弹窗统一承担。
-     详见 README §70.6。
-  3e) 显示修复：弹窗内工作台各分区默认被 flex 压缩到 min-height，超出的日志表 / 分支卡片溢出盖住「命令输出」区；
-     给 `.git-wb-body > *` 加 `flex: 0 0 auto` 让内容自然撑开、滚动统一由弹窗承担；缓存戳 `20261125c → 20261125d`。详见 README §70.7。
-  3f) input 文本框统一：扫描全部静态 + 动态 input，Git 工作台 8 个动态框、安全设置 / prompt 弹窗 3 个静态框统一挂 `ui-input`；
-     提交详情只读框与 prompt 框补齐边框 / 圆角 / 焦点反馈（原只设字体退化为浏览器默认）；已被 `.form` / `.row` / `.model-row` / `.da-field-input` 覆盖的不改。
-     缓存戳 `20261125d → 20261125e`。详见 README §70.8。
-  4) 验证：`scripts/smoke-git-workbench.js`（`npm run smoke:gitwb`，真实 server）35 项全过；
-     新增 `scripts/smoke-git-workbench-frontend.js`（`npm run smoke:gitwb:fe`）23 项前端交互级
-     行为测试全过（vm 跑真实函数体，覆盖 4 个 P1 + 收敛过滤 + 日志分支列提取，而非字符串护栏）；
-     `npm run check` / `npm run typecheck`（75 ≤ 基线 78）/ `check-frontend.js` 全过；
-     历史冒烟 smoke:git 31 / smoke:api 52 / smoke:security 49 / smoke:import 11 / smoke:hardening 12 全过。
-<!-- END PENDING-RELEASE-NOTES -->
 
 由 GitHub Actions 在 windows-latest 上构建，并把官方原版二进制内嵌进全量包。
 
@@ -434,3 +397,17 @@ v0.4.30 · 2026-11-24 · Git 仓库弹窗化 + Docker exec PTY 交互式终端 +
   - 自检与护栏：check-frontend.js 新增两条（Git 弹窗化 + PTY 全链路），package.json 的 npm run check 纳入 dockerExecTerm.js；dockerApi.js / dockerPanel.js 导出补齐。缓存戳 20261124p。
   - 验证：246 线上实测通过——health 0.4.28/normal、体检 8/0/0；PTY 端到端验证还原真实交互式 shell（/app # root 提示符、echo 命令回显与结果、ANSI 控制码）、bash / 非 root 模式、非平台容器二次确认 400、无效 sid 注入 403、无 token 401、resize / close / 会话回收均正常；测试会话已全部清理。npm run check 全过、类型检查 78=基线（未超）、前端自检全过。
   - 修复（用户反馈「docker终端连接无响应」）：app.js 全局 click 委托里「连接」「断开」按钮判断误写成 `e.id`（事件对象无此属性，恒为 undefined），导致 dkTermConnect() 永不触发；同一段「清屏」用的是正确的 `e.target.id`。已统一改为 `e.target.id === 'dk-term-connect'` / `'dk-term-disconnect'`，并在 check-frontend.js 加回归护栏（正确写法存在 + 错误写法不存在）。缓存戳 20261124p → 20261124q。246 重新部署并复测：线上文件已含修复，PTY 端到端仍还原真实 shell（echo TERM_BTN_FIX_OK 回显成功），会话已清理。后端 PTY 接口本身无问题，纯前端事件绑定缺陷。
+
+v0.4.31 · 2026-11-25 · Git 工作台（TortoiseGit 式）+ 复核修复 + 常用操作收敛 + UI 精修（已发版）
+  tag `v0.4.31`，仓库版本 `0.4.31`。本版把 v0.4.31 阶段五批改动合并发布，均已 push 到 origin/main 并部署 246 测试环境实测通过。
+  本版新增与修复：
+  - 交互升级（README §70）：沿用仓库列表「Git 操作」按钮，弹窗内改为 10 分区多标签工作台——状态 / 提交日志 / 提交 / 分支·合并 / 同步 / Stash / 标签 / 冲突·还原 / 清理 / 自定义命令，参考本机 TortoiseGit 真实菜单术语。
+  - 后端：新增 `platform/src/gitView.js`（11 个结构化只读视图 + 23 个语义动作）；`workspaceGit.js` 扩展命令白名单、新增 `classifyCommand()` 精确读写分类；`server.js` 新增 /repos/git/view、/repos/git/action、/repos/git/groups，旧 /repos/git 保留兼容并改用精确分类做仓库级写权限收口。
+  - 前端：结构化状态表（逐文件暂存 / 取消 / 放弃）、可点选提交日志 + SVG 分支图 + 着色 diff、参数化分支 / 同步 / Stash / 标签 / 冲突 / 清理面板；破坏性动作统一二次确认。
+  - 复核修复（README §70.5）：4 个 P1 功能 Bug（放弃改动无二次确认 / stash 预设缺 -m / quoted-path 未反转义 / view 忽略退出码）、6 项 P2 体验健壮性；新增前端交互级行为测试 `scripts/smoke-git-workbench-frontend.js`（vm 跑真实函数体，非字符串护栏），后端 smoke 扩至 35 项。
+  - 常用操作收敛（README §70.3/70.4，对标 TortoiseGit）：只展示 6 个标签（状态 / 日志 / 提交 / 分支 / 同步 / 冲突还原），覆盖日志、分支、提交、推送、拉取(含 fetch)、中止合并、还原、重置 + 配套操作；Stash / 标签 / 清理 / 自定义命令入口前端隐藏。仅前端过滤（filterGitWorkbench 纯函数），后端全部保留可回退。
+  - 日志页 UI 精修（README §70.6）：去提交分支图；日志新增「分支」列（从 decorations 提取）；点击行改走独立详情弹窗，字段两列网格 + 只读圆角文本框；去分区局部滚动条，滚动统一由弹窗承担。
+  - 显示修复（README §70.7）：弹窗高度受限时 flex 压缩使日志表 / 分支卡片溢出盖住「命令输出」区；给 `.git-wb-body > *` 加 `flex: 0 0 auto` 让内容自然撑开。
+  - input 文本框统一（README §70.8）：扫描全部 147 静态 + 30 动态 input，Git 工作台 8 个动态框、安全设置 / prompt 弹窗 3 个静态框统一挂 `ui-input`；提交详情只读框与 prompt 框补齐边框 / 圆角 / 焦点反馈（原只设字体退化为浏览器默认）。
+  - 缓存戳：`20261124q → 20261124r → 20261125a → 20261125b → 20261125c → 20261125d → 20261125e`。
+  - 验证：`npm run check` / `npm run typecheck`（75 ≤ 基线 78）/ `node scripts/check-frontend.js`（211 条）/ `npm run smoke:gitwb`（35）/ `npm run smoke:gitwb:fe`（23）/ 历史冒烟 smoke:git 31、smoke:api 52、smoke:security 49、smoke:import 11、smoke:hardening 12 全过；246 线上验收：health 0.4.30/normal、体检 8 正常 / 0 异常、缓存戳与资源逐项命中。
