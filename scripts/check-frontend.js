@@ -375,6 +375,23 @@ note(css.includes('.git-wb-pane { min-height: 210px; overflow: visible; }')
 'UI 调整：分区去掉局部滚动条（红框），内容自然撑开由弹窗 .modal-body 统一滚动');
 note(css.includes('.git-wb-body > * { flex: 0 0 auto; }'),
 'UI 显示修复：工作台子项不被 flex 压缩，内容自然撑开，避免日志表/分支卡片溢出盖住「命令输出」区');
+// v0.4.31 input 文本框美化：散落在非 .form 上下文的输入框统一挂 ui-input，与页面其余控件一致。
+{
+  const bareIds = ['git-wb-branch-name', 'git-wb-sync-remote', 'git-wb-sync-branch',
+    'git-wb-stash-ref', 'git-wb-stash-msg', 'git-wb-tag-name', 'git-wb-tag-msg',
+    'git-wb-conflict-ref'];
+  const missing = bareIds.filter((id) => !new RegExp('<input[^>]*id="' + id + '"[^>]*class="[^"]*ui-input').test(app));
+  note(missing.length === 0, 'Git 工作台 8 个动态输入框统一挂 ui-input 样式类',
+    missing.length ? `未覆盖：${missing.join(', ')}` : `覆盖 ${bareIds.length} 个`);
+  const staticIds = ['security-secret', 'security-code', 'prompt-input'];
+  const missingStatic = staticIds.filter((id) => !new RegExp('<input[^>]*id="' + id + '"[^>]*class="[^"]*ui-input').test(html));
+  note(missingStatic.length === 0, '安全设置 / prompt 弹窗 3 个静态输入框挂 ui-input 样式类',
+    missingStatic.length ? `未覆盖：${missingStatic.join(', ')}` : `覆盖 ${staticIds.length} 个`);
+  note(css.includes('.git-detail-field input {') && css.includes('border-radius: 9px')
+    && css.includes('.git-detail-field input:focus')
+    && /\.prompt-field input \{[^}]*box-sizing: border-box/.test(css),
+  '详情只读框与 prompt 输入框补齐边框 / 圆角 / 焦点反馈（原仅设字体，退化为浏览器默认）');
+}
 note(releaseYml.includes('BEGIN PENDING-RELEASE-NOTES')
   && releaseYml.includes('-replace') && releaseYml.includes('END PENDING-RELEASE-NOTES'),
 '文档修复：CI 生成 Release notes 前剥离「待发版」元信息块，避免污染正式发布说明');
@@ -399,7 +416,7 @@ note(releaseYml.includes('BEGIN PENDING-RELEASE-NOTES')
 }
 
 // 发布时只需改这个常量；断言同时保证 index.html 内所有静态资源用同一个戳，避免新旧缓存混用。
-const CACHE_STAMP = '20261125d';
+const CACHE_STAMP = '20261125e';
 const stamps = [...new Set([...html.matchAll(/\?v=(\d{8}[a-z])/g)].map((m) => m[1]))];
 note(stamps.length === 1 && stamps[0] === CACHE_STAMP, `静态资源版本已升到 ${CACHE_STAMP}`);
 

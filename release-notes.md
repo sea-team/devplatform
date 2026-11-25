@@ -12,7 +12,7 @@
      旧 `/repos/git` 保留兼容并改用精确分类做仓库级写权限收口。
   3) 前端：结构化状态表（逐文件暂存/取消/放弃）、可点选提交日志 + SVG 分支图 + 着色 diff、
      参数化分支 / 同步 / Stash / 标签 / 冲突 / 清理面板；破坏性动作统一二次确认；
-     `check-frontend.js` 护栏累计 203 条，缓存戳 `20261124q → 20261124r → 20261125a → 20261125c → 20261125d`。
+     `check-frontend.js` 护栏累计 211 条，缓存戳 `20261124q → 20261124r → 20261125a → 20261125c → 20261125e`。
   3b) 复核修复（对照「分析未提交改动中的 bug 和不完善之处」逐条实测）：4 个 P1 功能 Bug
      （放弃改动无二次确认 / stash 预设缺 -m / quoted-path 未反转义 / view 忽略退出码）、
      6 项 P2 体验健壮性、文档数字与 release-notes 待发版段处理；详见 README §70.5。
@@ -26,6 +26,9 @@
      详见 README §70.6。
   3e) 显示修复：弹窗内工作台各分区默认被 flex 压缩到 min-height，超出的日志表 / 分支卡片溢出盖住「命令输出」区；
      给 `.git-wb-body > *` 加 `flex: 0 0 auto` 让内容自然撑开、滚动统一由弹窗承担；缓存戳 `20261125c → 20261125d`。详见 README §70.7。
+  3f) input 文本框统一：扫描全部静态 + 动态 input，Git 工作台 8 个动态框、安全设置 / prompt 弹窗 3 个静态框统一挂 `ui-input`；
+     提交详情只读框与 prompt 框补齐边框 / 圆角 / 焦点反馈（原只设字体退化为浏览器默认）；已被 `.form` / `.row` / `.model-row` / `.da-field-input` 覆盖的不改。
+     缓存戳 `20261125d → 20261125e`。详见 README §70.8。
   4) 验证：`scripts/smoke-git-workbench.js`（`npm run smoke:gitwb`，真实 server）35 项全过；
      新增 `scripts/smoke-git-workbench-frontend.js`（`npm run smoke:gitwb:fe`）23 项前端交互级
      行为测试全过（vm 跑真实函数体，覆盖 4 个 P1 + 收敛过滤 + 日志分支列提取，而非字符串护栏）；

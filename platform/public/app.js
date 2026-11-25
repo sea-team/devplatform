@@ -1836,7 +1836,7 @@ async function renderGitBranch() {
     <div class="table-wrap"><table class="git-wb-table"><thead><tr><th></th><th>分支</th><th>提交</th><th>上游</th><th>同步</th><th>说明</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="7" class="git-wb-empty">暂无分支</td></tr>`}</tbody></table></div></div>
     <div class="git-wb-card"><h4>分支操作</h4>
       <div class="git-wb-inline">
-        <input id="git-wb-branch-name" placeholder="分支名" autocomplete="off" />
+        <input id="git-wb-branch-name" class="ui-input" placeholder="分支名" autocomplete="off" />
         <button class="btn btn-sm btn-primary" type="button" data-gact="create">新建分支</button>
         <button class="btn btn-sm" type="button" data-gact="switch">切换 / 检出</button>
         <button class="btn btn-sm btn-danger" type="button" data-gact="delete">删除分支</button>
@@ -1874,7 +1874,7 @@ async function renderGitSync() {
   const s = st || {};
   pane.innerHTML = `<div class="git-wb-card"><h4>同步状态</h4>
     <div class="git-wb-summary">${gitBadge(`分支 ${s.branch || '—'}`)}${s.upstream ? gitBadge(`上游 ${s.upstream}`, 'blue') : ''}${s.ahead ? gitBadge(`领先 ${s.ahead} 待推送`, 'green') : ''}${s.behind ? gitBadge(`落后 ${s.behind} 待拉取`, 'amber') : ''}</div>
-    <div class="git-wb-inline"><label>远端 <input id="git-wb-sync-remote" placeholder="留空用默认远端" autocomplete="off" /></label><label>分支 <input id="git-wb-sync-branch" placeholder="留空用当前分支" autocomplete="off" /></label></div>
+    <div class="git-wb-inline"><label>远端 <input id="git-wb-sync-remote" class="ui-input" placeholder="留空用默认远端" autocomplete="off" /></label><label>分支 <input id="git-wb-sync-branch" class="ui-input" placeholder="留空用当前分支" autocomplete="off" /></label></div>
     <div class="git-wb-actions" style="margin-top:10px">
       <button class="btn btn-sm btn-primary" type="button" data-gact="fetch">Fetch 拉取元数据</button>
       <button class="btn btn-sm btn-primary" type="button" data-gact="pull">Pull 拉取更新</button>
@@ -1901,7 +1901,7 @@ async function renderGitStash() {
   </tr>`).join('');
   pane.innerHTML = `<div class="git-wb-card"><h4>Stash 储藏（点击行选中）</h4>
     <div class="table-wrap"><table class="git-wb-table"><thead><tr><th>引用</th><th>说明</th><th>时间</th></tr></thead><tbody>${rows || `<tr><td colspan="3" class="git-wb-empty">暂无 Stash</td></tr>`}</tbody></table></div>
-    <div class="git-wb-inline" style="margin-top:10px"><input id="git-wb-stash-ref" placeholder="stash@{0}（留空用最近一条）" autocomplete="off" /><input id="git-wb-stash-msg" placeholder="Stash 说明（保存时可选）" autocomplete="off" /></div>
+    <div class="git-wb-inline" style="margin-top:10px"><input id="git-wb-stash-ref" class="ui-input" placeholder="stash@{0}（留空用最近一条）" autocomplete="off" /><input id="git-wb-stash-msg" class="ui-input" placeholder="Stash 说明（保存时可选）" autocomplete="off" /></div>
     <div class="git-wb-actions" style="margin-top:8px">
       <button class="btn btn-sm btn-primary" type="button" data-gact="save">保存 Stash</button>
       <button class="btn btn-sm" type="button" data-gact="apply">应用 (apply)</button>
@@ -1934,7 +1934,7 @@ async function renderGitTag() {
   const rows = d.tags.map((t) => `<tr class="clickable" data-gtag="${esc(t.name)}"><td class="mono">${esc(t.name)}</td><td>${esc(t.message || '')}</td></tr>`).join('');
   pane.innerHTML = `<div class="git-wb-card"><h4>标签（点击行选中）</h4>
     <div class="table-wrap"><table class="git-wb-table"><thead><tr><th>标签</th><th>附注</th></tr></thead><tbody>${rows || `<tr><td colspan="2" class="git-wb-empty">暂无标签</td></tr>`}</tbody></table></div>
-    <div class="git-wb-inline" style="margin-top:10px"><input id="git-wb-tag-name" placeholder="标签名" autocomplete="off" /><input id="git-wb-tag-msg" placeholder="附注信息（可选）" autocomplete="off" /></div>
+    <div class="git-wb-inline" style="margin-top:10px"><input id="git-wb-tag-name" class="ui-input" placeholder="标签名" autocomplete="off" /><input id="git-wb-tag-msg" class="ui-input" placeholder="附注信息（可选）" autocomplete="off" /></div>
     <div class="git-wb-actions" style="margin-top:8px"><button class="btn btn-sm btn-primary" type="button" data-gact="create">新建标签</button><button class="btn btn-sm btn-danger" type="button" data-gact="delete">删除标签</button></div></div>`;
   pane.querySelectorAll('[data-gtag]').forEach((tr) => tr.addEventListener('click', () => { const el = $('#git-wb-tag-name'); if (el) el.value = tr.dataset.gtag; }));
   pane.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', async () => {
@@ -1956,7 +1956,7 @@ async function renderGitConflict() {
   pane.innerHTML = `<div class="git-wb-card"><h4>冲突 / 还原 / 重置</h4>
     <div class="git-wb-summary">${conflicts.length ? gitBadge(`${conflicts.length} 个冲突文件`, 'red') : gitBadge('无冲突', 'green')}</div>
     ${conflicts.length ? `<div class="table-wrap"><table class="git-wb-table"><tbody>${conflicts.map((f) => `<tr><td class="mono">${esc(f)}</td></tr>`).join('')}</tbody></table></div>` : ''}
-    <div class="git-wb-inline" style="margin-top:10px"><input id="git-wb-conflict-ref" placeholder="提交号 / 分支（留空用 HEAD）" autocomplete="off" /></div>
+    <div class="git-wb-inline" style="margin-top:10px"><input id="git-wb-conflict-ref" class="ui-input" placeholder="提交号 / 分支（留空用 HEAD）" autocomplete="off" /></div>
     <div class="git-wb-actions" style="margin-top:8px">
       <button class="btn btn-sm" type="button" data-gact="abort">中止合并 (merge --abort)</button>
       <button class="btn btn-sm btn-danger" type="button" data-gact="revert">还原提交</button>
